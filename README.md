@@ -282,7 +282,74 @@ manifests on every edit.
 
 ---
 
-## 4. Develop the kit
+## 4. Add third-party skills and tools
+
+Before any outside skill, plugin or tool joins the setup, it goes through the same steps below.
+Every decision is recorded in [`CATALOG.md`](CATALOG.md) (adopted, trial or rejected, with the
+date and the reason), so the same tool is never evaluated twice from scratch.
+
+### 4.1 One curated marketplace
+
+The claude-kit marketplace can list other people's plugins too, **pinned to a commit**. Add an
+entry to `.claude-plugin/marketplace.json`:
+
+```json
+{ "name": "ponytail", "source": { "source": "github", "repo": "DietrichGebert/ponytail", "sha": "<commit>" } }
+```
+
+That gives you one place to install from (`claude plugin install ponytail@claude-kit`).
+Upstream changes never arrive silently: updating means reading the upstream diff and bumping
+the `sha`.
+
+### 4.2 Four checks before adopting
+
+1. **Licence.** It decides the route:
+   - a permissive licence (MIT, Apache-2.0) allows vendoring an unchanged copy, with its
+     `LICENSE` and `UPSTREAM_COMMIT`;
+   - anything else is installed from upstream (pinned) and never copied.
+2. **What it runs as you.** Read every hook, script and MCP server. A plugin runs with your user
+   permissions. Reject anything that sends code or data to a third party without saying so, or
+   that evades site protections.
+3. **Context cost.** `claude plugin details <name>` shows the tokens added to *every* session.
+   The kit costs about 950. A tool that costs more than it saves gets a project scope or a
+   reject.
+4. **Overlap and conflict with the kit.** Hooks matter most: two Stop hooks, two formatters or
+   two "auto-continue" mechanisms fight each other. If a tool duplicates a kit piece, keep one
+   of them.
+
+### 4.3 Trial, then decide
+
+1. Install at **local scope** in one real project, for about a week:
+   `claude plugin install <name>@claude-kit --scope local`.
+2. Measure where possible with `claude plugin eval`. It runs the same cases with and without the
+   plugin and scores the difference. A vendor's benchmark doesn't count as evidence.
+3. Write the outcome in `CATALOG.md`:
+   - **adopted (user scope):** generic, useful in every project; installed via the kit;
+   - **adopted (project scope):** domain-specific, e.g. frontend design; enabled only in the
+     repos that need it, through that repo's `.claude/settings.json`;
+   - **rejected:** with the reason, so it isn't re-evaluated from scratch.
+
+Scope rule: **generic → user scope through the kit; domain-specific → project scope only where
+needed.**
+
+### 4.4 Keep the setup lean
+
+- Once a month, run the built-in `/checkup`. It flags unused plugins and MCP servers and slims
+  CLAUDE.md, and asks before changing anything.
+- In `/plugin` → Installed, the "Not used recently" group lists plugins you can turn off.
+- Remove what isn't used. Every always-on skill description costs context in every session.
+
+### 4.5 Planned kit additions (not built yet)
+
+| Addition | What | Why |
+|---|---|---|
+| `/kit:intake <repo or name>` | A skill that runs the four checks, writes the `CATALOG.md` entry and proposes the marketplace entry | Adding a tool then follows the same steps every time |
+| Kit evals | A few `claude plugin eval` cases: does the lead verify, does the verifier catch a planted bug | The kit is only worth it if that is measurably true |
+| Verifier memory | `memory: project` on `kit:verifier` (a documented agent setting) | It builds up a list of pitfalls per repo |
+
+---
+
+## 5. Develop the kit
 
 ```bash
 claude plugin validate ./plugins/kit && claude plugin validate .
