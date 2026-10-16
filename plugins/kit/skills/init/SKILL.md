@@ -22,15 +22,18 @@ The kit hooks do nothing until `.claude/kit.json` exists. Build it from evidence
 4. **protect**: paths that must never be edited (`read-only`) or never overwritten once written
    (`no-overwrite`), with a `reason`. Take them from the repo's rules (raw data, generated files,
    lockfiles, vendored code, migrations already applied).
-5. **lead**: `read` = the 1-3 files a lead should read before planning (backlog, decision log),
+5. **shape**: `"ask"` (default: on a brain-dump prompt Claude offers to shape it first),
+   `"auto"` (shapes straight away) or `"off"`. A personal default for every project can live in
+   `~/.claude/kit.json` as `{"shape": "ask"}`.
+6. **lead**: `read` = the 1-3 files a lead should read before planning (backlog, decision log),
    `backlog` = where the next work item comes from, `notes` = one line of project-specific
    orchestration advice.
-6. Write `.claude/kit.json`, show it to the user, and explain that it is committed with the repo
+7. Write `.claude/kit.json`, show it to the user, and explain that it is committed with the repo
    so every clone and every session gets the same gates.
-7. **Permissions.** Propose (do not silently add) allow rules in `.claude/settings.json` for the
+8. **Permissions.** Propose (do not silently add) allow rules in `.claude/settings.json` for the
    read-only and check/verify commands, so long runs are not interrupted. If the built-in
    `/fewer-permission-prompts` skill is available, suggest running it.
-8. Confirm the hooks fire: make a trivial edit to a file matching an `onEdit` glob and revert
+9. Confirm the hooks fire: make a trivial edit to a file matching an `onEdit` glob and revert
    it, and report what ran.
 
 Schema:
@@ -43,6 +46,7 @@ Schema:
   "maxStopRetries": 3,
   "onEdit": [{"glob": "**/*.py", "run": "...\"$FILE\"...", "timeout": 120}],
   "protect": [{"glob": "data/raw/**", "mode": "no-overwrite", "reason": "raw files are immutable"}],
+  "shape": "ask",
   "lead": {"read": ["docs/backlog.md"], "backlog": "docs/backlog.md", "notes": "..."}
 }
 ```

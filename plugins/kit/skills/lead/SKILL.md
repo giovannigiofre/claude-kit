@@ -25,8 +25,9 @@ Goal: $ARGUMENTS
 ## 1. Define done before doing
 
 Write the done-criterion as something checkable: a command that exits 0, a gate, a file that
-validates, an observable behaviour. If you cannot make it checkable, ask the user one precise
-question instead of starting. For a large or risky goal, have `kit:plan-reviewer` review the plan
+validates, an observable behaviour. If the goal arrives as a `kit:shape` brief, take its DONE WHEN
+and SCOPE as given. If the goal mixes several ideas or you cannot make it checkable, run the
+`kit:shape` skill first instead of guessing. For a large or risky goal, have `kit:plan-reviewer` review the plan
 and fold in its MUST FIX items.
 
 ## 2. Split and choose the mechanism

@@ -25,8 +25,15 @@ Sources are at the end.
 ## 1. How it works
 
 ```
-                 you
-                  │  "/kit:lead <goal>"   (or /loop 30m /kit:lead next)
+                 you  (any prompt, even a brain-dump of ideas)
+                  │
+                  ▼
+      SHAPE (automatic on brain-dumps: hook → kit:shape)
+        splits the ideas, looks facts up, asks ≤3 rounds of
+        multiple-choice questions → BRIEF (goal, DONE WHEN, scope,
+        skills, mechanism) → "Start now?" ─────────────┐
+                                                        │  (or type "/kit:lead <goal>" directly,
+                  ┌─────────────────────────────────────┘   or /loop 30m /kit:lead next)
                   ▼
       ┌──────── LEAD (your main session) ─────────┐
       │ reads CLAUDE.md + .claude/kit.json         │
@@ -44,6 +51,8 @@ Sources are at the end.
       LEAD merges, runs `verify`, reports → /kit:go (simplify, commit, PR) → /kit:learn
 
   Hooks, in every session of a project that has .claude/kit.json:
+    UserPromptSubmit → spots brain-dump prompts and routes them to kit:shape (mode: ask/auto/off;
+                       also active without kit.json if ~/.claude/kit.json sets "shape")
     SessionStart → tells Claude the project's gates
     PreToolUse   → blocks edits to protected paths (e.g. raw data that must never be overwritten)
     PostToolUse  → runs the formatter/validator for the edited file, feeds errors back
@@ -54,6 +63,7 @@ Sources are at the end.
 
 | Piece | Name in Claude Code | What it does |
 |---|---|---|
+| Skill | `/kit:shape [idea]` | Turns a brain-dump into a precise brief with multiple-choice questions, then launches it. Starts on its own via the prompt hook |
 | Skill | `/kit:lead <goal>` | Makes the session the lead: plan, delegate, verify, loop, report |
 | Skill | `/kit:go` | Finishes the work: verify → simplify → verify → commit on a branch → PR |
 | Skill | `/kit:learn` | Writes a correction into CLAUDE.md, a skill or kit.json so it sticks |
@@ -67,7 +77,7 @@ Sources are at the end.
 | Agent | `kit:plan-reviewer` | Reviews a plan as a "staff engineer" before any code is written |
 | Workflow | `/kit:ship` | Runs N tasks in parallel worktrees: implement → verify → fix loop |
 | Workflow | `/kit:review` | Reviews the branch through 5 lenses; 2 skeptics try to refute each finding |
-| Hooks | (automatic) | `session_start`, `protect`, `on_edit`, `stop_check` |
+| Hooks | (automatic) | `shape_detect`, `session_start`, `protect`, `on_edit`, `stop_check` |
 
 ### Two layers: generic and project-specific
 
@@ -98,6 +108,7 @@ scope never changes a project you haven't opted in.
     {"glob": "data/raw/**", "mode": "no-overwrite", "reason": "raw files are immutable"},
     {"glob": "vendor/**", "mode": "read-only", "reason": "vendored code"}
   ],
+  "shape": "ask",
   "lead": {
     "read": ["docs/backlog.md"],
     "backlog": "where the next work item comes from",
@@ -109,6 +120,13 @@ scope never changes a project you haven't opted in.
 - `onEdit` commands run from the repo root. `$FILE` is the absolute path of the edited file and
   `$REL` is the path relative to the repo. `**` matches across directories; `*` stays within
   one directory.
+- `shape` controls what happens on a brain-dump prompt:
+  - `ask`: Claude first asks "Shape this into a brief first?";
+  - `auto`: it shapes straight away;
+  - `off`: nothing happens.
+
+  Your personal default for every project, including ones without a `kit.json`, lives in
+  `~/.claude/kit.json`: `{"shape": "ask"}`.
 - `protect` modes:
   - `read-only` blocks every edit.
   - `no-overwrite` lets Claude create new files but blocks edits to existing ones.
@@ -200,6 +218,11 @@ In a running session, run `/reload-plugins`. When you change behaviour, bump `ve
 
 ### Daily loop
 
+0. Just write what you have in mind, even several ideas at once. If it reads like a brain-dump,
+   the prompt hook routes it to `kit:shape`. That skill splits the ideas, looks up whatever it
+   can find itself, asks you a few multiple-choice rounds (recommended option first), and writes
+   a brief with a checkable "done". It then offers to start the lead with the right skills
+   attached. To skip it, start the prompt with `/`, or write `!go` or "just do it".
 1. Start `claude` in the project and describe the goal through the lead:
    `/kit:lead add rate limiting to the /api/chat endpoint, tests included`
 2. The lead:
@@ -216,6 +239,16 @@ You can also skip the lead for small things. Write the request and add `/kit:go`
 ("fix the typo in the footer /kit:go"), the way Boris writes "Claude do blah blah /go".
 
 ### Examples
+
+**A brain-dump: shaping starts on its own**
+```
+I'd like a premium history page, maybe a chart too, and then a weekly e-mail,
+another idea is comparing cantons with deductibles, not sure if now or after launch?
+```
+In `ask` mode Claude first asks "Shape this into a brief first?". Round 1 is a multi-select of
+the four ideas (now or park). Rounds 2–3 cover scope, the done-criterion and constraints, using
+facts it looked up itself, like existing pages and the backlog. Then comes a BRIEF, and
+"Start now" launches `kit:lead` with it. To skip shaping, start the prompt with "!go".
 
 **A feature split across workers**
 ```
@@ -281,6 +314,7 @@ manifests on every edit.
 
 | You want | Use |
 |---|---|
+| Turn a messy idea into a clear, launchable goal | just write it (auto) or `/kit:shape` |
 | One conversation that drives a goal to done | `/kit:lead <goal>` |
 | A few independent changes at once | the lead with implementers in worktrees (automatic) |
 | 5–100 similar items, or results cross-checked | `/kit:ship`, `/kit:review`, or ask for "a workflow" |
