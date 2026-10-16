@@ -1,7 +1,7 @@
 {
   "name": "kit",
   "description": "Lead/orchestrator skill, worker agents, ship/review workflows and per-project quality hooks driven by .claude/kit.json",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": {
     "name": "giovannigiofre"
   }
