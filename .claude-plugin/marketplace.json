@@ -1,0 +1,12 @@
+{
+  "name": "claude-kit",
+  "description": "Personal Claude Code harness: one lead agent that orchestrates workers, verification loops and quality hooks",
+  "owner": { "name": "giovannigiofre" },
+  "plugins": [
+    {
+      "name": "kit",
+      "source": "./plugins/kit",
+      "description": "Lead/orchestrator skill, worker agents (implementer, verifier, simplifier, plan reviewer), ship/review workflows, per-project quality hooks"
+    }
+  ]
+}
