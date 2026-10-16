@@ -69,6 +69,7 @@ Sources are at the end.
 | Skill | `/kit:learn` | Writes a correction into CLAUDE.md, a skill or kit.json so it sticks |
 | Skill | `/kit:techdebt` | End-of-session sweep for duplication, dead code and stale docs |
 | Skill | `/kit:init` | Sets up the harness in a project by writing `.claude/kit.json` |
+| Skill | `/kit:brand [app]` | New brand or rebrand: brief, three brand-board options on a Design canvas (via impeccable), then applies the chosen one |
 | Skill | `/kit:intake <tool>` | Evaluates an outside skill or plugin before adoption (§4) |
 | Skill | `kit:systematic-debugging`, `kit:verification-before-completion` | Vendored from obra/superpowers (MIT, licence inside) |
 | Agent | `kit:implementer` | Does one scoped task and returns a structured report |
