@@ -59,9 +59,10 @@ Sources are at the end.
 | Skill | `/kit:learn` | Writes a correction into CLAUDE.md, a skill or kit.json so it sticks |
 | Skill | `/kit:techdebt` | End-of-session sweep for duplication, dead code and stale docs |
 | Skill | `/kit:init` | Sets up the harness in a project by writing `.claude/kit.json` |
+| Skill | `/kit:intake <tool>` | Evaluates an outside skill or plugin before adoption (§4) |
 | Skill | `kit:systematic-debugging`, `kit:verification-before-completion` | Vendored from obra/superpowers (MIT, licence inside) |
 | Agent | `kit:implementer` | Does one scoped task and returns a structured report |
-| Agent | `kit:verifier` | Checks the work independently; assumes it's broken until proven otherwise |
+| Agent | `kit:verifier` | Checks the work independently; assumes it's broken until proven otherwise. Keeps a per-project memory of recurring pitfalls |
 | Agent | `kit:code-simplifier` | Simplifies the diff without changing behaviour |
 | Agent | `kit:plan-reviewer` | Reviews a plan as a "staff engineer" before any code is written |
 | Workflow | `/kit:ship` | Runs N tasks in parallel worktrees: implement → verify → fix loop |
@@ -120,6 +121,15 @@ scope never changes a project you haven't opted in.
 ## 2. Install
 
 ### Once per machine
+
+Quickest route, which registers the marketplace and installs the kit:
+
+```bash
+git clone git@github.com:giovannigiofre/claude-kit.git ~/Documents/repositories/claude-kit
+~/Documents/repositories/claude-kit/install.sh            # or: install.sh --github
+```
+
+By hand:
 
 ```bash
 # from GitHub (after you push this repo):
@@ -339,13 +349,19 @@ needed.**
 - In `/plugin` → Installed, the "Not used recently" group lists plugins you can turn off.
 - Remove what isn't used. Every always-on skill description costs context in every session.
 
-### 4.5 Planned kit additions (not built yet)
+### 4.5 Tools that support this
 
-| Addition | What | Why |
+| Piece | What | Status |
 |---|---|---|
-| `/kit:intake <repo or name>` | A skill that runs the four checks, writes the `CATALOG.md` entry and proposes the marketplace entry | Adding a tool then follows the same steps every time |
-| Kit evals | A few `claude plugin eval` cases: does the lead verify, does the verifier catch a planted bug | The kit is only worth it if that is measurably true |
-| Verifier memory | `memory: project` on `kit:verifier` (a documented agent setting) | It builds up a list of pitfalls per repo |
+| `/kit:intake <repo or name>` | Runs the four checks on a candidate, writes the `CATALOG.md` row and proposes a pinned marketplace entry and a trial | built (0.2.0) |
+| Verifier memory | `kit:verifier` has `memory: project`: it reads and adds recurring pitfalls per repo | built (0.2.0) |
+| Kit evals (`plugins/kit/evals/`) | `verifier-catches-bug` (claimed-done change with a bug) and `lead-verifies-before-done` (a small goal driven to done must include verification evidence) | built; see §5 for how to run |
+
+First eval result (2026-10-16, one run per arm): `verifier-catches-bug` scored 1.00 with the
+kit and 1.00 without (delta 0). The planted bug is obvious enough that Claude catches it either
+way, and for a one-line question it doesn't delegate to the verifier. The case therefore works
+as a regression check, not as proof that the kit helps. A case that tells the two arms apart
+needs a defect you only find by running the code; add one when a real one turns up in a project.
 
 ---
 
@@ -354,6 +370,15 @@ needed.**
 ```bash
 claude plugin validate ./plugins/kit && claude plugin validate .
 claude --plugin-dir ./plugins/kit            # try changes in one session without installing
+```
+
+Run the evals (they spend real tokens; `--max-cost-usd` caps the estimate):
+
+```bash
+cd plugins/kit
+claude plugin eval . --case verifier-catches-bug --scaffold --trust-plugin --no-publish --max-cost-usd 4
+claude plugin eval . --case lead-verifies-before-done --scaffold --trust-plugin --no-publish \
+  --allow-tools Write Edit "Bash(python3 *)" "Bash(pytest *)" "Bash(git *)" --max-cost-usd 10
 ```
 
 Test a hook by hand:

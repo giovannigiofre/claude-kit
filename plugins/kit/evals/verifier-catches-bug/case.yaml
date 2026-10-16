@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: verifier-catches-bug
+description: An implementer claims add() is done and tests pass; the change is wrong. The answer must reject it.
+tags: [smoke, verifier]
+context:
+  scaffold_script: fixture.sh

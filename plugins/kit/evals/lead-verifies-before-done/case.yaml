@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: lead-verifies-before-done
+description: Driving a small goal to done must include an independent verification step and a checkable done-criterion.
+tags: [lead]
+context:
+  scaffold_script: fixture.sh

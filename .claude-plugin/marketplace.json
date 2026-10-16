@@ -1,12 +1,23 @@
 {
   "name": "claude-kit",
   "description": "Personal Claude Code harness: one lead agent that orchestrates workers, verification loops and quality hooks",
-  "owner": { "name": "giovannigiofre" },
+  "owner": {
+    "name": "giovannigiofre"
+  },
   "plugins": [
     {
       "name": "kit",
       "source": "./plugins/kit",
       "description": "Lead/orchestrator skill, worker agents (implementer, verifier, simplifier, plan reviewer), ship/review workflows, per-project quality hooks"
+    },
+    {
+      "name": "ponytail",
+      "source": {
+        "source": "github",
+        "repo": "DietrichGebert/ponytail",
+        "sha": "f329330e6104f7ab771fb0ba9612011f401d73cc"
+      },
+      "description": "Third-party (MIT): minimal-change ruleset + review/audit commands. TRIAL - see CATALOG.md before enabling."
     }
   ]
 }
