@@ -53,9 +53,11 @@ Sources are at the end.
   Hooks, in every session of a project that has .claude/kit.json:
     UserPromptSubmit → spots brain-dump prompts and routes them to kit:shape (mode: ask/auto/off;
                        also active without kit.json if ~/.claude/kit.json sets "shape")
-    SessionStart → tells Claude the project's gates
+    SessionStart → tells Claude the project's gates; after a compaction re-injects the handoff note
     PreToolUse   → blocks edits to protected paths (e.g. raw data that must never be overwritten)
     PostToolUse  → runs the formatter/validator for the edited file, feeds errors back
+    UserPromptSubmit + PostToolUse → context guard: at 70 % / 85 % of the auto-compact window,
+                       asks Claude to update the handoff note before compaction
     Stop         → runs the fast `check`; if it fails, Claude must keep fixing (max 3 tries)
 ```
 
@@ -69,6 +71,7 @@ Sources are at the end.
 | Skill | `/kit:learn` | Writes a correction into CLAUDE.md, a skill or kit.json so it sticks |
 | Skill | `/kit:techdebt` | End-of-session sweep for duplication, dead code and stale docs |
 | Skill | `/kit:init` | Sets up the harness in a project by writing `.claude/kit.json` |
+| Skill | `/kit:brand [app]` | New brand or rebrand: brief, three brand-board options on a Design canvas (via impeccable), then applies the chosen one, sweeps old-brand leftovers and runs two UI reviews |
 | Skill | `/kit:intake <tool>` | Evaluates an outside skill or plugin before adoption (§4) |
 | Skill | `kit:systematic-debugging`, `kit:verification-before-completion` | Vendored from obra/superpowers (MIT, licence inside) |
 | Agent | `kit:implementer` | Does one scoped task and returns a structured report |
@@ -77,7 +80,7 @@ Sources are at the end.
 | Agent | `kit:plan-reviewer` | Reviews a plan as a "staff engineer" before any code is written |
 | Workflow | `/kit:ship` | Runs N tasks in parallel worktrees: implement → verify → fix loop |
 | Workflow | `/kit:review` | Reviews the branch through 5 lenses; 2 skeptics try to refute each finding |
-| Hooks | (automatic) | `shape_detect`, `session_start`, `protect`, `on_edit`, `stop_check` |
+| Hooks | (automatic) | `shape_detect`, `session_start`, `context_guard`, `protect`, `on_edit`, `stop_check` |
 
 ### Two layers: generic and project-specific
 
@@ -109,6 +112,7 @@ scope never changes a project you haven't opted in.
     {"glob": "vendor/**", "mode": "read-only", "reason": "vendored code"}
   ],
   "shape": "ask",
+  "context": {"window": 300000, "warnAt": 0.7, "handoff": ".claude/handoff.md"},
   "lead": {
     "read": ["docs/backlog.md"],
     "backlog": "where the next work item comes from",
@@ -127,6 +131,11 @@ scope never changes a project you haven't opted in.
 
   Your personal default for every project, including ones without a `kit.json`, lives in
   `~/.claude/kit.json`: `{"shape": "ask"}`.
+- `context` keeps long sessions lean (see "Context and compaction" below). `window` should match
+  your `autoCompactWindow`; `$CLAUDE_CODE_AUTO_COMPACT_WINDOW`, if set, wins
+  over it (as in Claude Code); default 300000. Put
+  `{"context": {}}` in `~/.claude/kit.json` to have it in every project whose `kit.json` (if any)
+  has no `context` key. Without either, the guard and the re-injection stay off.
 - `protect` modes:
   - `read-only` blocks every edit.
   - `no-overwrite` lets Claude create new files but blocks edits to existing ones.
@@ -164,6 +173,29 @@ Recommended user settings, which Boris also uses (`~/.claude/settings.json`, or 
 - `"permissions": {"defaultMode": "auto"}`: auto mode, so long runs don't stop for permission
   prompts.
 - Turn on system notifications, so you know when a session needs you.
+- `"autoCompactWindow": 300000`: compact at ~300k tokens instead of near the 1M limit.
+
+### Context and compaction
+
+Answer quality drops long before a 1M window is full, and every turn re-sends the whole
+context. So the kit compacts early and makes compaction lossless:
+
+1. **Compact earlier.** `autoCompactWindow` (100000 to 1000000, user or project
+   `settings.json`) sets the size at which Claude Code compacts on its own. The kit recommends
+   300000 for the main session; `/kit:init` writes it to the project's `.claude/settings.json`.
+   The kit's agents set `autoCompactWindow: 200000` in their frontmatter (Claude Code 2.1.296+):
+   workers need the brief, not a long history. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` overrides both.
+2. **Handoff before it happens.** No hook can start a compaction, so the context guard reads the
+   current context size from the transcript and, at `warnAt` (70 %) and again at 85 % of the
+   window, tells Claude to update `.claude/handoff.md`: goal, decisions, in-flight agents and
+   branches, next steps, session rules. Subagents are skipped.
+3. **Re-inject after.** On `SessionStart` with source `compact`, the kit prints the handoff note
+   back into context, and CLAUDE.md is reloaded from disk anyway.
+4. **Tell the summarizer what matters.** A `# Compact instructions` section in CLAUDE.md is read
+   by the compaction summarizer; `/kit:init` adds one.
+
+`.claude/handoff.md` is per checkout and should be gitignored. In a live session you can still run
+`/compact <focus>` yourself at a natural boundary; the guard suggests it.
 
 ### Every new project (about 2 minutes)
 

@@ -33,6 +33,15 @@
             "timeout": 180
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/context_guard.py\"",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "Stop": [
@@ -52,6 +61,11 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/shape_detect.py\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/context_guard.py\"",
             "timeout": 10
           }
         ]

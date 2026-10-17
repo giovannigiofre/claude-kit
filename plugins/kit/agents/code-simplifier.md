@@ -2,6 +2,7 @@
 name: code-simplifier
 description: Simplifies code that was just written (the current diff or named files) without changing behaviour - removes duplication, dead code, needless abstraction and over-defensive branches. Use after a feature passes verification and before committing.
 model: inherit
+autoCompactWindow: 200000
 color: purple
 ---
 
