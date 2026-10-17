@@ -9,11 +9,12 @@ to date. session_start.py puts that file back into context right after the compa
 
 Config, `context` in the project's .claude/kit.json, else in ~/.claude/kit.json, else off:
   {"window": 300000, "warnAt": 0.7, "handoff": ".claude/handoff.md"}
-`window` defaults to $CLAUDE_CODE_AUTO_COMPACT_WINDOW, else 300000. Subagents are skipped: they
+$CLAUDE_CODE_AUTO_COMPACT_WINDOW, if set, beats `window` (as in Claude Code); default 300000. Subagents are skipped: they
 compact on their own window and report to the lead, who keeps the handoff.
 """
 
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -42,9 +43,21 @@ def context_config(root):
 
 def number(value, default):
     try:
-        return float(value)
+        x = float(value)
     except (TypeError, ValueError):
         return default
+    return x if math.isfinite(x) else default
+
+
+def window_for(cfg):
+    # same precedence and range as Claude Code: the env var beats the setting, 100k-1M
+    raw = number(os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW"), 0) or number(cfg.get("window"), 0)
+    return int(min(max(raw, 100_000), 1_000_000)) if raw else DEFAULT_WINDOW
+
+
+def handoff_for(cfg):
+    path = cfg.get("handoff")
+    return path if isinstance(path, str) and path.strip() else DEFAULT_HANDOFF
 
 
 def context_tokens(transcript_path):
@@ -95,9 +108,7 @@ def main():
     cfg = context_config(root)
     if cfg is None:
         return 0
-    # same precedence as Claude Code: the env var beats the setting
-    window = int(number(os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW"), 0)
-                 or number(cfg.get("window"), 0) or DEFAULT_WINDOW)
+    window = window_for(cfg)
     warn_at = number(cfg.get("warnAt"), 0.7)
     tokens = context_tokens(data.get("transcript_path") or "")
     if not tokens:
@@ -110,7 +121,7 @@ def main():
             kitlib.save_state(session, "context", {"level": level})
         return 0
     kitlib.save_state(session, "context", {"level": level})
-    ctx = message(level, tokens, window, cfg.get("handoff") or DEFAULT_HANDOFF)
+    ctx = message(level, tokens, window, handoff_for(cfg))
     event = data.get("hook_event_name") or "PostToolUse"
     print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": ctx}}))
     return 0

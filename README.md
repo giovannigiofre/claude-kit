@@ -132,7 +132,8 @@ scope never changes a project you haven't opted in.
   Your personal default for every project, including ones without a `kit.json`, lives in
   `~/.claude/kit.json`: `{"shape": "ask"}`.
 - `context` keeps long sessions lean (see "Context and compaction" below). `window` should match
-  your `autoCompactWindow`; it defaults to `$CLAUDE_CODE_AUTO_COMPACT_WINDOW`, else 300000. Put
+  your `autoCompactWindow`; `$CLAUDE_CODE_AUTO_COMPACT_WINDOW`, if set, wins
+  over it (as in Claude Code); default 300000. Put
   `{"context": {}}` in `~/.claude/kit.json` to have it in every project whose `kit.json` (if any)
   has no `context` key. Without either, the guard and the re-injection stay off.
 - `protect` modes:

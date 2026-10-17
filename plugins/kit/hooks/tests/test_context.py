@@ -55,7 +55,8 @@ def main():
         (home / ".claude" / "kit.json").write_text(json.dumps({"context": {}}))
         assert "83%" in run("context_guard.py", base, home), "user-level context applies"
         (home / ".claude" / "kit.json").unlink()
-        for bad in ([], {"context": True}, {"context": 300000}, {"context": {"window": "abc", "warnAt": "x"}}):
+        for bad in ([], {"context": True}, {"context": 300000}, {"context": {"window": "abc", "warnAt": "x"}},
+                    {"context": {"window": "nan"}}, {"context": {"window": 0.5, "handoff": 5}}):
             kit.write_text(json.dumps(bad))
             run("context_guard.py", dict(base, session_id=uuid.uuid4().hex), home)  # must not crash
             run("session_start.py", {"cwd": str(repo), "source": "compact"}, home)

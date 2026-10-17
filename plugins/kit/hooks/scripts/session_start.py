@@ -15,7 +15,7 @@ def print_handoff(root):
     cfg = context_guard.context_config(root)
     if cfg is None:
         return
-    path = Path(root) / (cfg.get("handoff") or context_guard.DEFAULT_HANDOFF)
+    path = Path(root) / context_guard.handoff_for(cfg)
     try:
         text = path.read_text(encoding="utf-8").strip()
     except Exception:
