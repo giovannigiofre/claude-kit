@@ -4,7 +4,7 @@
 Claude Code compacts on its own when the context reaches the auto-compact window (set it lower
 than the 1M default with `autoCompactWindow` in settings, see the README). No hook can start a
 compaction, so this hook makes sure nothing important is lost when it happens: once the context
-passes `warnAt` (and again at 90 %) of the window, it tells Claude to bring the handoff file up
+passes `warnAt` (and again at 85 %) of the window, it tells Claude to bring the handoff file up
 to date. session_start.py puts that file back into context right after the compaction.
 
 Config, `context` in the project's .claude/kit.json, else in ~/.claude/kit.json, else off:
@@ -23,18 +23,28 @@ import kitlib  # noqa: E402
 
 DEFAULT_WINDOW = 300_000
 DEFAULT_HANDOFF = ".claude/handoff.md"
-TAIL_BYTES = 400_000  # the last assistant turn is always near the end of the transcript
+# real transcripts have up to ~1.8 MB between assistant entries; if none is in the tail the
+# call is skipped (no wrong number, just no check this time)
+TAIL_BYTES = 2_500_000
 
 
 def context_config(root):
+    """The `context` object from the project's kit.json, else ~/.claude/kit.json; None = off."""
     config, _ = kitlib.load_config(root)
-    if config is not None:
-        return config.get("context") or {}
+    if isinstance(config, dict) and isinstance(config.get("context"), dict):
+        return config["context"]
     try:
         user = json.loads((Path.home() / ".claude" / "kit.json").read_text())
-        return user.get("context")  # None = off for projects without kit.json
     except Exception:
         return None
+    return user["context"] if isinstance(user, dict) and isinstance(user.get("context"), dict) else None
+
+
+def number(value, default):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def context_tokens(transcript_path):
@@ -61,7 +71,7 @@ def context_tokens(transcript_path):
 
 
 def level_for(ratio, warn_at):
-    return 2 if ratio >= 0.9 else 1 if ratio >= warn_at else 0
+    return 2 if ratio >= 0.85 else 1 if ratio >= warn_at else 0
 
 
 def message(level, tokens, window, handoff):
@@ -85,8 +95,10 @@ def main():
     cfg = context_config(root)
     if cfg is None:
         return 0
-    window = int(cfg.get("window") or os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW") or DEFAULT_WINDOW)
-    warn_at = float(cfg.get("warnAt", 0.7))
+    # same precedence as Claude Code: the env var beats the setting
+    window = int(number(os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW"), 0)
+                 or number(cfg.get("window"), 0) or DEFAULT_WINDOW)
+    warn_at = number(cfg.get("warnAt"), 0.7)
     tokens = context_tokens(data.get("transcript_path") or "")
     if not tokens:
         return 0

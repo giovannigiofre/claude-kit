@@ -56,7 +56,7 @@ Sources are at the end.
     SessionStart → tells Claude the project's gates; after a compaction re-injects the handoff note
     PreToolUse   → blocks edits to protected paths (e.g. raw data that must never be overwritten)
     PostToolUse  → runs the formatter/validator for the edited file, feeds errors back
-    UserPromptSubmit + PostToolUse → context guard: at 70 % / 90 % of the auto-compact window,
+    UserPromptSubmit + PostToolUse → context guard: at 70 % / 85 % of the auto-compact window,
                        asks Claude to update the handoff note before compaction
     Stop         → runs the fast `check`; if it fails, Claude must keep fixing (max 3 tries)
 ```
@@ -133,7 +133,8 @@ scope never changes a project you haven't opted in.
   `~/.claude/kit.json`: `{"shape": "ask"}`.
 - `context` keeps long sessions lean (see "Context and compaction" below). `window` should match
   your `autoCompactWindow`; it defaults to `$CLAUDE_CODE_AUTO_COMPACT_WINDOW`, else 300000. Put
-  `{"context": {}}` in `~/.claude/kit.json` to have it in projects without a `kit.json` too.
+  `{"context": {}}` in `~/.claude/kit.json` to have it in every project whose `kit.json` (if any)
+  has no `context` key. Without either, the guard and the re-injection stay off.
 - `protect` modes:
   - `read-only` blocks every edit.
   - `no-overwrite` lets Claude create new files but blocks edits to existing ones.
@@ -184,7 +185,7 @@ context. So the kit compacts early and makes compaction lossless:
    The kit's agents set `autoCompactWindow: 200000` in their frontmatter (Claude Code 2.1.296+):
    workers need the brief, not a long history. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` overrides both.
 2. **Handoff before it happens.** No hook can start a compaction, so the context guard reads the
-   current context size from the transcript and, at `warnAt` (70 %) and again at 90 % of the
+   current context size from the transcript and, at `warnAt` (70 %) and again at 85 % of the
    window, tells Claude to update `.claude/handoff.md`: goal, decisions, in-flight agents and
    branches, next steps, session rules. Subagents are skipped.
 3. **Re-inject after.** On `SessionStart` with source `compact`, the kit prints the handoff note

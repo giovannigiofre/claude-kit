@@ -48,7 +48,19 @@ def main():
         write_transcript(transcript, 250_000)
         assert run("context_guard.py", base, home) == "", "no kit.json, no user config: must stay off"
 
-        (repo / ".claude" / "kit.json").write_text(json.dumps({"context": {"window": 300_000}}))
+        kit = repo / ".claude" / "kit.json"
+        kit.write_text(json.dumps({"check": "true"}))
+        assert run("context_guard.py", base, home) == "", "kit.json without context: off"
+        (home / ".claude").mkdir()
+        (home / ".claude" / "kit.json").write_text(json.dumps({"context": {}}))
+        assert "83%" in run("context_guard.py", base, home), "user-level context applies"
+        (home / ".claude" / "kit.json").unlink()
+        for bad in ([], {"context": True}, {"context": 300000}, {"context": {"window": "abc", "warnAt": "x"}}):
+            kit.write_text(json.dumps(bad))
+            run("context_guard.py", dict(base, session_id=uuid.uuid4().hex), home)  # must not crash
+            run("session_start.py", {"cwd": str(repo), "source": "compact"}, home)
+
+        kit.write_text(json.dumps({"context": {"window": 300_000}}))
         write_transcript(transcript, 100_000)
         assert run("context_guard.py", base, home) == "", "below warnAt: silent"
 

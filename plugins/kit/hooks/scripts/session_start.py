@@ -48,7 +48,8 @@ def main():
     lead = config.get("lead") or {}
     if lead.get("notes"):
         lines.append(f"- lead notes: {lead['notes']}")
-    print("\n".join(lines))
+    if len(lines) > 1:
+        print("\n".join(lines))
     return 0
 
 
