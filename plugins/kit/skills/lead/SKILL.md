@@ -43,6 +43,7 @@ Create a task list (TaskCreate) with one task per independently checkable unit. 
 | Long, independent, can run unattended | tell the user it fits a background session (`claude agents`) and give the exact prompt |
 | Must repeat on a schedule | propose `/loop <interval> /kit:lead next` or a routine |
 | One conversation must keep going until a condition holds | propose `/goal <condition>`; the kit Stop hook still runs the real check |
+| The task changes an LLM feature (prompt, tools, orchestration, model, answer quality) | the matching kit skill, loaded by you or named in the worker brief: `kit:llm-design` (architecture), `kit:llm-evals` (measure; first if no trusted suite), `kit:prompt-optimize` (iterate against the suite), `kit:model-select` (compare models). The done-criterion is an eval result, not "the prompt reads better" |
 
 Give each worker a self-contained brief: goal, scope (files/area), done-criterion, the project
 rule or skill that applies, and what to return. Workers do not see this conversation.
