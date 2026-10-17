@@ -25,15 +25,21 @@ The kit hooks do nothing until `.claude/kit.json` exists. Build it from evidence
 5. **shape**: `"ask"` (default: on a brain-dump prompt Claude offers to shape it first),
    `"auto"` (shapes straight away) or `"off"`. A personal default for every project can live in
    `~/.claude/kit.json` as `{"shape": "ask"}`.
-6. **lead**: `read` = the 1-3 files a lead should read before planning (backlog, decision log),
+6. **context** (keeps long sessions lean): add `"context": {"window": 300000, "warnAt": 0.7,
+   "handoff": ".claude/handoff.md"}`, put `"autoCompactWindow": 300000` in the project's
+   `.claude/settings.json` (create or merge, never drop existing keys), add `.claude/handoff.md`
+   to `.gitignore`, and append a `# Compact instructions` section to CLAUDE.md (3-5 lines: keep
+   the goal, decisions and user preferences, in-flight work, failing checks and file paths;
+   drop tool output already acted on). Skip any part the project already has.
+7. **lead**: `read` = the 1-3 files a lead should read before planning (backlog, decision log),
    `backlog` = where the next work item comes from, `notes` = one line of project-specific
    orchestration advice.
-7. Write `.claude/kit.json`, show it to the user, and explain that it is committed with the repo
+8. Write `.claude/kit.json`, show it to the user, and explain that it is committed with the repo
    so every clone and every session gets the same gates.
-8. **Permissions.** Propose (do not silently add) allow rules in `.claude/settings.json` for the
+9. **Permissions.** Propose (do not silently add) allow rules in `.claude/settings.json` for the
    read-only and check/verify commands, so long runs are not interrupted. If the built-in
    `/fewer-permission-prompts` skill is available, suggest running it.
-9. Confirm the hooks fire: make a trivial edit to a file matching an `onEdit` glob and revert
+10. Confirm the hooks fire: make a trivial edit to a file matching an `onEdit` glob and revert
    it, and report what ran.
 
 Schema:
@@ -47,6 +53,7 @@ Schema:
   "onEdit": [{"glob": "**/*.py", "run": "...\"$FILE\"...", "timeout": 120}],
   "protect": [{"glob": "data/raw/**", "mode": "no-overwrite", "reason": "raw files are immutable"}],
   "shape": "ask",
+  "context": {"window": 300000, "warnAt": 0.7, "handoff": ".claude/handoff.md"},
   "lead": {"read": ["docs/backlog.md"], "backlog": "docs/backlog.md", "notes": "..."}
 }
 ```

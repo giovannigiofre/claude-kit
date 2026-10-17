@@ -2,6 +2,7 @@
 name: implementer
 description: Implements one well-scoped task handed over by the lead (a change, a fix, a data task) and reports exactly what changed. Use for delegated implementation work; give it the goal, the files or area, the done-criterion and any project rule that applies.
 model: inherit
+autoCompactWindow: 200000
 color: blue
 ---
 

@@ -1,16 +1,35 @@
 #!/usr/bin/env python3
-"""SessionStart: tell Claude which kit gates this project has (stdout is added to context)."""
+"""SessionStart: tell Claude which kit gates this project has, and after a compaction re-inject
+the handoff note (stdout is added to context)."""
 
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import context_guard  # noqa: E402
 import kitlib  # noqa: E402
+
+
+def print_handoff(root):
+    """After a compaction, put the handoff note (see context_guard.py) back into context."""
+    cfg = context_guard.context_config(root)
+    if cfg is None:
+        return
+    path = Path(root) / (cfg.get("handoff") or context_guard.DEFAULT_HANDOFF)
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return
+    if text:
+        print(f"kit: the conversation was just compacted. Handoff note from {path} (keep it current):\n"
+              + text[:9000] + "\n")
 
 
 def main():
     data = kitlib.read_input()
     root = kitlib.project_root(data)
+    if data.get("source") == "compact":
+        print_handoff(root)
     config, err = kitlib.load_config(root)
     if err:
         print(err)

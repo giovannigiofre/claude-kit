@@ -2,6 +2,7 @@
 name: plan-reviewer
 description: Reviews a plan as a skeptical staff engineer before any code is written - finds missing steps, wrong assumptions, risky ordering, unverifiable done-criteria and simpler alternatives. Use for non-trivial or risky plans.
 model: inherit
+autoCompactWindow: 200000
 color: orange
 tools: Read, Grep, Glob, Bash, WebFetch, WebSearch
 ---

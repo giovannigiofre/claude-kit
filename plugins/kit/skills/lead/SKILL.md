@@ -65,6 +65,14 @@ rule or skill that applies, and what to return. Workers do not see this conversa
   deploy, migrations and anything outward-facing need the user's go-ahead unless they already
   gave it for this run.
 
+## Keep the context lean
+
+Your context is for decisions, not file dumps. When the kit's context guard asks for it, and
+at every phase boundary, overwrite `.claude/handoff.md` (or the path in `kit.json`
+`context.handoff`): goal and done-criterion, decisions and user preferences, in-flight agents,
+branches and PRs, next step, session rules. Compaction then loses nothing, and the note comes back
+on its own afterwards.
+
 ## 5. Report
 
 ```

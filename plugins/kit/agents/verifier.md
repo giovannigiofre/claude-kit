@@ -2,6 +2,7 @@
 name: verifier
 description: Independently verifies that a claimed piece of work is actually done and correct, by running checks and exercising the change, never by trusting the implementer's summary. Use after every implementation step and before anything is reported as done.
 model: inherit
+autoCompactWindow: 200000
 color: green
 memory: project
 ---
