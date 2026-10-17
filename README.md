@@ -73,6 +73,10 @@ Sources are at the end.
 | Skill | `/kit:init` | Sets up the harness in a project by writing `.claude/kit.json` |
 | Skill | `/kit:brand [app]` | New brand or rebrand: brief, three brand-board options on a Design canvas (via impeccable), then applies the chosen one, sweeps old-brand leftovers and runs two UI reviews |
 | Skill | `/kit:intake <tool>` | Evaluates an outside skill or plugin before adoption (§4) |
+| Skill | `kit:llm-design` | Architecture of an LLM feature: workflow vs agent, tools, system prompt, context, guards, and the eval plan |
+| Skill | `kit:llm-evals` | Error analysis → failure taxonomy → code checks + calibrated binary judges → CI gate. Extends the project's existing harness |
+| Skill | `kit:prompt-optimize` | Eval-driven prompt loop: baseline, diagnose, minimal edit, keep/revert on a held-out split, fixed budget, run log |
+| Skill | `kit:model-select` | Same suite across candidate models per role; pick from the quality/cost/latency frontier |
 | Skill | `kit:systematic-debugging`, `kit:verification-before-completion` | Vendored from obra/superpowers (MIT, licence inside) |
 | Agent | `kit:implementer` | Does one scoped task and returns a structured report |
 | Agent | `kit:verifier` | Checks the work independently; assumes it's broken until proven otherwise. Keeps a per-project memory of recurring pitfalls |
@@ -342,6 +346,27 @@ and runs one worker per group. Each worker loads the matching project skill. A v
 the gate (G3/G5/G6/G8) and checks provenance. The hooks keep `data/raw` immutable and validate
 manifests on every edit.
 
+**Improving an LLM feature: the four LLM-quality skills**
+
+```
+kit:llm-design ──► kit:llm-evals ──► kit:prompt-optimize ──► kit:model-select
+ (architecture,     (error analysis,   (baseline → diagnose →   (same suite across
+  eval plan)         taxonomy, judges   edit → keep/revert,      models; pick per role
+                     calibrated vs you)  held-out split, budget)  on the Pareto frontier)
+```
+
+Each one checks its precondition and hands off to the next: `prompt-optimize` and
+`model-select` refuse to run without a suite you trust and send you to `llm-evals` first.
+Selection is automatic: Claude Code matches your request against the skill descriptions
+("the chatbot gives wrong premiums", "tune the system prompt", "is a cheaper model good
+enough?"), and `kit:lead` routes any task that touches a prompt, tool, orchestration or model
+to them. No extra hook: a prompt classifier would cost context on every turn for a choice the
+descriptions already make. The `picks-llm-skill` eval checks the routing.
+
+```
+/kit:lead raise the advisor's completeness score without new hard-check failures, budget USD 15
+```
+
 ### Which mechanism, when
 
 | You want | Use |
@@ -354,6 +379,7 @@ manifests on every edit.
 | Repeat on an interval while your laptop is on | `/loop <interval> <prompt>` |
 | Repeat on a schedule with the laptop off | routines (`/schedule`) |
 | Many long sessions you check on now and then | `claude agents` (agent view) |
+| Improve an LLM feature (chatbot, agent, RAG) | just describe it: Claude picks `kit:llm-design` / `kit:llm-evals` / `kit:prompt-optimize` / `kit:model-select` from their descriptions, and the lead routes LLM tasks to them; or call one by name |
 | Teammates that talk to each other | agent teams: experimental, `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`; the kit's agent definitions work as teammate types |
 
 ---
@@ -421,13 +447,21 @@ needed.**
 |---|---|---|
 | `/kit:intake <repo or name>` | Runs the four checks on a candidate, writes the `CATALOG.md` row and proposes a pinned marketplace entry and a trial | built (0.2.0) |
 | Verifier memory | `kit:verifier` has `memory: project`: it reads and adds recurring pitfalls per repo | built (0.2.0) |
-| Kit evals (`plugins/kit/evals/`) | `verifier-catches-bug` (claimed-done change with a bug) and `lead-verifies-before-done` (a small goal driven to done must include verification evidence) | built; see §5 for how to run |
+| Kit evals (`plugins/kit/evals/`) | `verifier-catches-bug` (claimed-done change with a bug) and `lead-verifies-before-done` (a small goal driven to done must include verification evidence); `picks-llm-skill` and `optimize-needs-evals` (LLM-quality requests reach `kit:llm-evals` / `kit:prompt-optimize`, and nobody tunes a prompt without a measure) | built; see §5 for how to run |
 
 First eval result (2026-10-16, one run per arm): `verifier-catches-bug` scored 1.00 with the
 kit and 1.00 without (delta 0). The planted bug is obvious enough that Claude catches it either
 way, and for a one-line question it doesn't delegate to the verifier. The case therefore works
 as a regression check, not as proof that the kit helps. A case that tells the two arms apart
 needs a defect you only find by running the code; add one when a real one turns up in a project.
+
+LLM-quality evals (2026-10-17, one run per arm): `picks-llm-skill` 1.00 with and 1.00 without
+(Δ 0; the kit loaded `kit:llm-evals`, but plain Claude also proposes measuring first, so it is a
+routing check). `optimize-needs-evals` first scored 0.00 in both arms: asked to "optimize the
+system prompt", Claude rewrote it blind and never loaded `kit:prompt-optimize`, whose
+description then said "against an existing eval suite". After rewording the trigger ("with or
+without an eval suite ... never rewrite a prompt blind") it scored 1.00 with the kit and 0.00
+without (Δ +1.00).
 
 ---
 
@@ -445,6 +479,8 @@ cd plugins/kit
 claude plugin eval . --case verifier-catches-bug --scaffold --trust-plugin --no-publish --max-cost-usd 4
 claude plugin eval . --case lead-verifies-before-done --scaffold --trust-plugin --no-publish \
   --allow-tools Write Edit "Bash(python3 *)" "Bash(pytest *)" "Bash(git *)" --max-cost-usd 10
+claude plugin eval . --case picks-llm-skill --scaffold --trust-plugin --no-publish --max-cost-usd 3
+claude plugin eval . --case optimize-needs-evals --scaffold --trust-plugin --no-publish --max-cost-usd 3
 ```
 
 Test a hook by hand:
