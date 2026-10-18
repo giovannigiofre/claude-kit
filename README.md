@@ -55,7 +55,8 @@ Sources are at the end.
                        also active without kit.json if ~/.claude/kit.json sets "shape")
     SessionStart → tells Claude the project's gates; after a compaction re-injects the handoff note
     PreToolUse   → blocks edits to protected paths (e.g. raw data that must never be overwritten)
-    PostToolUse  → runs the formatter/validator for the edited file, feeds errors back
+    PostToolUse  → runs the formatter/validator for the edited file, feeds errors back;
+                   once per session, if the edited file is LLM code, points Claude to kit:llm-build
     UserPromptSubmit + PostToolUse → context guard: at 70 % / 85 % of the auto-compact window,
                        asks Claude to update the handoff note before compaction
     Stop         → runs the fast `check`; if it fails, Claude must keep fixing (max 3 tries)
@@ -73,7 +74,7 @@ Sources are at the end.
 | Skill | `/kit:init` | Sets up the harness in a project by writing `.claude/kit.json` |
 | Skill | `/kit:brand [app]` | New brand or rebrand: brief, three brand-board options on a Design canvas (via impeccable), then applies the chosen one, sweeps old-brand leftovers and runs two UI reviews |
 | Skill | `/kit:intake <tool>` | Evaluates an outside skill or plugin before adoption (§4) |
-| Skill | `kit:llm-design` | Architecture of an LLM feature: workflow vs agent, tools, system prompt, context, guards, and the eval plan |
+| Skill | `kit:llm-build` | Design, build and review of any LLM code (SDK or raw HTTP calls, prompts, tools, model config): workflow vs agent, tools, context, structured output and grounding, injection defences (lethal trifecta), budgets, operations; checklist A-H in `checklist.md` and a "Done when" the verifier enforces (replaces `kit:llm-design`, 0.7.0) |
 | Skill | `kit:llm-evals` | Error analysis → failure taxonomy → code checks + calibrated binary judges → CI gate. Extends the project's existing harness |
 | Skill | `kit:prompt-optimize` | Eval-driven prompt loop: baseline, diagnose, minimal edit, keep/revert on a held-out split, fixed budget, run log |
 | Skill | `kit:model-select` | Same suite across candidate models per role; pick from the quality/cost/latency frontier |
@@ -83,8 +84,8 @@ Sources are at the end.
 | Agent | `kit:code-simplifier` | Simplifies the diff without changing behaviour |
 | Agent | `kit:plan-reviewer` | Reviews a plan as a "staff engineer" before any code is written |
 | Workflow | `/kit:ship` | Runs N tasks in parallel worktrees: implement → verify → fix loop |
-| Workflow | `/kit:review` | Reviews the branch through 5 lenses; 2 skeptics try to refute each finding |
-| Hooks | (automatic) | `shape_detect`, `session_start`, `context_guard`, `protect`, `on_edit`, `stop_check` |
+| Workflow | `/kit:review` | Reviews the branch through 6 lenses (the `llm` lens only reports when the diff touches LLM code); 2 skeptics try to refute each finding |
+| Hooks | (automatic) | `shape_detect`, `session_start`, `context_guard`, `protect`, `on_edit`, `llm_detect`, `stop_check` |
 
 ### Two layers: generic and project-specific
 
@@ -116,6 +117,7 @@ scope never changes a project you haven't opted in.
     {"glob": "vendor/**", "mode": "read-only", "reason": "vendored code"}
   ],
   "shape": "ask",
+  "llm": "on",
   "context": {"window": 300000, "warnAt": 0.7, "handoff": ".claude/handoff.md"},
   "lead": {
     "read": ["docs/backlog.md"],
@@ -135,6 +137,14 @@ scope never changes a project you haven't opted in.
 
   Your personal default for every project, including ones without a `kit.json`, lives in
   `~/.claude/kit.json`: `{"shape": "ask"}`.
+- `llm` (default `on` when the project has a `kit.json`): after an Edit/Write of a code file (or
+  anything under a `prompts/` directory) whose content imports an LLM SDK (anthropic, openai,
+  google-genai, mistral, cohere, ollama, litellm, langchain, llama_index, dspy, Vercel `ai`),
+  calls a provider endpoint (`api.anthropic.com`, `api.openai.com`, `openrouter.ai/api`,
+  `/chat/completions`, `/v1/messages`, ...) or defines a system prompt or tool schema, the
+  `llm_detect` hook tells Claude once per session (and once per subagent) to load
+  `kit:llm-build`. Regex only, no model call. `"llm": "off"` silences it; without a project
+  `kit.json` it follows `~/.claude/kit.json` (`"llm": "on"`), else stays off.
 - `context` keeps long sessions lean (see "Context and compaction" below). `window` should match
   your `autoCompactWindow`; `$CLAUDE_CODE_AUTO_COMPACT_WINDOW`, if set, wins
   over it (as in Claude Code); default 300000. Put
@@ -305,7 +315,8 @@ result is a table of PASS/FAIL per task, with branches ready to merge.
 ```
 /kit:review
 ```
-Five lenses look for problems: correctness, project rules, tests, security/data and simplicity.
+Six lenses look for problems: correctness, project rules, tests, security/data, simplicity and,
+when the diff touches LLM code, `llm` (the `kit:llm-build` checklist).
 Each finding is then attacked by 2 skeptics, and only findings both skeptics fail to refute are
 reported as confirmed.
 
@@ -346,12 +357,12 @@ and runs one worker per group. Each worker loads the matching project skill. A v
 the gate (G3/G5/G6/G8) and checks provenance. The hooks keep `data/raw` immutable and validate
 manifests on every edit.
 
-**Improving an LLM feature: the four LLM-quality skills**
+**Building or improving an LLM feature: the four LLM-quality skills**
 
 ```
-kit:llm-design ──► kit:llm-evals ──► kit:prompt-optimize ──► kit:model-select
- (architecture,     (error analysis,   (baseline → diagnose →   (same suite across
-  eval plan)         taxonomy, judges   edit → keep/revert,      models; pick per role
+kit:llm-build  ──► kit:llm-evals ──► kit:prompt-optimize ──► kit:model-select
+ (design, build,    (error analysis,   (baseline → diagnose →   (same suite across
+  review, gate)      taxonomy, judges   edit → keep/revert,      models; pick per role
                      calibrated vs you)  held-out split, budget)  on the Pareto frontier)
 ```
 
@@ -360,8 +371,12 @@ Each one checks its precondition and hands off to the next: `prompt-optimize` an
 Selection is automatic: Claude Code matches your request against the skill descriptions
 ("the chatbot gives wrong premiums", "tune the system prompt", "is a cheaper model good
 enough?"), and `kit:lead` routes any task that touches a prompt, tool, orchestration or model
-to them. No extra hook: a prompt classifier would cost context on every turn for a choice the
-descriptions already make. The `picks-llm-skill` eval checks the routing.
+to them. There is no prompt classifier (it would cost context on every turn), but a
+file-content detector costs nothing on turns that don't touch LLM code: the `llm_detect` hook
+catches requests like "fix the retry in llm.py" that never mention an LLM, including raw HTTP
+calls to a provider with no SDK import. `kit:verifier` fails a prompt, tool-schema or model
+change that comes without an eval result. The `picks-llm-skill`, `builds-llm-tool`,
+`llm-edit-detected` and `injection-aware` evals check the routing and the build discipline.
 
 ```
 /kit:lead raise the advisor's completeness score without new hard-check failures, budget USD 15
@@ -379,7 +394,7 @@ descriptions already make. The `picks-llm-skill` eval checks the routing.
 | Repeat on an interval while your laptop is on | `/loop <interval> <prompt>` |
 | Repeat on a schedule with the laptop off | routines (`/schedule`) |
 | Many long sessions you check on now and then | `claude agents` (agent view) |
-| Improve an LLM feature (chatbot, agent, RAG) | just describe it: Claude picks `kit:llm-design` / `kit:llm-evals` / `kit:prompt-optimize` / `kit:model-select` from their descriptions, and the lead routes LLM tasks to them; or call one by name |
+| Improve an LLM feature (chatbot, agent, RAG) | just describe it (or just edit the code): Claude picks `kit:llm-build` / `kit:llm-evals` / `kit:prompt-optimize` / `kit:model-select` from their descriptions, and the lead routes LLM tasks to them; or call one by name |
 | Teammates that talk to each other | agent teams: experimental, `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`; the kit's agent definitions work as teammate types |
 
 ---
@@ -447,7 +462,7 @@ needed.**
 |---|---|---|
 | `/kit:intake <repo or name>` | Runs the four checks on a candidate, writes the `CATALOG.md` row and proposes a pinned marketplace entry and a trial | built (0.2.0) |
 | Verifier memory | `kit:verifier` has `memory: project`: it reads and adds recurring pitfalls per repo | built (0.2.0) |
-| Kit evals (`plugins/kit/evals/`) | `verifier-catches-bug` (claimed-done change with a bug) and `lead-verifies-before-done` (a small goal driven to done must include verification evidence); `picks-llm-skill` and `optimize-needs-evals` (LLM-quality requests reach `kit:llm-evals` / `kit:prompt-optimize`, and nobody tunes a prompt without a measure) | built; see §5 for how to run |
+| Kit evals (`plugins/kit/evals/`) | `verifier-catches-bug` (claimed-done change with a bug) and `lead-verifies-before-done` (a small goal driven to done must include verification evidence); `picks-llm-skill` and `optimize-needs-evals` (LLM-quality requests reach `kit:llm-evals` / `kit:prompt-optimize`, and nobody tunes a prompt without a measure); `builds-llm-tool`, `llm-edit-detected` and `injection-aware` (0.7.0: a new tool keeps arithmetic in code with a strict schema and an eval case; an LLM file edit with no LLM words in the prompt still reaches `kit:llm-build`; web search plus private data plus rendered links is treated as the lethal trifecta) | built; see §5 for how to run (0.7.0 cases not yet run) |
 
 First eval result (2026-10-16, one run per arm): `verifier-catches-bug` scored 1.00 with the
 kit and 1.00 without (delta 0). The planted bug is obvious enough that Claude catches it either
@@ -481,6 +496,17 @@ claude plugin eval . --case lead-verifies-before-done --scaffold --trust-plugin 
   --allow-tools Write Edit "Bash(python3 *)" "Bash(pytest *)" "Bash(git *)" --max-cost-usd 10
 claude plugin eval . --case picks-llm-skill --scaffold --trust-plugin --no-publish --max-cost-usd 3
 claude plugin eval . --case optimize-needs-evals --scaffold --trust-plugin --no-publish --max-cost-usd 3
+claude plugin eval . --case builds-llm-tool --scaffold --trust-plugin --no-publish \
+  --allow-tools Write Edit "Bash(python3 *)" "Bash(git *)" --max-cost-usd 6
+claude plugin eval . --case llm-edit-detected --scaffold --trust-plugin --no-publish \
+  --allow-tools Write Edit "Bash(python3 *)" --max-cost-usd 4
+claude plugin eval . --case injection-aware --scaffold --trust-plugin --no-publish --max-cost-usd 3
+```
+
+Hook self-checks (no tokens):
+
+```bash
+python3 plugins/kit/hooks/tests/test_context.py && python3 plugins/kit/hooks/tests/test_llm_detect.py
 ```
 
 Test a hook by hand:
