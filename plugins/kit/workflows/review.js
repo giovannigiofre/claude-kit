@@ -17,6 +17,7 @@ const LENSES = input.lenses || [
   'tests and verification: changed behaviour without a test, tests that cannot fail, unverified claims',
   'security and data: secrets, injection, unsafe input handling, personal data, destructive operations',
   'simplicity: duplication of existing helpers, dead code, needless abstraction',
+  'llm: only if the diff touches LLM code (SDK or provider-endpoint calls, prompts, tool schemas, model config; else return an empty list): read skills/llm-build/checklist.md of the kit plugin (or the kit:llm-build skill) and report missing hard-check evals or eval result for a prompt/tool/model change, numbers the model computes instead of code, unvalidated structured output, loops without caps, prompt-injection paths (private data + untrusted content + a way out), rendered model-written links, content in logs, retries on non-retryable errors',
 ]
 
 const FINDINGS = {

@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: injection-aware
+description: Adding web search with linked sources to an assistant that holds the user's profile must be recognised as the lethal trifecta, with one leg removed in code rather than by prompt instructions.
+tags: [security, llm]
+context:
+  scaffold_script: fixture.sh

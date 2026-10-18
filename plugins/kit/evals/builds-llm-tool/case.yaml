@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: builds-llm-tool
+description: Adding a tool to a small chatbot must keep the arithmetic in code, give the tool a strict validated schema, add an eval case and load kit:llm-build.
+tags: [build, llm]
+context:
+  scaffold_script: fixture.sh
