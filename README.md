@@ -141,7 +141,7 @@ scope never changes a project you haven't opted in.
   anything under a `prompts/` directory) whose content imports an LLM SDK (anthropic, openai,
   google-genai, mistral, cohere, ollama, litellm, langchain, llama_index, dspy, Vercel `ai`),
   calls a provider endpoint (`api.anthropic.com`, `api.openai.com`, `openrouter.ai/api`,
-  `/chat/completions`, `/v1/messages`, ...) or defines a system prompt or tool schema, the
+  `/chat/completions`, `/v1/messages` next to an Anthropic name, AWS Bedrock runtime calls, ...) or defines a system prompt or tool schema, the
   `llm_detect` hook tells Claude once per session (and once per subagent) to load
   `kit:llm-build`. Regex only, no model call. `"llm": "off"` silences it; without a project
   `kit.json` it follows `~/.claude/kit.json` (`"llm": "on"`), else stays off.

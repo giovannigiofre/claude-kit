@@ -16,7 +16,8 @@ SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "llm_detect.py"
 
 
 def run(payload, home):
-    out = subprocess.run([sys.executable, str(SCRIPT)], input=json.dumps(payload),
+    raw = payload if isinstance(payload, str) else json.dumps(payload)
+    out = subprocess.run([sys.executable, str(SCRIPT)], input=raw,
                          capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=30)
     assert out.returncode == 0, out.stderr
     return out.stdout
@@ -40,6 +41,13 @@ def main():
             "plain.py": "def add(a, b):\n    return a + b\n",
             "docs.md": "We call api.openai.com and import anthropic.\n",
             "aid.ts": "import { x } from './ai';\n",
+            "gg.py": "from google import genai\n",
+            "bedrock.py": 'import boto3\nclient = boto3.client("bedrock-runtime")\n',
+            "converse.py": "resp = client.converse(modelId=MODEL, messages=msgs)\n",
+            "bedrock.ts": "await client.send(new InvokeModelCommand(input));\n",
+            "raw_anthropic.py": 'URL = BASE + "/v1/messages"  # anthropic\n',
+            "anthropic_header.py": 'HEADERS = {"anthropic-version": "2023-06-01"}\n',
+            "route.ts": 'app.get("/api/v1/messages", listMessages);\n',
         }
         for name, body in files.items():
             (repo / name).parent.mkdir(parents=True, exist_ok=True)
@@ -57,13 +65,14 @@ def main():
 
         kit = repo / ".claude" / "kit.json"
         kit.write_text(json.dumps({"check": "true"}))
-        for name in ("llm.py", "sdk.py", "client.ts", "vercel.ts", "tools.py", "prompts/advisor.md"):
+        for name in ("llm.py", "sdk.py", "client.ts", "vercel.ts", "tools.py", "prompts/advisor.md",
+                     "gg.py", "bedrock.py", "converse.py", "bedrock.ts", "raw_anthropic.py", "anthropic_header.py"):
             out = run(payload(name), home)
             assert out, f"{name} must match"
             ctx = json.loads(out)["hookSpecificOutput"]
             assert ctx["hookEventName"] == "PostToolUse" and "kit:llm-build" in ctx["additionalContext"], ctx
             assert name in ctx["additionalContext"]
-        for name in ("plain.py", "docs.md", "aid.ts", "missing.py"):
+        for name in ("plain.py", "docs.md", "aid.ts", "missing.py", "route.ts"):
             assert run(payload(name), home) == "", f"{name} must not match"
 
         sid = uuid.uuid4().hex
@@ -73,10 +82,12 @@ def main():
         assert run(payload("sdk.py", sid, agent_id="a1"), home) != "", "a subagent gets its own hint"
         assert run(payload("sdk.py", sid, agent_id="a1"), home) == ""
 
-        for bad in ({"llm": "off"}, ["not", "a", "dict"]):
+        for bad_stdin in ("[]", "not json", "", json.dumps({"tool_input": {"file_path": 5}}),
+                          json.dumps({"tool_input": "x"}), json.dumps({"cwd": 3, "tool_input": {"file_path": ["a"]}})):
+            assert run(bad_stdin, home) == "", f"malformed stdin must exit 0 silently: {bad_stdin!r}"
+        for bad in ({"llm": "off"}, ["not", "a", "dict"], "on", 3):
             kit.write_text(json.dumps(bad))
-            out = run(payload("llm.py"), home)
-            assert (out == "") == (bad == {"llm": "off"}), (bad, out)
+            assert run(payload("llm.py"), home) == "", f"{bad!r} in kit.json: off"
         kit.write_text("{broken")
         assert run(payload("llm.py"), home) == "", "a broken kit.json falls back to the user config (off)"
     print("llm_detect: all checks passed")
