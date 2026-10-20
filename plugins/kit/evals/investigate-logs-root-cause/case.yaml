@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: investigate-logs-root-cause
+description: The user hands over console exports of a failed and a working run. The KeyError surfaces in totals(), but the cause is an upstream schema change visible only by comparing the runs. The fix must land where records enter, with a regression test.
+tags: [debugging]
+context:
+  scaffold_script: fixture.sh
