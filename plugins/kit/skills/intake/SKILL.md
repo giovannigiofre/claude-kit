@@ -43,3 +43,25 @@ The kit lives at the marketplace named `claude-kit` (find its directory with
    (e.g. turn off telemetry or ledgers), what to watch for a week, and - if feasible - a
    `claude plugin eval` comparison. Show the diff of CATALOG.md and marketplace.json; commit only
    if asked.
+
+## Writing, adapting or rewriting a skill
+
+When the decision means writing skill text - a kit wrapper that orders outside tools (like
+`kit:ui` over impeccable and taste), an `adapted (method only)` skill, a rewrite of a vendored
+skill, or a new kit skill - load `skill-creator` (Anthropic, `skill-creator@claude-plugins-official`,
+Apache-2.0, `adopted-user`) and follow its loop instead of writing freehand:
+
+1. Capture intent from the conversation first; ask only what it does not answer.
+2. Draft `SKILL.md`: a "pushy" description that carries every trigger, a body under 500 lines,
+   the why behind each rule, references split out for detail.
+3. Write 2-3 realistic test prompts to `evals/evals.json` beside the skill.
+4. Run them with the skill and without it (or with the old version) in parallel subagents, in a
+   workspace outside the repo (the session scratchpad); draft assertions while they run.
+5. Grade, aggregate, and show the user the outputs with `eval-viewer/generate_review.py`
+   (`--static <file>` in a background or headless session) before revising.
+6. Revise from the feedback; repeat until the user is satisfied.
+7. Offer the description optimization loop (`scripts/run_loop.py`) for skills that must
+   trigger on their own.
+
+Kit conventions still apply: kit skills live in `plugins/kit/skills/<name>/`, keep `evals/`
+in the repo, add a row to README §1 and, for wrappers, to CATALOG.md.

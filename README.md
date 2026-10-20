@@ -73,7 +73,8 @@ Sources are at the end.
 | Skill | `/kit:techdebt` | End-of-session sweep for duplication, dead code and stale docs |
 | Skill | `/kit:init` | Sets up the harness in a project by writing `.claude/kit.json` |
 | Skill | `/kit:brand [app]` | New brand or rebrand: brief, three brand-board options on a Design canvas (via impeccable), then applies the chosen one, sweeps old-brand leftovers and runs two UI reviews |
-| Skill | `/kit:intake <tool>` | Evaluates an outside skill or plugin before adoption (§4) |
+| Skill | `/kit:ui [task]` | Any UI or design task: routes between impeccable (product UI, critique, audit) and taste (art direction of marketing pages, real-browser inspector) with one precedence rule and one done-check |
+| Skill | `/kit:intake <tool>` | Evaluates an outside skill or plugin before adoption (§4); any skill the kit writes or rewrites goes through Anthropic's `skill-creator` loop |
 | Skill | `kit:llm-build` | Design, build and review of any LLM code (SDK or raw HTTP calls, prompts, tools, model config): workflow vs agent, tools, context, structured output and grounding, injection defences (lethal trifecta), budgets, operations; checklist A-H in `checklist.md` and a "Done when" the verifier enforces (replaces `kit:llm-design`, 0.7.0) |
 | Skill | `kit:llm-evals` | Error analysis → failure taxonomy → code checks + calibrated binary judges → CI gate. Extends the project's existing harness |
 | Skill | `kit:prompt-optimize` | Eval-driven prompt loop: baseline, diagnose, minimal edit, keep/revert on a held-out split, fixed budget, run log |

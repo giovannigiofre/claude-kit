@@ -1,0 +1,49 @@
+{
+  "skill_name": "ui",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "nel repo concorsit (Next.js, apps/web) aggiungi la schermata /preparazione/[slug]: la home del pacchetto di preparazione per un concorso, con giorni alla prova, percentuale di preparazione, piano di oggi e i moduli (quiz, situazionali, simulazione, tutor). Fammi vedere prima come la imposteresti: passi, skill che useresti, controlli finali. Non scrivere codice.",
+      "expected_output": "Task type B led by impeccable: context on the project stylesheet, extend the existing surface with project tokens, no taste draw, keeps the deliberate Courier Prime uppercase stamp labels, done-check with inspector/detect/critique/audit/guidelines/verify.",
+      "files": [],
+      "assertions": [
+        {"name": "lead-is-impeccable", "text": "The plan makes impeccable the lead skill for this app screen"},
+        {"name": "no-new-palette-or-type", "text": "The plan does not draw a new palette or type (no taste draw.mjs direction, or explicitly --keep palette,type) and builds with the project's tokens"},
+        {"name": "keeps-stamp-labels", "text": "The plan explicitly keeps the deliberate uppercase monospace (Courier Prime) stamp/status labels, or says taste's mono/micro-label rules must not override them"},
+        {"name": "telemetry-off", "text": "The plan runs impeccable with telemetry disabled (IMPECCABLE_NO_TELEMETRY=1 / DO_NOT_TRACK=1)"},
+        {"name": "measures-mobile-and-desktop", "text": "The done-check includes screenshots or inspection at phone width (about 390) and desktop width (about 1440)"},
+        {"name": "accessibility-audit", "text": "The done-check includes an accessibility audit (impeccable audit or equivalent)"},
+        {"name": "project-verify", "text": "The done-check runs the project's own checks (kit verify, lint/tests/build or Playwright flows)"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "mi serve una landing page per lanciare un nuovo prodotto di corsi di ceramica, progetto nuovo senza nessun design system. Prima di scrivere codice dimmi il piano: quali skill usi, in che ordine, e come verifichi che sia bella e accessibile.",
+      "expected_output": "Task type A: impeccable context/init, taste steps for direction (draw options), DESIGN.md committed via impeccable new-work, build after craft floor, done-check with taste inspector plus impeccable critique and audit and guidelines.",
+      "files": [],
+      "assertions": [
+        {"name": "taste-for-direction", "text": "The plan uses taste for art direction of the page (e.g. draw.mjs options / directions)"},
+        {"name": "impeccable-for-product-context", "text": "The plan uses impeccable for product context or the design system (context/init/PRODUCT.md or DESIGN.md)"},
+        {"name": "writes-design-system", "text": "The plan records the chosen direction as a design system file (DESIGN.md or tokens) before or while building"},
+        {"name": "telemetry-off", "text": "The plan runs impeccable with telemetry disabled (IMPECCABLE_NO_TELEMETRY=1 / DO_NOT_TRACK=1)"},
+        {"name": "measures-mobile-and-desktop", "text": "The done-check includes screenshots or inspection at phone width (about 390) and desktop width (about 1440)"},
+        {"name": "accessibility-audit", "text": "The done-check includes an accessibility audit (impeccable audit or equivalent)"},
+        {"name": "bounded-fix-loop", "text": "The plan bounds the fix loop (e.g. one batched fix round then re-check, or a stated maximum) instead of open-ended iteration"}
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "la home di concorsit sembra generica e fatta con l'AI, rendila migliore. Dimmi solo il piano: cosa controlli, quali skill, cosa cambieresti per primo e cosa NON tocchi.",
+      "expected_output": "Task type C led by impeccable: critique then audit, fixes via named commands, taste before/after inspection only as a meter, keeps the existing brand and stamp labels, report with precedence calls.",
+      "files": [],
+      "assertions": [
+        {"name": "critique-and-audit-first", "text": "The plan starts with an impeccable critique and/or audit of the existing home before changing anything"},
+        {"name": "keeps-brand", "text": "The plan states it does not replace the existing palette and fonts (Concorsit tokens, Schibsted Grotesk / Atkinson / Courier Prime)"},
+        {"name": "keeps-stamp-labels", "text": "The plan explicitly keeps the deliberate uppercase monospace stamp labels, or says taste's mono/micro-label rules must not override them"},
+        {"name": "taste-only-as-meter", "text": "Taste is used, if at all, as a measuring/inspection tool or source of ideas, not to redraw the direction"},
+        {"name": "telemetry-off", "text": "The plan runs impeccable with telemetry disabled (IMPECCABLE_NO_TELEMETRY=1 / DO_NOT_TRACK=1)"},
+        {"name": "before-after-evidence", "text": "The plan produces before/after evidence (screenshots or scores) to show the home actually improved"}
+      ]
+    }
+  ]
+}

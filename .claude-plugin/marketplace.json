@@ -18,6 +18,17 @@
         "sha": "f329330e6104f7ab771fb0ba9612011f401d73cc"
       },
       "description": "Third-party (MIT): minimal-change ruleset + review/audit commands. TRIAL - see CATALOG.md before enabling."
+    },
+    {
+      "name": "taste-skill",
+      "source": {
+        "source": "github",
+        "repo": "Leonxlnx/taste-skill",
+        "sha": "6010f91a9935f1c167dfc500fb1a475681892e6b"
+      },
+      "skills": ["./skills/taste-skill"],
+      "strict": false,
+      "description": "Third-party (MIT): frontend art direction for web pages and app screens. TRIAL - see CATALOG.md before enabling."
     }
   ]
 }
