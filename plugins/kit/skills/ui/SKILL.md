@@ -45,10 +45,11 @@ never run both skills' complete flows on the same task.
 5. taste's house rules, as warnings only, and only on public marketing pages.
 6. Either skill's defaults.
 
-A rule from a lower level never overrides a deliberate choice from a higher one. Example: a
-product that uses uppercase monospace stamp labels on purpose keeps them; run taste with
-`--allow mono,micro-label` (and any other rule the design system breaks on purpose) and say so in
-the report. Never let a taste draw replace existing tokens: pass `--keep palette,type`.
+A rule from a lower level never overrides a deliberate choice from a higher one. Read the design system before calling anything a deliberate choice: quote the line. Example:
+Concorsit's DESIGN.md wants stamps in uppercase Schibsted 800 and monospace only for data
+(dates, protocol numbers), so taste's micro-label rule is overridden for stamps while a mono label
+used as decoration is a real defect. Run taste with `--allow` only for the rules the design system
+breaks on purpose, and say so in the report. Never let a taste draw replace existing tokens: pass `--keep palette,type`.
 
 ## 2. Pick the task type, then follow its row
 
