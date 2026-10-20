@@ -79,6 +79,7 @@ Sources are at the end.
 | Skill | `kit:llm-evals` | Error analysis → failure taxonomy → code checks + calibrated binary judges → CI gate. Extends the project's existing harness |
 | Skill | `kit:prompt-optimize` | Eval-driven prompt loop: baseline, diagnose, minimal edit, keep/revert on a held-out split, fixed budget, run log |
 | Skill | `kit:model-select` | Same suite across candidate models per role; pick from the quality/cost/latency frontier |
+| Skill | `/kit:investigate [symptom]` | Root-cause debugging for any failure (backend, cloud, frontend, CI, data, integrations, performance): evidence intake that asks you once, with exact export steps, when only you can reach the logs; `scripts/compact_logs.py` reads big log exports and diffs a failing run against a working one; falsifiable hypotheses (in parallel for hard bugs); a regression-tested fix checked by `kit:verifier`. Builds on `kit:systematic-debugging` |
 | Skill | `kit:systematic-debugging`, `kit:verification-before-completion` | Vendored from obra/superpowers (MIT, licence inside) |
 | Agent | `kit:implementer` | Does one scoped task and returns a structured report |
 | Agent | `kit:verifier` | Checks the work independently; assumes it's broken until proven otherwise. Keeps a per-project memory of recurring pitfalls |
@@ -312,6 +313,18 @@ Run /kit:ship with tasks:
 Each task runs in its own worktree, is verified independently, and is fixed up to 3 times. The
 result is a table of PASS/FAIL per task, with branches ready to merge.
 
+**A bug, including one only you can see in a dashboard**
+```
+/kit:investigate the nightly ingest job on Cloud Run fails since yesterday, I only have console access
+```
+Claude collects what it can reach itself (code, git history, tests), then asks you once for the
+rest: the Logs Explorer query to paste, a JSON export of the failed run **and** of a working
+one, the execution ID. It compacts the exports with `compact_logs.py --diff`, writes falsifiable
+hypotheses to `.debug/NOTES.md`, reproduces the bug in a failing test, fixes the root cause and
+has `kit:verifier` check it. The report says what to re-check in the console after the deploy.
+A plain "the checkout page is blank since this morning" works too: the skill starts from its
+description.
+
 **Review before merging**
 ```
 /kit:review
@@ -395,6 +408,7 @@ change that comes without an eval result. The `picks-llm-skill`, `builds-llm-too
 | Repeat on an interval while your laptop is on | `/loop <interval> <prompt>` |
 | Repeat on a schedule with the laptop off | routines (`/schedule`) |
 | Many long sessions you check on now and then | `claude agents` (agent view) |
+| Find and fix a bug (error, failing test, broken page or job) | just describe it, or `/kit:investigate <symptom>`; the lead routes bugs to it |
 | Improve an LLM feature (chatbot, agent, RAG) | just describe it (or just edit the code): Claude picks `kit:llm-build` / `kit:llm-evals` / `kit:prompt-optimize` / `kit:model-select` from their descriptions, and the lead routes LLM tasks to them; or call one by name |
 | Teammates that talk to each other | agent teams: experimental, `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`; the kit's agent definitions work as teammate types |
 
@@ -463,7 +477,7 @@ needed.**
 |---|---|---|
 | `/kit:intake <repo or name>` | Runs the four checks on a candidate, writes the `CATALOG.md` row and proposes a pinned marketplace entry and a trial | built (0.2.0) |
 | Verifier memory | `kit:verifier` has `memory: project`: it reads and adds recurring pitfalls per repo | built (0.2.0) |
-| Kit evals (`plugins/kit/evals/`) | `verifier-catches-bug` (claimed-done change with a bug) and `lead-verifies-before-done` (a small goal driven to done must include verification evidence); `picks-llm-skill` and `optimize-needs-evals` (LLM-quality requests reach `kit:llm-evals` / `kit:prompt-optimize`, and nobody tunes a prompt without a measure); `builds-llm-tool`, `llm-edit-detected` and `injection-aware` (0.7.0: a new tool keeps arithmetic in code with a strict schema and an eval case; an LLM file edit with no LLM words in the prompt still reaches `kit:llm-build`; web search plus private data plus rendered links is treated as the lethal trifecta) | built; see §5 for how to run (0.7.0 cases not yet run) |
+| Kit evals (`plugins/kit/evals/`) | `verifier-catches-bug` (claimed-done change with a bug) and `lead-verifies-before-done` (a small goal driven to done must include verification evidence); `picks-llm-skill` and `optimize-needs-evals` (LLM-quality requests reach `kit:llm-evals` / `kit:prompt-optimize`, and nobody tunes a prompt without a measure); `builds-llm-tool`, `llm-edit-detected` and `injection-aware` (0.7.0: a new tool keeps arithmetic in code with a strict schema and an eval case; an LLM file edit with no LLM words in the prompt still reaches `kit:llm-build`; web search plus private data plus rendered links is treated as the lethal trifecta) | built; see §5 for how to run (0.7.0 cases not yet run). 0.8.0: `investigate-asks-for-evidence` (a production failure with console-only logs: the answer asks once for exports of a failing and a working run, with the query, before any fix) and `investigate-logs-root-cause` (log exports plus a repo: the fix lands where the bad data enters, with a regression test), not yet run |
 
 First eval result (2026-10-16, one run per arm): `verifier-catches-bug` scored 1.00 with the
 kit and 1.00 without (delta 0). The planted bug is obvious enough that Claude catches it either
@@ -502,12 +516,16 @@ claude plugin eval . --case builds-llm-tool --scaffold --trust-plugin --no-publi
 claude plugin eval . --case llm-edit-detected --scaffold --trust-plugin --no-publish \
   --allow-tools Write Edit "Bash(python3 *)" --max-cost-usd 4
 claude plugin eval . --case injection-aware --scaffold --trust-plugin --no-publish --max-cost-usd 3
+claude plugin eval . --case investigate-asks-for-evidence --scaffold --trust-plugin --no-publish --max-cost-usd 3
+claude plugin eval . --case investigate-logs-root-cause --scaffold --trust-plugin --no-publish \
+  --allow-tools Write Edit "Bash(python3 *)" "Bash(git *)" --max-cost-usd 6
 ```
 
-Hook self-checks (no tokens):
+Hook and script self-checks (no tokens):
 
 ```bash
 python3 plugins/kit/hooks/tests/test_context.py && python3 plugins/kit/hooks/tests/test_llm_detect.py
+python3 plugins/kit/skills/investigate/tests/test_compact_logs.py
 ```
 
 Test a hook by hand:

@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: investigate-asks-for-evidence
+description: A production job failed and the user can read logs only in the GCP console. Before any fix, the answer must ask once for exports of the failed run and of a working run, with the exact console steps and query.
+tags: [routing, debugging]
+context:
+  scaffold_script: fixture.sh
