@@ -67,11 +67,18 @@ the canvas is only the medium.
 
 1. **Measure:** taste `inspect.mjs` (`--app` for app screens, with the `--allow` list from §1) at
    1440 and 390; read every screenshot. Without taste: Playwright or Chrome screenshots at the same widths.
-2. **Detect:** `impeccable detect --json` on the changed files.
-3. **Review:** impeccable `critique` (design review, personas incl. an accessibility-dependent
+2. **Fit the headings:** a heading sized by eye is the most common phone defect (a 48px title can
+   fill three quarters of the first screen). Never guess it: run
+   `node <this skill>/scripts/fit-heading.mjs <page> --max <design-system max px> --lines 3 --share 0.33`
+   for each page or screen h1. It finds, in a real browser, the largest size that keeps the heading
+   within 3 lines and a third of the first screen at 390 and 1440, and prints the `clamp()` to use.
+   Exit 1 means the text is too long even at the minimum: shorten it. Content headings (a quiz
+   question, an article title) may use `--lines 5`. taste's 2-line limit is a marketing-hero rule.
+3. **Detect:** `impeccable detect --json` on the changed files.
+4. **Review:** impeccable `critique` (design review, personas incl. an accessibility-dependent
    user) and `audit` (a11y, performance, theming, responsive); the health score must not drop.
-4. **Guidelines:** the Vercel Web Interface Guidelines pass, as in kit:brand.
-5. **Project gate:** the project's own checks (`.claude/kit.json` `verify`, e2e flows).
+5. **Guidelines:** the Vercel Web Interface Guidelines pass, as in kit:brand.
+6. **Project gate:** the project's own checks (`.claude/kit.json` `verify`, e2e flows).
 
 Fix in one batched round, re-run the checks once. If something still fails, report it instead of
 looping (impeccable's bound, not taste's three rounds).
@@ -82,7 +89,7 @@ looping (impeccable's bound, not taste's three rounds).
 TYPE: A | B | C (lead: impeccable | taste)
 PRECEDENCE CALLS: <each conflict and which level won, e.g. "kept mono stamps: DESIGN.md over taste">
 CHANGED: <files or artboards>
-CHECKS: inspect <n FAIL/WARN, allowed rules> · detect <n> · critique <score> · audit <score> · guidelines <n issues> · verify <pass/fail>
+CHECKS: inspect <n FAIL/WARN, allowed rules> · headings <px at 390/1440, lines> · detect <n> · critique <score> · audit <score> · guidelines <n issues> · verify <pass/fail>
 SCREENSHOTS: <paths at 1440 and 390>
 OPEN: <what is left for the user to decide>
 ```
