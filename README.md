@@ -57,8 +57,10 @@ Sources are at the end.
     PreToolUse   → blocks edits to protected paths (e.g. raw data that must never be overwritten)
     PostToolUse  → runs the formatter/validator for the edited file, feeds errors back;
                    once per session, if the edited file is LLM code, points Claude to kit:llm-build
-    UserPromptSubmit + PostToolUse → context guard: at 70 % / 85 % of the auto-compact window,
-                       asks Claude to update the handoff note before compaction
+    UserPromptSubmit + PostToolUse → context guard: from 70 % of the auto-compact window, nags
+                       Claude every few tool calls until the handoff note is rewritten (not appended)
+    turn.complete (hooks module compact.ts) → past `compactAt` (80 %) with a current handoff note,
+                       compacts the conversation at the end of the turn, no /compact needed
     Stop         → runs the fast `check`; if it fails, Claude must keep fixing (max 3 tries)
 ```
 
@@ -119,7 +121,7 @@ scope never changes a project you haven't opted in.
   ],
   "shape": "ask",
   "llm": "on",
-  "context": {"window": 300000, "warnAt": 0.7, "handoff": ".claude/handoff.md"},
+  "context": {"window": 300000, "warnAt": 0.7, "compactAt": 0.8, "handoff": ".claude/handoff.md"},
   "lead": {
     "read": ["docs/backlog.md"],
     "backlog": "where the next work item comes from",
@@ -146,8 +148,9 @@ scope never changes a project you haven't opted in.
   `llm_detect` hook tells Claude once per session (and once per subagent) to load
   `kit:llm-build`. Regex only, no model call. `"llm": "off"` silences it; without a project
   `kit.json` it follows `~/.claude/kit.json` (`"llm": "on"`), else stays off.
-- `context` keeps long sessions lean (see "Context and compaction" below). `window` should match
-  your `autoCompactWindow`; `$CLAUDE_CODE_AUTO_COMPACT_WINDOW`, if set, wins
+- `context` keeps long sessions lean (see "Context and compaction" below). `warnAt` (default 0.7)
+  is where the handoff must be rewritten, `compactAt` (default 0.8) where the kit compacts at the
+  end of a turn, both fractions of `window`. `window` should match your `autoCompactWindow`; `$CLAUDE_CODE_AUTO_COMPACT_WINDOW`, if set, wins
   over it (as in Claude Code); default 300000. Put
   `{"context": {}}` in `~/.claude/kit.json` to have it in every project whose `kit.json` (if any)
   has no `context` key. Without either, the guard and the re-injection stay off.
@@ -196,21 +199,41 @@ Answer quality drops long before a 1M window is full, and every turn re-sends th
 context. So the kit compacts early and makes compaction lossless:
 
 1. **Compact earlier.** `autoCompactWindow` (100000 to 1000000, user or project
-   `settings.json`) sets the size at which Claude Code compacts on its own. The kit recommends
-   300000 for the main session; `/kit:init` writes it to the project's `.claude/settings.json`.
-   The kit's agents set `autoCompactWindow: 200000` in their frontmatter (Claude Code 2.1.296+):
-   workers need the brief, not a long history. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` overrides both.
-2. **Handoff before it happens.** No hook can start a compaction, so the context guard reads the
-   current context size from the transcript and, at `warnAt` (70 %) and again at 85 % of the
-   window, tells Claude to update `.claude/handoff.md`: goal, decisions, in-flight agents and
-   branches, next steps, session rules. Subagents are skipped.
-3. **Re-inject after.** On `SessionStart` with source `compact`, the kit prints the handoff note
-   back into context, and CLAUDE.md is reloaded from disk anyway.
-4. **Tell the summarizer what matters.** A `# Compact instructions` section in CLAUDE.md is read
+   `settings.json`) sets the window. Claude Code compacts on its own at the window minus 13k
+   tokens (about 96 % of 300k), or at `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` percent of it if that is
+   lower. The kit recommends 300000 for the main session; `/kit:init` writes it to the project's
+   `.claude/settings.json`. The kit's agents set `autoCompactWindow: 200000` in their frontmatter
+   (Claude Code 2.1.296+): workers need the brief, not a long history.
+   `CLAUDE_CODE_AUTO_COMPACT_WINDOW` overrides both.
+2. **Rewrite the handoff first.** The context guard reads the context size from the transcript.
+   From `warnAt` (70 %) it tells Claude, imperatively and every 5 tool calls (every call from
+   85 %), to rewrite `.claude/handoff.md` as a whole: goal, decisions, in-flight agents and
+   branches, next steps, session rules, max ~80 lines. It keeps nagging until the file really
+   changed, and it rejects a change that only appended lines, a file over 100 lines, and a note
+   last rewritten more than 60 tool calls ago. Subagents are skipped.
+3. **Then compact, automatically.** No command hook can start a compaction, but a hooks module
+   can: `hooks/compact.ts` runs at the end of every main-loop turn and, when the context is past
+   `compactAt` (80 %) and the guard says the note is current, compacts the conversation, as
+   `/compact` would. If the turn never ends (a long autonomous run), Claude Code's own
+   auto-compact is the backstop; set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to have it fire earlier
+   (below). Hooks modules are an early-access Claude Code API (checked on 2.1.306); on a build without
+   them the kit still nags and re-injects, and you compact with `/compact` or wait for auto-compact.
+4. **Re-inject after.** On `SessionStart` with source `compact`, the kit prints the handoff note
+   back into context, with a warning if it was not current at compaction time, and CLAUDE.md is
+   reloaded from disk anyway.
+5. **Tell the summarizer what matters.** A `# Compact instructions` section in CLAUDE.md is read
    by the compaction summarizer; `/kit:init` adds one.
 
+Optional backstop for long autonomous turns, in the project's `.claude/settings.json` (a plugin
+cannot set `env`; project env applies once the folder is trusted):
+
+```json
+{"autoCompactWindow": 300000, "env": {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "88"}}
+```
+
+That makes Claude Code compact mid-turn at 264k instead of 287k, still after the kit's 80 %.
 `.claude/handoff.md` is per checkout and should be gitignored. In a live session you can still run
-`/compact <focus>` yourself at a natural boundary; the guard suggests it.
+`/compact <focus>` yourself at a natural boundary.
 
 ### Every new project (about 2 minutes)
 

@@ -26,7 +26,7 @@ The kit hooks do nothing until `.claude/kit.json` exists. Build it from evidence
    `"auto"` (shapes straight away) or `"off"`. A personal default for every project can live in
    `~/.claude/kit.json` as `{"shape": "ask"}`.
 6. **context** (keeps long sessions lean): add `"context": {"window": 300000, "warnAt": 0.7,
-   "handoff": ".claude/handoff.md"}`, put `"autoCompactWindow": 300000` in the project's
+   "compactAt": 0.8, "handoff": ".claude/handoff.md"}`, put `"autoCompactWindow": 300000` in the project's
    `.claude/settings.json` (create or merge, never drop existing keys), add `.claude/handoff.md`
    to `.gitignore`, and append a `# Compact instructions` section to CLAUDE.md (3-5 lines: keep
    the goal, decisions and user preferences, in-flight work, failing checks and file paths;
@@ -53,7 +53,7 @@ Schema:
   "onEdit": [{"glob": "**/*.py", "run": "...\"$FILE\"...", "timeout": 120}],
   "protect": [{"glob": "data/raw/**", "mode": "no-overwrite", "reason": "raw files are immutable"}],
   "shape": "ask",
-  "context": {"window": 300000, "warnAt": 0.7, "handoff": ".claude/handoff.md"},
+  "context": {"window": 300000, "warnAt": 0.7, "compactAt": 0.8, "handoff": ".claude/handoff.md"},
   "lead": {"read": ["docs/backlog.md"], "backlog": "docs/backlog.md", "notes": "..."}
 }
 ```
