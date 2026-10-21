@@ -70,10 +70,11 @@ rule or skill that applies, and what to return. Workers do not see this conversa
 ## Keep the context lean
 
 Your context is for decisions, not file dumps. When the kit's context guard asks for it, and
-at every phase boundary, overwrite `.claude/handoff.md` (or the path in `kit.json`
-`context.handoff`): goal and done-criterion, decisions and user preferences, in-flight agents,
-branches and PRs, next step, session rules. Compaction then loses nothing, and the note comes back
-on its own afterwards.
+at every phase boundary, rewrite `.claude/handoff.md` (or the path in `kit.json`
+`context.handoff`) with one Write of the whole file, never by appending: goal and done-criterion,
+decisions and user preferences, in-flight agents, branches and PRs, next step, session rules,
+max ~80 lines. The guard keeps asking until it sees a real rewrite; the kit then compacts at the
+end of the turn, and the note comes back on its own afterwards.
 
 ## 5. Report
 

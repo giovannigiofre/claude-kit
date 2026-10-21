@@ -15,10 +15,10 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 
-def run(script, payload, home):
+def run(script, payload, home, *args):
     env = dict(os.environ, HOME=str(home))
     env.pop("CLAUDE_CODE_AUTO_COMPACT_WINDOW", None)
-    out = subprocess.run([sys.executable, str(SCRIPTS / script)], input=json.dumps(payload),
+    out = subprocess.run([sys.executable, str(SCRIPTS / script), *args], input=json.dumps(payload),
                          capture_output=True, text=True, env=env, timeout=30)
     assert out.returncode == 0, out.stderr
     return out.stdout
@@ -62,31 +62,65 @@ def main():
             run("session_start.py", {"cwd": str(repo), "source": "compact"}, home)
 
         kit.write_text(json.dumps({"context": {"window": 300_000}}))
+        handoff = repo / ".claude" / "handoff.md"
         write_transcript(transcript, 100_000)
         assert run("context_guard.py", base, home) == "", "below warnAt: silent"
 
-        write_transcript(transcript, 225_000)
-        out = json.loads(run("context_guard.py", base, home))["hookSpecificOutput"]
-        assert out["hookEventName"] == "PostToolUse" and "75%" in out["additionalContext"], out
-        assert ".claude/handoff.md" in out["additionalContext"]
-        assert run("context_guard.py", base, home) == "", "same level fires once"
+        def guard():
+            out = run("context_guard.py", base, home)
+            return json.loads(out)["hookSpecificOutput"]["additionalContext"] if out else ""
 
-        write_transcript(transcript, 280_000)
-        assert "Compaction is close" in run("context_guard.py", base, home), "90% level fires"
+        def should(tokens):
+            payload = {"cwd": str(repo), "session_id": base["session_id"], "tokens": tokens}
+            return json.loads(run("context_guard.py", payload, home, "--should-compact"))
+
+        write_transcript(transcript, 225_000)
+        ctx = guard()
+        assert "75%" in ctx and "REWRITE .claude/handoff.md" in ctx and "does not exist" in ctx, ctx
+        assert [guard() for _ in range(4)] == [""] * 4, "quiet between reminders"
+        assert "ACTION REQUIRED" in guard(), "nags again after NAG_EVERY calls"
+        assert should(250_000) == {"compact": False, "reason": "missing"}, "no note, no compaction"
+
+        handoff.write_text("GOAL: ship it\n")
+        assert "is current" in guard(), "a fresh rewrite is acknowledged once"
+        assert guard() == "", "current note: silent"
+        assert should(200_000) == {"compact": False}, "below compactAt"
+        assert should(250_000)["compact"] is True
+
+        handoff.write_text("GOAL: ship it\nmore notes\n")
+        ctx = guard()
+        assert "only appended" in ctx, ctx
+        assert should(250_000) == {"compact": False, "reason": "appended"}
+        handoff.write_text("\n".join(f"line {i}" for i in range(150)))
+        assert "over 100 lines" in guard()
+        handoff.write_text("GOAL: ship it v2\nNEXT: deploy\n")
+        assert "is current" in guard()
+
+        write_transcript(transcript, 270_000)  # 90 %: every call nags while stale
+        for _ in range(61):
+            guard()
+        assert "more than 60 tool calls" in guard() and "ACTION REQUIRED" in guard(), "stale again, nags every call"
+
+        start = {"cwd": str(repo), "session_id": base["session_id"], "source": "compact"}
+        out = run("session_start.py", start, home)
+        assert "WARNING: the note was not current" in out and "deploy" in out, out
 
         write_transcript(transcript, 40_000)  # after a compaction
         assert run("context_guard.py", base, home) == ""
+        assert should(250_000) == {"compact": False}, "not armed after the compaction"
         write_transcript(transcript, 230_000)
-        assert run("context_guard.py", base, home) != "", "re-armed after the context shrank"
+        assert "has not been rewritten" in guard(), "re-armed: the old note must be rewritten again"
 
         sub = dict(base, agent_id="a1", session_id=uuid.uuid4().hex)
         assert run("context_guard.py", sub, home) == "", "subagents are skipped"
 
-        start = {"cwd": str(repo), "session_id": base["session_id"], "source": "compact"}
-        assert "Handoff note" not in run("session_start.py", start, home), "no file, nothing injected"
-        (repo / ".claude" / "handoff.md").write_text("GOAL: ship it\n")
-        assert "GOAL: ship it" in run("session_start.py", start, home)
-        assert "GOAL: ship it" not in run("session_start.py", dict(start, source="startup"), home)
+        fresh = {"cwd": str(repo), "session_id": uuid.uuid4().hex, "source": "compact"}
+        handoff.unlink()
+        assert "Handoff note" not in run("session_start.py", fresh, home), "no file, nothing injected"
+        handoff.write_text("GOAL: ship it\n")
+        out = run("session_start.py", fresh, home)
+        assert "GOAL: ship it" in out and "WARNING" not in out, "no guard state: no warning"
+        assert "GOAL: ship it" not in run("session_start.py", dict(fresh, source="startup"), home)
     print("context hooks: all checks passed")
 
 

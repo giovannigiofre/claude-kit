@@ -10,26 +10,35 @@ import context_guard  # noqa: E402
 import kitlib  # noqa: E402
 
 
-def print_handoff(root):
-    """After a compaction, put the handoff note (see context_guard.py) back into context."""
+def print_handoff(root, session):
+    """After a compaction, put the handoff note (see context_guard.py) back into context, and say
+    whether it was current when the compaction happened."""
     cfg = context_guard.context_config(root)
     if cfg is None:
         return
     path = Path(root) / context_guard.handoff_for(cfg)
+    state = kitlib.load_state(session, "context")
+    why = context_guard.status(state) if state.get("armed") else None
+    warn = ""
+    if why and why != "fresh":
+        warn = (f"WARNING: the note was not current at compaction ({context_guard.WHY[why]}) Before "
+                f"other work, rewrite {path} as a whole from the summary above and the note below.\n")
     try:
         text = path.read_text(encoding="utf-8").strip()
     except Exception:
-        return
+        text = ""
     if text:
-        print(f"kit: the conversation was just compacted. Handoff note from {path} (keep it current):\n"
-              + text[:9000] + "\n")
+        print(f"kit: the conversation was just compacted. {warn}Handoff note from {path} "
+              "(rewrite it, never append, when the context guard asks):\n" + text[:9000] + "\n")
+    elif warn:
+        print(f"kit: the conversation was just compacted. {warn}")
 
 
 def main():
     data = kitlib.read_input()
     root = kitlib.project_root(data)
     if data.get("source") == "compact":
-        print_handoff(root)
+        print_handoff(root, data.get("session_id"))
     config, err = kitlib.load_config(root)
     if err:
         print(err)
