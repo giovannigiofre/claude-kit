@@ -5,6 +5,7 @@ Run: python3 plugins/kit/hooks/tests/test_session_start.py   (exit 0 = all good)
 """
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -13,9 +14,15 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "session_start.py"
 
 
-def run(payload):
+HOME = Path(tempfile.mkdtemp())  # a machine that already has the kit's settings
+(HOME / ".claude").mkdir()
+(HOME / ".claude" / "kit.json").write_text(json.dumps({"machineSetup": "declined"}))
+
+
+def run(payload, home=HOME, **env):
     out = subprocess.run([sys.executable, str(SCRIPT)], input=json.dumps(payload),
-                         capture_output=True, text=True, timeout=30)
+                         capture_output=True, text=True, timeout=30,
+                         env={**os.environ, "HOME": str(home), **env})
     assert out.returncode == 0, out.stderr
     return out.stdout
 
@@ -65,6 +72,18 @@ def main():
         (repo / ".claude" / "kit.json").write_text(json.dumps({"author": "not an identity"}))
         run({"cwd": str(repo), "source": "startup"})
         assert ident() == ["Bob", "bob@example.org"]
+
+        # the machine settings: offered until the user answers, never in a headless run
+        fresh = Path(tmp) / "fresh-home"
+        fresh.mkdir()
+        out = run({"cwd": str(repo), "source": "startup"}, home=fresh)
+        assert "Kit setup" in out and "--apply" in out and "--decline" in out, out
+        assert "Kit setup" not in run({"cwd": str(repo), "source": "startup"}, home=fresh, KIT_HEADLESS="1")
+        assert "Kit setup" not in run({"cwd": str(repo), "source": "compact"}, home=fresh)
+        script = SCRIPT.parent / "machine_setup.py"
+        subprocess.run([sys.executable, str(script), "--apply"], env={**os.environ, "HOME": str(fresh)},
+                       capture_output=True, check=True)
+        assert "Kit setup" not in run({"cwd": str(repo), "source": "startup"}, home=fresh), "applied: silent"
 
         (repo / ".claude" / "kit.json").write_text("{broken")
         out = run({"cwd": str(repo), "source": "startup"})

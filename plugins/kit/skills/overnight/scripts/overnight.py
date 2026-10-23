@@ -197,7 +197,9 @@ def run_agent(args, prompt, root, budget_left, resume=None):
     if per_iter:
         cmd += ["--max-budget-usd", f"{max(min(per_iter), 0.01):.2f}"]
     try:
-        out = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=args.iteration_timeout)
+        # KIT_HEADLESS: the kit's hooks skip anything that needs a person to answer
+        out = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=args.iteration_timeout,
+                             env={**os.environ, "KIT_HEADLESS": "1"})
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"iteration timed out after {args.iteration_timeout}s", "cost": 0.0, "tokens": 0}
     try:

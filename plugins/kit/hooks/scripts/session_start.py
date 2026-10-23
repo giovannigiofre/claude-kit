@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """SessionStart: tell Claude which kit gates this project has, make the user the git author when
-kit.json names them, and after a compaction put the coordinator's board back into context
-(stdout is added to context)."""
+kit.json names them, offer the kit's machine settings once, and after a compaction put the
+coordinator's board back into context (stdout is added to context)."""
 
+import os
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kitlib  # noqa: E402
+import machine_setup  # noqa: E402
 
 BOARD = ".claude/lead/board.md"
 MAX_BOARD_CHARS = 6000
@@ -56,12 +58,30 @@ def quote(text):
     return "'" + text.replace("'", "'\\''") + "'"
 
 
+def offer_machine_setup():
+    """Until the user says yes or no on this machine, ask Claude to offer the kit's user settings."""
+    todo = machine_setup.pending()
+    if not todo:
+        return
+    script = Path(__file__).resolve().parent / "machine_setup.py"
+    print("kit: this machine's ~/.claude/settings.json is missing the kit's settings:\n"
+          + "\n".join(f"  - {line}" for line in todo) + "\n"
+          "Before the user's first request, explain this in two or three plain lines (what changes, "
+          "why: they are the only author of commits and PRs; agents may rewrite only the branches "
+          "they created) and ask once with AskUserQuestion, header \"Kit setup\": apply them "
+          f"(Recommended) or not. Yes: run `python3 \"{script}\" --apply`. No: run "
+          f"`python3 \"{script}\" --decline`. Then carry on with the request. Without "
+          "AskUserQuestion (a headless run), ignore this.")
+
+
 def main():
     data = kitlib.read_input()
     root = kitlib.project_root(data)
     config, err = kitlib.load_config(root)
     if data.get("source") == "compact":
         print_board(root, config)
+    elif not os.environ.get("KIT_HEADLESS"):
+        offer_machine_setup()
     if err:
         print(err)
         return 0
