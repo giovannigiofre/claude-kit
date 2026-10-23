@@ -13,8 +13,11 @@ Nothing in here is new. It packages what the Claude Code team describes publicly
 - Specialist subagents (`verify-app`, `code-simplifier`).
 - A PostToolUse formatter hook, and a Stop hook that keeps Claude working.
 - `/go` (verify → simplify → PR).
-- `/loop` for recurring work.
+- `/loop` for recurring work, and a budgeted overnight runner for long unattended runs.
 - Dynamic workflows for large fan-outs.
+- From Kun Chen's agentic workflow (2026): a PR you can judge without reading the diff (intent,
+  live evidence, findings already fixed, a risk rating), CI babysitting, overnight loops of small
+  verified commits, and instruction files trained from evidence like weights.
 - Above all, **verification**. Boris Cherny calls it "probably the most important thing", and
   says it can "2-3x the quality".
 
@@ -42,13 +45,13 @@ Sources are at the end.
       └──┬──────────────┬──────────────┬───────────┘
          │              │              │
    kit:implementer  kit:implementer  workflow /kit:ship  (many tasks, parallel worktrees)
-   (worktree A)     (worktree B)     workflow /kit:review (lenses + adversarial verify)
+   (worktree A)     (worktree B)     workflow /kit:review (lenses + adversarial verify + coverage + risk)
          │              │
          ▼              ▼
      kit:verifier   kit:verifier     ← independent; PASS / FAIL / CANNOT_VERIFY
          │ FAIL → back to implementer (max 3 rounds) → escalate to you
          ▼
-      LEAD merges, runs `verify`, reports → /kit:go (simplify, commit, PR) → /kit:learn
+      LEAD merges, runs `verify`, reports → /kit:go (intent, evidence, risk, PR, CI) → /kit:learn
 
   Hooks, in every session of a project that has .claude/kit.json:
     UserPromptSubmit → spots brain-dump prompts and routes them to kit:shape (mode: ask/auto/off;
@@ -70,8 +73,9 @@ Sources are at the end.
 |---|---|---|
 | Skill | `/kit:shape [idea]` | Turns a brain-dump into a precise brief with multiple-choice questions, then launches it. Starts on its own via the prompt hook |
 | Skill | `/kit:lead <goal>` | Makes the session the lead: plan, delegate, verify, loop, report |
-| Skill | `/kit:go` | Finishes the work: verify → simplify → verify → commit on a branch → PR |
-| Skill | `/kit:learn` | Writes a correction into CLAUDE.md, a skill or kit.json so it sticks |
+| Skill | `/kit:go` | Finishes the work: intent → sync with base → verify with live evidence → review (findings as auto-fix / ask-user / no-op) → simplify + docs → risk rating → commit → PR → watches CI until green. `/kit:go babysit <PR>` only watches |
+| Skill | `/kit:learn` | Writes a correction into CLAUDE.md, a skill or kit.json so it sticks: evidence for every rule, at most 5 changes per run, each approved by you, task-specific rules moved into skills. `/kit:learn sweep` mines the last sessions' transcripts |
+| Skill | `kit:overnight` | Sets up and launches `scripts/overnight.py`: a fresh `claude -p` per iteration, one commit per step that passes the gate, reset on failure, `notes.md` as memory, stop condition, optional caps on iterations / USD / tokens (or none) |
 | Skill | `/kit:techdebt` | End-of-session sweep for duplication, dead code and stale docs |
 | Skill | `/kit:init` | Sets up the harness in a project by writing `.claude/kit.json` |
 | Skill | `/kit:brand [app]` | New brand or rebrand: brief, three brand-board options on a Design canvas (via impeccable), then applies the chosen one, sweeps old-brand leftovers and runs two UI reviews |
@@ -88,7 +92,7 @@ Sources are at the end.
 | Agent | `kit:code-simplifier` | Simplifies the diff without changing behaviour |
 | Agent | `kit:plan-reviewer` | Reviews a plan as a "staff engineer" before any code is written |
 | Workflow | `/kit:ship` | Runs N tasks in parallel worktrees: implement → verify → fix loop |
-| Workflow | `/kit:review` | Reviews the branch through 6 lenses (the `llm` lens only reports when the diff touches LLM code); 2 skeptics try to refute each finding |
+| Workflow | `/kit:review` | Reviews the branch through 6 lenses (the `llm` lens only reports when the diff touches LLM code); 2 skeptics try to refute each finding; each finding carries an action; reports changed files no lens read, and a risk rating. Skips findings you declined in `.claude/review-decisions.md` |
 | Hooks | (automatic) | `shape_detect`, `session_start`, `context_guard`, `protect`, `on_edit`, `llm_detect`, `stop_check` |
 
 ### Two layers: generic and project-specific
@@ -99,6 +103,9 @@ Sources are at the end.
   - `CLAUDE.md` / `AGENTS.md`: the project's rules. These always win over the kit.
   - `.claude/kit.json`: the project's commands for `check`, `verify`, `onEdit`, `protect` and
     `lead`.
+  - `.claude/review-decisions.md`: review findings you declined, one line each with the reason;
+    `/kit:review` and `/kit:go` don't raise them again. `.claude/evidence/` (live evidence) and
+    `.claude/overnight/` (run logs) stay out of git.
   - `.claude/skills/*`: domain skills that workers load. For example, myinsurance has
     `collect-insurer-documents` and `run-group`.
 
@@ -110,7 +117,7 @@ scope never changes a project you haven't opted in.
 ```json
 {
   "check": "fast gate (< ~30 s): lint + format check (+ types). Runs before every stop if files changed",
-  "verify": "full gate: tests, evals, build. Used by kit:verifier and /kit:go",
+  "verify": "full gate: tests, evals, build. Used by kit:verifier, /kit:go and as the kit:overnight gate",
   "checkTimeout": 540,
   "maxStopRetries": 3,
   "onEdit": [
@@ -193,6 +200,21 @@ Recommended user settings, which Boris also uses (`~/.claude/settings.json`, or 
   prompts.
 - Turn on system notifications, so you know when a session needs you.
 - `"autoCompactWindow": 300000`: compact at ~300k tokens instead of near the 1M limit.
+
+Recommended lines for your personal `~/.claude/CLAUDE.md` (loaded into every session of every
+project, so keep that file to a few dozen lines; everything task-specific belongs in a skill):
+
+```markdown
+- When making technical decisions, don't give weight to development cost: you implement in
+  minutes what a human estimate puts in weeks. Weigh correctness, maintainability, scalability
+  and running cost. Never estimate in days or weeks.
+- For a bug fix, first reproduce the bug end to end, as close as possible to how the user meets
+  it (the page, the CLI, the API call), not only in a unit test.
+```
+
+The first one corrects a bias of models trained on human estimates: they assume the better
+option costs weeks and pick the cheap, brittle one. The kit's lead, shape and plan reviewer
+already apply it; the investigate skill, implementer and verifier apply the second.
 
 ### Context and compaction
 
@@ -302,8 +324,11 @@ In a running session, run `/reload-plugins`. When you change behaviour, bump `ve
    - launches implementers (in parallel worktrees when tasks are independent);
    - sends each result to `kit:verifier`;
    - loops on failures and merges the branches.
-3. When it reports everything verified, type `/kit:go`.
-4. If you corrected it along the way, type `/kit:learn`.
+3. When it reports everything verified, type `/kit:go`. You spend your time at the two ends:
+   a clear brief at the start, and the PR at the end, where the intent, the live evidence, what
+   the pipeline already fixed and the risk rating tell you how closely to read the diff. Low
+   risk with live evidence: skim. High risk: read the diff.
+4. If you corrected it along the way, type `/kit:learn`. Once a week, `/kit:learn sweep`.
 5. At the end of the day, run `/kit:techdebt`.
 
 You can also skip the lead for small things. Write the request and add `/kit:go` at the end
@@ -355,7 +380,38 @@ description.
 Six lenses look for problems: correctness, project rules, tests, security/data, simplicity and,
 when the diff touches LLM code, `llm` (the `kit:llm-build` checklist).
 Each finding is then attacked by 2 skeptics, and only findings both skeptics fail to refute are
-reported as confirmed.
+reported as confirmed. Each one comes with an action: **auto-fix** (mechanical, does not change
+what you asked for), **ask-user** (touches the intent or a product decision) or **no-op**. Every
+lens lists the files it read, and changed files nobody read are reported as not covered: a clean
+review that skipped a file certifies nothing. The review ends with a low/medium/high risk
+rating. Findings you decline go to `.claude/review-decisions.md` and are not raised again.
+
+**Ship with evidence**
+```
+/kit:go
+```
+Writes the intent, syncs with the base branch, verifies with live evidence (the page loaded,
+the CLI run, a screenshot or log under `.claude/evidence/`; mocks don't count), fixes the
+auto-fix findings, asks you once about the ask-user ones, simplifies, updates docs, rates the
+risk, opens the PR with all of that in the body, and watches CI until it is green (up to 3 fix
+rounds). `/kit:go no-babysit` stops at the PR; `/kit:go babysit 42` only watches PR 42.
+
+**Overnight: small verified steps with a budget (or without)**
+```
+Run kit:overnight: pretend you are a 7-year-old, use the app end to end, fix the first
+usability problem you meet; repeat. Max 40 iterations, USD 25, in a worktree.
+```
+The skill checks the gate, asks for the budget (caps, iterations only, or none), does a dry
+run, and gives you the command, which you start in a terminal or tmux:
+```
+python3 <kit>/skills/overnight/scripts/overnight.py "<objective>" --stop-when "<condition>" \
+  --worktree ../app-overnight --max-iterations 40 --max-usd 25 --permission-mode auto
+```
+Every iteration is a fresh `claude -p` session that makes one small change; the runner runs the
+gate and commits it, or throws it away. It stops on the stop condition, a cap, a `blocked`
+report, or 3 failed iterations in a row (a step that changes nothing counts as failed). With no
+cap at all it runs until one of those or Ctrl-C. In the morning: `end-state.json`, `notes.md`,
+pick the commits, `/kit:review`, `/kit:go`.
 
 **Keep working until a condition holds**
 ```
@@ -427,7 +483,9 @@ change that comes without an eval result. The `picks-llm-skill`, `builds-llm-too
 | One conversation that drives a goal to done | `/kit:lead <goal>` |
 | A few independent changes at once | the lead with implementers in worktrees (automatic) |
 | 5–100 similar items, or results cross-checked | `/kit:ship`, `/kit:review`, or ask for "a workflow" |
-| Keep going until a condition holds | `/goal <condition>` (+ the Stop hook) |
+| Keep going until a condition holds | `/goal <condition>` (+ the Stop hook); no enforced token or turn cap |
+| Hours of small verified steps while you sleep, with or without a budget | `kit:overnight` |
+| A PR you can judge without reading the diff, kept green | `/kit:go` (or `/kit:go babysit <PR>`) |
 | Repeat on an interval while your laptop is on | `/loop <interval> <prompt>` |
 | Repeat on a schedule with the laptop off | routines (`/schedule`) |
 | Many long sessions you check on now and then | `claude agents` (agent view) |
@@ -466,7 +524,7 @@ the `sha`.
    permissions. Reject anything that sends code or data to a third party without saying so, or
    that evades site protections.
 3. **Context cost.** `claude plugin details <name>` shows the tokens added to *every* session.
-   The kit costs about 950. A tool that costs more than it saves gets a project scope or a
+   The kit costs about 2,700 (0.10.0, 17 skills and 4 agents). A tool that costs more than it saves gets a project scope or a
    reject.
 4. **Overlap and conflict with the kit.** Hooks matter most: two Stop hooks, two formatters or
    two "auto-continue" mechanisms fight each other. If a tool duplicates a kit piece, keep one
@@ -500,7 +558,7 @@ needed.**
 |---|---|---|
 | `/kit:intake <repo or name>` | Runs the four checks on a candidate, writes the `CATALOG.md` row and proposes a pinned marketplace entry and a trial | built (0.2.0) |
 | Verifier memory | `kit:verifier` has `memory: project`: it reads and adds recurring pitfalls per repo | built (0.2.0) |
-| Kit evals (`plugins/kit/evals/`) | `verifier-catches-bug` (claimed-done change with a bug) and `lead-verifies-before-done` (a small goal driven to done must include verification evidence); `picks-llm-skill` and `optimize-needs-evals` (LLM-quality requests reach `kit:llm-evals` / `kit:prompt-optimize`, and nobody tunes a prompt without a measure); `builds-llm-tool`, `llm-edit-detected` and `injection-aware` (0.7.0: a new tool keeps arithmetic in code with a strict schema and an eval case; an LLM file edit with no LLM words in the prompt still reaches `kit:llm-build`; web search plus private data plus rendered links is treated as the lethal trifecta) | built; see §5 for how to run (0.7.0 cases not yet run). 0.8.0: `investigate-asks-for-evidence` (a production failure with console-only logs: the answer asks once for exports of a failing and a working run, with the query, before any fix) and `investigate-logs-root-cause` (log exports plus a repo: the fix lands where the bad data enters, with a regression test), not yet run |
+| Kit evals (`plugins/kit/evals/`) | `verifier-catches-bug` (claimed-done change with a bug) and `lead-verifies-before-done` (a small goal driven to done must include verification evidence); `picks-llm-skill` and `optimize-needs-evals` (LLM-quality requests reach `kit:llm-evals` / `kit:prompt-optimize`, and nobody tunes a prompt without a measure); `builds-llm-tool`, `llm-edit-detected` and `injection-aware` (0.7.0: a new tool keeps arithmetic in code with a strict schema and an eval case; an LLM file edit with no LLM words in the prompt still reaches `kit:llm-build`; web search plus private data plus rendered links is treated as the lethal trifecta) | built; see §5 for how to run (0.7.0 cases not yet run). 0.8.0: `investigate-asks-for-evidence` (a production failure with console-only logs: the answer asks once for exports of a failing and a working run, with the query, before any fix) and `investigate-logs-root-cause` (log exports plus a repo: the fix lands where the bad data enters, with a regression test), not yet run. 0.10.0: `go-reports-risk-and-evidence` (`/kit:go` on a finished CLI change: intent, evidence from running the CLI and not only the unit test, a risk rating) and `overnight-sets-budget` (an "overnight" request reaches `kit:overnight` with a gate, a stop condition and an explicit budget choice), not yet run. `kit:overnight`'s runner has a stdlib self-check with a fake agent: `python3 plugins/kit/skills/overnight/tests/test_overnight.py` |
 
 First eval result (2026-10-16, one run per arm): `verifier-catches-bug` scored 1.00 with the
 kit and 1.00 without (delta 0). The planted bug is obvious enough that Claude catches it either
@@ -549,6 +607,7 @@ Hook and script self-checks (no tokens):
 ```bash
 python3 plugins/kit/hooks/tests/test_context.py && python3 plugins/kit/hooks/tests/test_llm_detect.py
 python3 plugins/kit/skills/investigate/tests/test_compact_logs.py
+python3 plugins/kit/skills/overnight/tests/test_overnight.py
 ```
 
 Test a hook by hand:
@@ -573,6 +632,12 @@ Rules for changing the kit:
   https://x.com/bcherny/status/2007179833990885678
 - `/go`: https://x.com/bcherny/status/2044847858634064115
 - `/loop`: https://x.com/bcherny/status/2038454341884154269
+- Kun Chen, "L8 Principal's Agentic Engineering Workflow" (June 2026):
+  https://www.youtube.com/watch?v=iQyg-KypKAA. Methods adapted (nothing copied, all MIT):
+  no-mistakes (https://github.com/kunchenguid/no-mistakes) for `/kit:go` and `/kit:review`,
+  gnhf (https://github.com/kunchenguid/gnhf) for `kit:overnight`, AXI (https://axi.md) for the
+  `kit:llm-build` tool checklist, "Your AGENTS.md is a Neural Net"
+  (https://blog.kunchenguid.com/p/your-agentsmd-is-a-neural-net) for `/kit:learn`.
 - Workflows: https://x.com/bcherny/status/2060048877944778995
 - Claude Code docs:
   - parallel agents: https://code.claude.com/docs/en/agents

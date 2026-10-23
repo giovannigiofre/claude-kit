@@ -31,6 +31,9 @@ The kit hooks do nothing until `.claude/kit.json` exists. Build it from evidence
    to `.gitignore`, and append a `# Compact instructions` section to CLAUDE.md (3-5 lines: keep
    the goal, decisions and user preferences, in-flight work, failing checks and file paths;
    drop tool output already acted on). Skip any part the project already has.
+   Also add `.claude/evidence/` (live evidence from `/kit:go` and the verifier) and
+   `.claude/overnight/` (run logs of `kit:overnight`) to `.gitignore`. `.claude/review-decisions.md`
+   (findings the user declined) stays committed, so every clone's reviews skip them.
 7. **lead**: `read` = the 1-3 files a lead should read before planning (backlog, decision log),
    `backlog` = where the next work item comes from, `notes` = one line of project-specific
    orchestration advice.

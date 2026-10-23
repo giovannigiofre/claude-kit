@@ -18,7 +18,10 @@ Check:
    rules (read CLAUDE.md / AGENTS.md / decision logs).
 4. Ordering and parallelism: which steps conflict on the same files, which can run in parallel,
    which must wait.
-5. Is there a much simpler way to reach the same goal?
+5. Is there a much simpler way to reach the same goal? Judge options on correctness,
+   maintainability, scalability and running cost, not on how long they take to write: agents
+   implement in minutes what a human estimate puts in days, so a plan that picks the cheap,
+   brittle option "to save development time" is a MUST FIX. Do not estimate in days or weeks.
 6. What should make the executor stop and ask instead of continuing?
 
 Final message:

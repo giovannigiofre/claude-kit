@@ -30,6 +30,11 @@ and SCOPE as given. If the goal mixes several ideas or you cannot make it checka
 `kit:shape` skill first instead of guessing. For a large or risky goal, have `kit:plan-reviewer` review the plan
 and fold in its MUST FIX items.
 
+When choosing between approaches, weigh correctness, maintainability, scalability and running
+cost, not how long each takes to write: agents implement in minutes what a human estimate puts
+in weeks, so "cheaper to build" is rarely a reason to pick the weaker design. Never estimate
+in days or weeks.
+
 ## 2. Split and choose the mechanism
 
 Create a task list (TaskCreate) with one task per independently checkable unit. Then, per task:
@@ -41,8 +46,9 @@ Create a task list (TaskCreate) with one task per independently checkable unit. 
 | Many similar items, or results that need cross-checking | the `kit:ship` workflow (tasks list in `args`) or `kit:review`; ask the user before the first workflow run if they have not opted in |
 | Pure research / reading | an Explore or general-purpose agent; keep only its conclusion |
 | Long, independent, can run unattended | tell the user it fits a background session (`claude agents`) and give the exact prompt |
+| Hours of small improvements toward one objective (overnight), with a metric or a judgement you trust | propose `kit:overnight`: fresh session per iteration, a commit per verified step, hard caps on iterations and cost |
 | Must repeat on a schedule | propose `/loop <interval> /kit:lead next` or a routine |
-| One conversation must keep going until a condition holds | propose `/goal <condition>`; the kit Stop hook still runs the real check |
+| One conversation must keep going until a condition holds | propose `/goal <condition>`; the kit Stop hook still runs the real check. `/goal` has no enforced token or turn cap: for a long unattended run use `kit:overnight` |
 | A bug: an error, a failing test, a broken page or job, "it stopped working" | load `kit:investigate` yourself for the diagnosis (evidence, hypotheses, root cause); hand the fix to `kit:implementer` with the root cause, the regression test and its done-criterion. If the evidence sits where only the user can reach it (a dashboard, their device), ask for it before planning any fix |
 | The task writes or changes LLM code (an API call, prompt, tool, orchestration, model, answer quality), even a small fix | the matching kit skill, loaded by you or named in the worker brief: `kit:llm-build` (design, build and review; its checklist and "Done when" go in the brief), `kit:llm-evals` (measure; first if no trusted suite), `kit:prompt-optimize` (iterate against the suite), `kit:model-select` (compare models). The done-criterion is an eval result (hard checks at least), not "the prompt reads better" |
 
@@ -63,7 +69,8 @@ rule or skill that applies, and what to return. Workers do not see this conversa
 
 - Merge worktree branches one at a time into the working branch; resolve conflicts yourself
   and re-run `verify` after the last merge.
-- When everything passes: offer `/kit:go` (simplify, verify, commit, PR). Commit, push, PR,
+- When everything passes: offer `/kit:go` (intent, live evidence, review, risk, commit, PR, CI
+  babysitting). Commit, push, PR,
   deploy, migrations and anything outward-facing need the user's go-ahead unless they already
   gave it for this run.
 

@@ -44,6 +44,14 @@ label; "Other" is added automatically.
   - a fact you can look up;
   - a choice with a conventional default (use the default and state it in the brief);
   - style questions that don't change the outcome.
+- **Recommend on quality, not on build time.** Pick the recommended option for correctness,
+  maintainability and running cost; agents build in minutes what a human estimate puts in
+  weeks, so "quicker to build" is not a reason. Never put days or weeks on an option.
+- **Show options that differ visually.** When the options are layouts, screens, flows or
+  architectures, a wall of text hides the difference: before asking, write one small
+  self-contained HTML page that shows them side by side (in the project's design system if it
+  has one) and open it, or use a published artifact where the session offers one. Then ask the
+  question with the options named as on the page.
 - **At most 3 rounds.** If decisions are still open after that, choose the recommended option,
   list it under ASSUMPTIONS in the brief, and continue.
 - If the user answers "accept the recommendations" (or picks every recommended option), stop

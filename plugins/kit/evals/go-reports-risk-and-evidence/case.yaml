@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: go-reports-risk-and-evidence
+description: /kit:go on a finished change must report the intent, live evidence from running the CLI (not only the tests) and a risk rating.
+tags: [go]
+context:
+  scaffold_script: fixture.sh
