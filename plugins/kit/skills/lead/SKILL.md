@@ -60,8 +60,10 @@ threads wake you.
 ## Threads
 
 Start queued items while fewer than PARALLEL are working and the budget allows: `kit:implementer`
-in the background, named after the item id (it runs in its own worktree). A thread sees nothing
-of this conversation, so the brief carries everything it needs:
+in the background with `isolation: "worktree"`, named after the item id. Where worktrees aren't
+available (not a git repo, or the session refuses them), run threads one at a time in the main
+checkout, each on its own branch. A thread sees nothing of this conversation, so the brief
+carries everything it needs:
 
 - the goal and why, the DONE WHEN check, the scope and what is out of it;
 - the project rules and skills that apply. UI or LLM work whose kit plugin is missing here: offer
