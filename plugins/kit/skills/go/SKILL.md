@@ -36,8 +36,9 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
 6. **Risk and PR.** Rate the risk low, medium or high in one or two lines: blast radius (shared
    modules, auth, money, migrations, data deletion, public API), how much the evidence covers,
    how hard it is to roll back. Branch first if on the default branch. Stage only the files this
-   work changed (no secrets, `.env`, large data or `.claude/evidence/`), commit with a message
-   that says why, push and `gh pr create` (unless `no-pr`) with sections **Intent**, **Changes**,
+   work changed (no secrets, `.env`, large data or `.claude/evidence/`), commit as the repo's
+   configured git user with a message that says why (no AI co-author lines or footers), push and
+   `gh pr create` (unless `no-pr`) with sections **Intent**, **Changes**,
    **Evidence**, **Fixed along the way**, **Risk**, **Open**. Follow the repo's commit and PR
    conventions.
 7. **Keep CI green** (unless `no-babysit`). With the Claude GitHub App on the repo,
@@ -46,8 +47,13 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
    what you touched, push; at most 3 rounds, then report. A merge conflict: sync as in step 3.
    Review comments that ask for a product decision go to the user. If CI takes longer than
    about 10 minutes, hand over: `/loop 10m /kit:go babysit <PR>`.
-8. **Report** in a few lines: branch, PR, evidence verdict, risk, CI state, what the user still
-   has to decide.
+8. **Merge per the project's policy** (`.claude/kit.json` `lead.merge`): `agent` merges once CI
+   is green, nothing from the review is open and the risk is not high (`gh pr merge --squash
+   --delete-branch`, or the method the repo allows); `user`, or a high risk, leaves the PR for
+   the user. Not set: ask "In this project, do I merge PRs once they're green, or do you always
+   review them first?" and save the answer there.
+9. **Report** in a few lines: branch, PR, evidence verdict, risk, CI state, merged or waiting,
+   what the user still has to decide.
 
 Ask before pushing when the repo's rules require explicit approval beyond typing `/go`, or when
 the remote is protected or production. Never force-push a branch other people work on.

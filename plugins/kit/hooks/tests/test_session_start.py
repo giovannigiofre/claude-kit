@@ -47,6 +47,25 @@ def main():
         (repo / "docs" / "board.md").write_text("SHIP: local | PARALLEL: 1 | BUDGET: none\n")
         assert "SHIP: local" in run({"cwd": str(repo), "source": "compact"})
 
+        # kit.json author: an AI identity (a cloud container's default) becomes the user's
+        def ident():
+            return [subprocess.run(["git", "-C", str(repo), "config", k], capture_output=True, text=True).stdout.strip()
+                    for k in ("user.name", "user.email")]
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "Claude"], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "noreply@anthropic.com"], check=True)
+        (repo / ".claude" / "kit.json").write_text(json.dumps({"author": "Ada O'Hara <ada@example.org>"}))
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert ident() == ["Ada O'Hara", "ada@example.org"], ident()
+        assert "git author for this repo set to Ada O'Hara" in out, out
+        assert "set to" not in run({"cwd": str(repo), "source": "startup"}), "already right: says nothing"
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "Bob"], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "bob@example.org"], check=True)
+        run({"cwd": str(repo), "source": "startup"})
+        assert ident() == ["Bob", "bob@example.org"], "a human identity someone chose is left alone"
+        (repo / ".claude" / "kit.json").write_text(json.dumps({"author": "not an identity"}))
+        run({"cwd": str(repo), "source": "startup"})
+        assert ident() == ["Bob", "bob@example.org"]
+
         (repo / ".claude" / "kit.json").write_text("{broken")
         out = run({"cwd": str(repo), "source": "startup"})
         assert "cannot read" in out, "a broken kit.json is reported, not ignored"

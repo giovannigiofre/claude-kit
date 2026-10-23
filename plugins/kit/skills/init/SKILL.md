@@ -27,7 +27,13 @@ and its CI actually run, not guesses.
    log), `backlog`, `notes` (one line of project-specific advice), and optionally `ship`
    (`local`, `pr` or `pr+fix`), `parallel` (default 3), `budget` (`{"items": N}` or `"none"`),
    `loops` (`[{"name", "every", "run"}]`). Writing `ship` here is the user's standing go-ahead
-   for threads to push and open PRs, so ask before setting it to `pr` or `pr+fix`.
+   for threads to push and open PRs, so ask before setting it to `pr` or `pr+fix`. Ask too who
+   merges PRs in this project and write `merge`: `user` (they always review first) or `agent`
+   (the coordinator merges green, reviewed, not-high-risk PRs).
+   Write `author` at the top level: the user's git identity as `"Name <email>"` (from their own
+   recent commits or their global git config, never an AI's; confirm it with them). The kit's
+   SessionStart hook sets it on the repo whenever git's identity is missing or an AI's, so every
+   commit, the threads' included, is theirs.
 6. **An e2e skill.** Write `.claude/skills/e2e/SKILL.md` (about 20 lines, description "How to run
    and exercise <project> end to end to verify a change"): how to start the app or services
    (commands, ports, env, seed data), how to exercise each surface the way a user does (the
@@ -53,7 +59,12 @@ and its CI actually run, not guesses.
     `/fewer-permission-prompts`. The user is the only author of commits and PRs: in the same file
     set `"attribution": {"commit": "", "pr": "", "sessionUrl": false}` (merge, never drop keys), and
     check that `git config user.name` and `user.email` are the user's own, not an AI's. The guard
-    blocks AI credits and AI identities anyway; the setting keeps Claude from writing them.
+    blocks AI credits and AI identities anyway; the setting keeps Claude from writing them. Auto
+    mode may block agents rewriting their own branches; offer this line for the user's own
+    `~/.claude/settings.json` (user scope only): `"autoMode": {"allow": ["$defaults", "On a branch
+    an agent created for its own task (not the default branch, not one someone else pushed to),
+    rewriting its commits (amend, rebase, setting the user's authorship) and pushing it with
+    --force-with-lease"]}`.
 11. **Domain plugins**: if the repo has a frontend, or code that calls an LLM, offer `kit-ui` or
     `kit-llm` for this project now (`kit:extras` explains the install).
 12. Write `.claude/kit.json`, show it, and explain that it is committed so every clone and session
@@ -71,6 +82,7 @@ Schema:
   "onEdit": [{"glob": "**/*.py", "run": "...\"$FILE\"...", "timeout": 120}],
   "protect": [{"glob": "data/raw/**", "mode": "no-overwrite", "reason": "raw files are immutable"}],
   "guard": {"protectedBranches": ["main"], "allowCommands": []},
-  "lead": {"read": ["docs/backlog.md"], "backlog": "docs/backlog.md", "notes": "...", "ship": "pr", "parallel": 3}
+  "author": "Name <email>",
+  "lead": {"read": ["docs/backlog.md"], "backlog": "docs/backlog.md", "notes": "...", "ship": "pr", "merge": "user", "parallel": 3}
 }
 ```

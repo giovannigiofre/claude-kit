@@ -22,7 +22,7 @@ changes; keep it under about 60 lines. If `.claude/lead/` isn't gitignored, add 
 to `.git/info/exclude`.
 
 ```
-SHIP: <local | pr | pr+fix> | PARALLEL: <n> | BUDGET: <none | k of n items>
+SHIP: <local | pr | pr+fix> | MERGE: <user | agent | ask> | PARALLEL: <n> | BUDGET: <none | k of n items>
 RULES: <standing preferences the user stated; separated by "; ">
 NEEDS YOU: <id: the question in one line>; <id: ...>
 <id> | <ship | scout | overnight> | <goal> | DONE WHEN <check> | <status> | agent <name> | <branch / PR> | <last event>
@@ -31,10 +31,11 @@ NEEDS YOU: <id: the question in one line>; <id: ...>
 Status is one of `queued`, `working`, `review` (a PR or branch is ready for the user),
 `needs-you` (a question or a failure), `landing` (approved, merging), `done`, `parked`.
 
-Defaults come from kit.json `lead` (`ship`, `parallel`, `budget`, `loops`), else ship `pr`
-(`local` when the repo has no remote), parallel 3, no budget. State them in one line in your first reply; when the user changes one,
-or states a preference ("propose threads before starting them", "reuse the thread for
-follow-ups"), save it under RULES.
+Defaults come from kit.json `lead` (`ship`, `merge`, `parallel`, `budget`, `loops`), else ship
+`pr` (`local` when the repo has no remote), merge `ask`, parallel 3, no budget. State them in one
+line in your first reply; when the user changes one, or states a preference ("propose threads
+before starting them", "reuse the thread for follow-ups"), save it under RULES. A change to ship
+or merge is a project policy: also write it to `.claude/kit.json` `lead`.
 
 ## Each message
 
@@ -75,12 +76,23 @@ When a thread reports:
 
 - **Done, gate green, with evidence:** if its risk is medium or high, have `kit:verifier` review
   the branch in the background against the intent, and send real findings back to the thread.
-  Then mark it `review` (`done` for local work).
+  Then mark it `review` (`done` for local work) and apply the merge policy.
 - **Blocked, a question, or still failing after 3 rounds:** `needs-you`, the question in one line.
 
-Pushing and opening PRs follow SHIP when it comes from kit.json or from the user in this
-session; otherwise ask once before the first push and save the answer under RULES. Deploys,
-migrations, deleting data and anything outside the repo always need the user's go-ahead.
+**Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it
+waits as `review`. `agent`: merge the PR yourself (`gh pr merge --squash --delete-branch`, or the
+method the repo allows) once CI is green, the review has nothing open and the risk is not high; a
+high-risk PR still waits for the user. Not set yet: when the first PR is ready, ask "In this
+project, do I merge PRs once they're green, or do you always review them first?" and write the
+answer to `.claude/kit.json` `lead.merge`.
+
+The user is the author of every commit and PR: threads commit under the git identity the repo is
+configured with (kit.json `author` sets it), with no AI co-author lines or footers. On a branch a
+thread created for its item, it may commit, amend, rebase and force-push with
+`--force-with-lease` as the work needs; never on the default branch or a branch it didn't create.
+Pushing and opening PRs follow SHIP when it comes from kit.json or from the user in this session;
+otherwise ask once before the first push and save the answer. Deploys, migrations, deleting data
+and anything outside the repo always need the user's go-ahead.
 
 ## Replies
 

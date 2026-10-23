@@ -450,8 +450,8 @@ def check_attribution(argv, cwd, command):
         if is_ai_identity(who):
             return ("deny", "attribution",
                     f"git's identity in this checkout is '{who}', an AI; {NO_AI}. Set the user's own "
-                    "identity for this repo first (git config user.name / user.email), taken from their "
-                    "recent commits (git log --format='%an <%ae>') or asked from them")
+                    "identity for this repo first (git config user.name / user.email): `author` in "
+                    ".claude/kit.json, their recent commits (git log --format='%an <%ae>'), or ask them")
     return None
 
 

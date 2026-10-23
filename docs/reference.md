@@ -17,12 +17,14 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   ],
   "guard": {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40, "allowCommands": []},
   "llm": "on",
+  "author": "Giovanni Giofré <99892523+giovannigiofre@users.noreply.github.com>",
   "lead": {
     "read": ["docs/backlog.md"],
     "backlog": "docs/backlog.md",
     "notes": "one line of project-specific advice for the coordinator",
     "board": ".claude/lead/board.md",
     "ship": "pr",
+    "merge": "user",
     "parallel": 3,
     "budget": "none",
     "loops": [{"name": "babysit-prs", "every": "10m", "run": "/kit:go babysit"}]
@@ -48,11 +50,28 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   doesn't write the credits in the first place. `{"guard": "on"}` in `~/.claude/kit.json` guards projects without a
   `kit.json` too.
 - `llm` (read by the `kit-llm` plugin's hook): `"off"` silences the LLM-code hint in this project.
+- `author`: who commits in this project, as `"Name <email>"`. When git's identity in the checkout
+  is missing or an AI's (a cloud container's default), the SessionStart hook sets the repo's own
+  git config to it, so every commit, the threads' included, is yours. Together with the guard's
+  `attribution` rule and `"attribution": {"commit": "", "pr": "", "sessionUrl": false}` in
+  settings, you are the only author of commits, PRs and comments.
 - `lead` configures the coordinator. `ship`: `local` (verified branches, you merge), `pr` (threads
-  push and open PRs), `pr+fix` (they also keep CI green). Setting `pr` or `pr+fix` here is a
+  push and open PRs), `pr+fix` (they also keep CI green). `merge`: `user` (you review and merge
+  every PR) or `agent` (the coordinator merges a PR once CI is green, the review has nothing open
+  and the risk is not high; a high-risk PR still waits for you); unset, the coordinator asks when
+  the first PR is ready and writes your answer here. Setting `pr` or `pr+fix` here is a
   standing go-ahead to push; without it the coordinator asks once per session. `parallel`:
   threads working at once (default 3). `budget`: `{"items": N}` or `"none"`. `loops`: standing
   loops the coordinator schedules (session-only, they expire after 7 days).
+
+Threads may commit, amend, rebase and force-push (with `--force-with-lease`) on the branches
+they created for their own items, never on the default branch or someone else's. Auto mode can
+still block a history rewrite; to let it through, add this to your own `~/.claude/settings.json`
+(`autoMode` is read from user settings only):
+
+```json
+{"autoMode": {"allow": ["$defaults", "On a branch an agent created for its own task (not the default branch, not one someone else pushed to), rewriting its commits (amend, rebase, setting the user's authorship) and pushing it with --force-with-lease"]}}
+```
 
 Also per project, committed: `CLAUDE.md` (the project's rules, which win over the kit),
 `.claude/skills/e2e/SKILL.md` (how to exercise the app), `.claude/review-decisions.md` (findings

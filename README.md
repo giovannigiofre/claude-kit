@@ -22,7 +22,8 @@ the model can't do alone, re-checked when a new model lands.
 | A messy idea | just write it | the coordinator (or `kit:shape`) asks 2-3 multiple-choice rounds and writes a brief with a checkable DONE WHEN |
 | Something broke | describe it | `kit:investigate`: evidence (asks you once, with exact export steps), reproduction, hypotheses, a regression-tested fix |
 | UI or LLM work | describe it | the kit asks "Use Kit UI / Kit LLM for this?" and installs that plugin for the project on yes |
-| Finishing by hand | `/kit:go` | PR with intent, live evidence, what was fixed, risk; keeps CI green |
+| First PR in a project | answer once | "Do I merge PRs once they're green, or do you always review them first?"; the answer is saved in `kit.json` (`lead.merge`) |
+| Finishing by hand | `/kit:go` | PR with intent, live evidence, what was fixed, risk; keeps CI green; merges if the project allows it |
 | Evening | "tonight keep doing X until Y" | `kit:overnight`: a fresh session per small step, a commit only when the gate passes, caps or none |
 | Weekly | `/kit:learn sweep` | turns repeated corrections into checks or rules, and prunes instructions that no longer help (at most 4 changes, each approved) |
 
@@ -35,7 +36,10 @@ becomes a thread (`kit:implementer` in its own worktree, in the background), a f
 the thread already working in that area. The board (`.claude/lead/board.md`) holds every item as
 `working`, `review` (ready for you), `needs-you`, `done`; it survives compaction and restarts, and
 comes back into context after a compaction. Threads run the project's gate, exercise the change,
-and per the ship mode commit, open a PR, and fix CI. Medium- or high-risk work gets a review by
+and per the ship mode commit, open a PR, and fix CI; on their own branches they may rebase and
+force-push as the work needs. Every commit and PR is yours: `kit.json` `author` sets your git
+identity, and nothing credits an AI. Who merges is per project: you, or the coordinator for green,
+reviewed, not-high-risk PRs. Medium- or high-risk work gets a review by
 `kit:verifier` in a fresh context before it reaches you. When a thread finishes while you're away,
 the coordinator sends a notification (desktop, or phone with Remote Control).
 

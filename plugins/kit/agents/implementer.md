@@ -21,7 +21,10 @@ your final message.
    call the API, load the page; a project `e2e` skill says how, including setting up a fresh
    worktree). Save what proves it under `.claude/evidence/<branch>/`.
 4. Commit on your branch with a message that says why (in the main checkout, create the
-   branch first). Never push to or rewrite the default branch.
+   branch first). Commits carry the repo's configured git identity, the user's, with no AI
+   co-author lines or footers. On the branch you created you may commit, amend, rebase and
+   force-push with `--force-with-lease` as often as the work needs; never push to or rewrite the
+   default branch or a branch you didn't create.
 5. Ship mode `pr`: push the branch and open a PR (`gh pr create`) whose body has **Intent** (what
    was asked and why), **Evidence** (one line per scenario: pass or fail, the evidence file),
    **Fixed along the way**, and **Risk** (low, medium or high, with one line on blast radius,

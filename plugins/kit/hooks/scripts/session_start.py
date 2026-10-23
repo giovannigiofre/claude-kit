@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""SessionStart: tell Claude which kit gates this project has, and after a compaction put the
-coordinator's board back into context (stdout is added to context)."""
+"""SessionStart: tell Claude which kit gates this project has, make the user the git author when
+kit.json names them, and after a compaction put the coordinator's board back into context
+(stdout is added to context)."""
 
+import re
 import sys
 from pathlib import Path
 
@@ -26,6 +28,34 @@ def print_board(root, config):
               + text[:MAX_BOARD_CHARS] + "\n")
 
 
+def ensure_author(root, config):
+    """kit.json `author` ("Name <email>") is who commits in this project. When git's identity in
+    the checkout is missing or an AI's (a cloud container's default), set the repo's own config to
+    it, so every commit, the threads' included (worktrees share it), carries the user's name."""
+    author = config.get("author") if isinstance(config, dict) else None
+    m = re.match(r"^\s*(.+?)\s*<([^<>@\s]+@[^<>\s]+)>\s*$", author or "")
+    if not m:
+        return None
+    name, email = m.group(1), m.group(2)
+    _, current_name = kitlib.run_shell("git config user.name", root, timeout=10)
+    _, current_email = kitlib.run_shell("git config user.email", root, timeout=10)
+    current_name, current_email = current_name.strip(), current_email.strip()
+    is_ai = current_name.lower() in ("claude", "claude code", "claude[bot]") or \
+        current_email.lower().endswith("anthropic.com")
+    if (current_name and current_email and not is_ai) or (current_name, current_email) == (name, email):
+        return None
+    code_n, _ = kitlib.run_shell(f"git config user.name {quote(name)}", root, timeout=10)
+    code_e, _ = kitlib.run_shell(f"git config user.email {quote(email)}", root, timeout=10)
+    if code_n or code_e:
+        return None
+    was = f"{current_name} <{current_email}>" if current_name or current_email else "unset"
+    return f"- git author for this repo set to {name} <{email}> (kit.json author; was {was})"
+
+
+def quote(text):
+    return "'" + text.replace("'", "'\\''") + "'"
+
+
 def main():
     data = kitlib.read_input()
     root = kitlib.project_root(data)
@@ -38,6 +68,9 @@ def main():
     if not config:
         return 0  # project has not opted in: stay silent
     lines = ["kit harness active for this project (.claude/kit.json):"]
+    author_line = ensure_author(root, config)
+    if author_line:
+        lines.append(author_line)
     if config.get("check"):
         lines.append(f"- fast check (runs automatically before you stop): {config['check']}")
     if config.get("verify"):
