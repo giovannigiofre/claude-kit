@@ -154,7 +154,19 @@ cd ../kit-llm
 claude plugin eval . --case picks-llm-skill --scaffold --trust-plugin --no-publish --max-cost-usd 3
 ```
 
-Results so far (one run per arm, on earlier kit versions): `verifier-catches-bug` 1.00 with the
+Kit 1.0 on Opus 5.5 (2026-10-23, one run per arm, about USD 3.3 in all), with minus without:
+
+| Case | With | Without | Note |
+|---|---|---|---|
+| `offers-domain-plugin` | 1.00 | 0.00 | `kit:extras` fired and offered Kit UI |
+| `llm-edit-detected` | 1.00 | 0.00 | the hook routed a plain "fix the retry" to llm-build: capped backoff, no retry on 4xx, tests |
+| `optimize-needs-evals` | 1.00 | 0.00 | measure before rewriting the prompt |
+| `picks-llm-skill` | 1.00 | 1.00 | plain Opus also measures first |
+| `verifier-catches-bug` | 1.00 | 1.00 | Opus finds the bug itself and uses no verifier, as its prompting guide predicts |
+| `lead-dispatches-threads` | 0.67 | 0.00 | board and threads started; the threads could not commit because the eval sandbox mounts `.git` read-only |
+| `go-reports-risk-and-evidence`, `lead-verifies-before-done` | 0.50 | 0.50 | same read-only `.git`: no commit possible in either arm; rerun on a machine where the sandbox allows git writes |
+
+Earlier results (one run per arm, on earlier kit versions): `verifier-catches-bug` 1.00 with the
 kit and 1.00 without (the planted bug is obvious enough that Claude catches it either way);
 `picks-llm-skill` 1.00 and 1.00; `optimize-needs-evals` 0.00 in both arms until the skill
 description said "with or without an eval suite ... never rewrite a prompt blind", then 1.00
