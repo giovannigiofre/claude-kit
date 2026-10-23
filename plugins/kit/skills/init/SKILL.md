@@ -48,8 +48,12 @@ and its CI actually run, not guesses.
    repo, pushes to main, discarding uncommitted work, `sudo`, `curl | sh`, reading credentials;
    best effort, it reads shell text). Then ask which profile the project uses: **Host** (no OS
    sandbox) or **Sandbox** (`/kit-safety sandbox` or the kit panel).
-10. **Permissions**: propose (never write silently) allow rules in `.claude/settings.json` for
-    the read-only, check and verify commands; suggest the built-in `/fewer-permission-prompts`.
+10. **Permissions and authorship**: propose (never write silently) allow rules in
+    `.claude/settings.json` for the read-only, check and verify commands; suggest the built-in
+    `/fewer-permission-prompts`. The user is the only author of commits and PRs: in the same file
+    set `"attribution": {"commit": "", "pr": "", "sessionUrl": false}` (merge, never drop keys), and
+    check that `git config user.name` and `user.email` are the user's own, not an AI's. The guard
+    blocks AI credits and AI identities anyway; the setting keeps Claude from writing them.
 11. **Domain plugins**: if the repo has a frontend, or code that calls an LLM, offer `kit-ui` or
     `kit-llm` for this project now (`kit:extras` explains the install).
 12. Write `.claude/kit.json`, show it, and explain that it is committed so every clone and session

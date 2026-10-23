@@ -241,6 +241,51 @@ def main():
         failed += 1
         print("FAIL the cap must be per session")
 
+    # attribution: the user is the only author
+    h7, r7 = setup()
+    trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+    attribution = [
+        (f'git commit -m "fix login" -m "{trailer}"', "block"),
+        ("git commit -q -F - <<'EOF'\nfix login\n\nClaude-Session: https://claude.ai/code/session_01x\nEOF", "block"),
+        ('gh pr create --title t --body "x\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)"', "block"),
+        ('git commit --author="Claude <noreply@anthropic.com>" -m "x"', "block"),
+        ("git config user.email noreply@anthropic.com", "block"),
+        ('git config user.name "Claude"', "block"),
+        ('git commit -m "fix login"', "allow"),
+        ('git commit --author="Claude Dupont <claude@dupont.fr>" -m "x"', "allow"),
+        ('git config user.name "Claude Dupont"', "allow"),
+        ('gh pr create --title "fix" --body "Intent: fix the login redirect"', "allow"),
+        ('grep -r "Co-Authored-By: Claude" .', "allow"),
+    ]
+    for command, want in attribution:
+        got = verdict(h7, r7, command)
+        if got != want:
+            failed += 1
+            print(f"FAIL attribution {want} expected, got {got}: {command!r}")
+    msg = r7 / "msg.txt"
+    msg.write_text(f"fix\n\n{trailer}\n")
+    if verdict(h7, r7, f"git commit -F {msg}") != "block":
+        failed += 1
+        print("FAIL a commit message file that credits an AI must be blocked")
+    subprocess.run(["git", "-C", str(r7), "config", "user.name", "Claude"], check=True)
+    subprocess.run(["git", "-C", str(r7), "config", "user.email", "noreply@anthropic.com"], check=True)
+    if verdict(h7, r7, 'git commit -m "fix"') != "block":
+        failed += 1
+        print("FAIL a commit under an AI git identity must be blocked")
+    if verdict(h7, r7, 'git commit --author="Ada Lovelace <ada@example.org>" -m "fix"') != "allow":
+        failed += 1
+        print("FAIL an explicit human --author must pass")
+    code, _, _ = call(h7, r7, "mcp__github__create_pull_request",
+                      {"title": "fix", "body": "done\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)"})
+    code2, _, _ = call(h7, r7, "mcp__github__add_issue_comment", {"body": "Fixed in 1a2b3c."})
+    if code != 2 or code2 != 0:
+        failed += 1
+        print(f"FAIL GitHub MCP attribution: credited={code} plain={code2}")
+    h8, r8 = setup({"guard": {"attribution": "allow"}})
+    if verdict(h8, r8, f'git commit -m "x" -m "{trailer}"') != "allow":
+        failed += 1
+        print('FAIL guard.attribution = "allow" turns the rule off')
+
     print("guard: all good" if not failed else f"guard: {failed} failures")
     return 1 if failed else 0
 

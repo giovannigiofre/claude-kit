@@ -111,7 +111,8 @@ installed per project when the kit offers them, or by hand:
 `claude plugin install kit-llm@claude-kit --scope project`.
 
 Recommended in `~/.claude/settings.json` (auto mode is already the default on Pro and Max):
-system notifications on; `"env": {"CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "4"}` if you want a
+`"attribution": {"commit": "", "pr": "", "sessionUrl": false}` so commits and PRs carry no Claude
+trailer, footer or session link (you are the only author); system notifications on; `"env": {"CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "4"}` if you want a
 hard cap on parallel threads. To change the mode default everywhere, put `{"mode": "light"}`
 (or `"loop"`) in `~/.claude/kit.json`; `/kit-mode` sets it per project.
 
@@ -139,7 +140,10 @@ project.
 - **Host** (your own machine): no OS sandbox. The guard still blocks recursive deletes outside
   the repo, pushes or force pushes to main, `git reset --hard` or `clean` over uncommitted work,
   `sudo`, `curl … | sh`, and reading `~/.ssh`, `~/.aws`, gh, docker or kube config and the
-  keychain. It reads shell text, so it is best effort.
+  keychain. It also keeps you the only author: it blocks a commit, PR, issue or comment that
+  credits an AI (`Co-Authored-By: Claude`, "Generated with Claude Code", a session link), through
+  git, `gh` or the GitHub MCP tools, and a commit made under an AI git identity. It reads shell
+  text, so it is best effort.
 - **Sandbox** (overnight runs, unfamiliar repos): the same guard plus Claude Code's Bash sandbox
   in `.claude/settings.local.json` (writes in the project and temp, network to GitHub, package
   registries and the Anthropic API, credential folders unreadable). `kit:overnight` passes it to

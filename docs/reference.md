@@ -41,7 +41,11 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   defaults to main, master and the remote's default branch. `agentsAsk` / `agentsDeny` are an
   optional per-session cap on subagents (ask past one, refuse past the other); the native
   `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` caps how many run at once. `allowCommands`: regexes the
-  guard lets through. `{"guard": "on"}` in `~/.claude/kit.json` guards projects without a
+  guard lets through. `attribution` (default `"block"`): blocks AI credits in commit messages, PR,
+  issue and comment text (git, `gh`, GitHub MCP tools) and commits under an AI git identity
+  (name "Claude", an `anthropic.com` email); `"allow"` turns that rule off. Pair it with
+  `"attribution": {"commit": "", "pr": "", "sessionUrl": false}` in `settings.json`, so Claude
+  doesn't write the credits in the first place. `{"guard": "on"}` in `~/.claude/kit.json` guards projects without a
   `kit.json` too.
 - `llm` (read by the `kit-llm` plugin's hook): `"off"` silences the LLM-code hint in this project.
 - `lead` configures the coordinator. `ship`: `local` (verified branches, you merge), `pr` (threads
