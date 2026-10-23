@@ -1,7 +1,7 @@
 ---
 name: lead
-description: Turns this session into the lead agent that plans a goal, delegates the work to worker agents and workflows, verifies every result independently and loops until the done-criterion passes. Use when the user hands over a goal to be driven to completion ("take this over", "orchestrate", "run the backlog", "keep going until ..."), or via /loop for one iteration of recurring work.
-argument-hint: <goal, or "next" to pick the next item from the project's backlog>
+description: Turns this session into the lead agent that plans a goal, delegates the work to worker agents and workflows, verifies every result independently and loops until the done-criterion passes. Use when the user hands over a goal to be driven to completion ("take this over", "orchestrate", "run the backlog", "keep going until ..."), via /loop for recurring work, or as "captain": a standing coordinator the user talks to while it dispatches, verifies and ships work in the background.
+argument-hint: <goal | "next" (next backlog item) | "captain" (standing coordinator you talk to)>
 ---
 
 # Lead: plan, delegate, verify, loop
@@ -47,6 +47,7 @@ Create a task list (TaskCreate) with one task per independently checkable unit. 
 | Pure research / reading | an Explore or general-purpose agent; keep only its conclusion |
 | Long, independent, can run unattended | tell the user it fits a background session (`claude agents`) and give the exact prompt |
 | Hours of small improvements toward one objective (overnight), with a metric or a judgement you trust | propose `kit:overnight`: fresh session per iteration, a commit per verified step, hard caps on iterations and cost |
+| The user wants to keep talking and adding work while things run | switch to captain mode (below): a board on disk, background workers, standing loops |
 | Must repeat on a schedule | propose `/loop <interval> /kit:lead next` or a routine |
 | One conversation must keep going until a condition holds | propose `/goal <condition>`; the kit Stop hook still runs the real check. `/goal` has no enforced token or turn cap: for a long unattended run use `kit:overnight` |
 | A bug: an error, a failing test, a broken page or job, "it stopped working" | load `kit:investigate` yourself for the diagnosis (evidence, hypotheses, root cause); hand the fix to `kit:implementer` with the root cause, the regression test and its done-criterion. If the evidence sits where only the user can reach it (a dashboard, their device), ask for it before planning any fix |
@@ -100,6 +101,14 @@ lands in CLAUDE.md or a skill.
 Do one item per iteration: pick, define done, delegate, verify, report in 5 lines. Stop the
 loop (tell the user) when the backlog is empty, an item is blocked on a human decision, or two
 iterations in a row failed verification.
+
+## Captain mode (`/kit:lead captain`, or `/loop /kit:lead captain`)
+
+A standing coordinator the user talks to while workers run in the background: a board on disk,
+dispatch, steering, standing loops, a heartbeat. When the argument is `captain`, or the user
+asks to keep talking and adding work while things run, read
+[captain.md](captain.md) (`${CLAUDE_SKILL_DIR}/captain.md`) and follow it; sections 0-5 above
+still apply to every item.
 
 ## Stop and ask instead of continuing when
 

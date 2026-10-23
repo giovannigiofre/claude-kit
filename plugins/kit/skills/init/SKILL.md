@@ -37,6 +37,10 @@ The kit hooks do nothing until `.claude/kit.json` exists. Build it from evidence
 7. **lead**: `read` = the 1-3 files a lead should read before planning (backlog, decision log),
    `backlog` = where the next work item comes from, `notes` = one line of project-specific
    orchestration advice.
+   For captain mode, optionally: `ship` (`local-only`, `pr` or `pr+babysit`), `parallel` (default
+   3), `budget` (`{"items": N}` or `"none"`), `board` (default `.claude/lead/board.md`) and `loops`
+   (`[{"name", "every", "run"}]`, e.g. PR babysitting every 10m). Add `.claude/lead/` to
+   `.gitignore` unless the user wants the board shared.
 8. Write `.claude/kit.json`, show it to the user, and explain that it is committed with the repo
    so every clone and every session gets the same gates.
 9. **Permissions.** Propose (do not silently add) allow rules in `.claude/settings.json` for the

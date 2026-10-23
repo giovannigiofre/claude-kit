@@ -133,7 +133,11 @@ scope never changes a project you haven't opted in.
   "lead": {
     "read": ["docs/backlog.md"],
     "backlog": "where the next work item comes from",
-    "notes": "one line of project-specific orchestration advice"
+    "notes": "one line of project-specific orchestration advice",
+    "ship": "pr+babysit",
+    "parallel": 3,
+    "budget": "none",
+    "loops": [{"name": "babysit-prs", "every": "10m", "run": "/kit:go babysit"}]
   }
 }
 ```
@@ -162,6 +166,9 @@ scope never changes a project you haven't opted in.
   over it (as in Claude Code); default 300000. Put
   `{"context": {}}` in `~/.claude/kit.json` to have it in every project whose `kit.json` (if any)
   has no `context` key. Without either, the guard and the re-injection stay off.
+- `lead.ship`, `lead.parallel`, `lead.budget`, `lead.board` and `lead.loops` configure captain
+  mode (below); all optional, and the captain asks for what is missing. `budget` is
+  `{"items": N}` or `"none"`.
 - `protect` modes:
   - `read-only` blocks every edit.
   - `no-overwrite` lets Claude create new files but blocks edits to existing ones.
@@ -331,6 +338,17 @@ In a running session, run `/reload-plugins`. When you change behaviour, bump `ve
 4. If you corrected it along the way, type `/kit:learn`. Once a week, `/kit:learn sweep`.
 5. At the end of the day, run `/kit:techdebt`.
 
+**Or talk to a captain.** `/kit:lead captain` (or `/loop /kit:lead captain` for a self-paced
+heartbeat) turns the session into a standing coordinator. You keep talking in plain language:
+"fix the login redirect", "also find out why the export is slow", "drop the CSV thing",
+"status". Each message becomes items on a board (`.claude/lead/board.md`), workers run in the
+background in their own worktrees, the verifier checks each one, finished work goes through the
+`/kit:go` steps to a PR, and standing loops (PR babysitting every 10 minutes, say) run beside
+it. Control comes back to you after every reply; decisions that need you are batched under
+NEEDS YOU. This is Boris Cherny's idea that loops do the prompting while he talks to one
+coordinating Claude, built from the kit's pieces. Start it in a terminal you keep open (or the
+desktop app) and turn on Remote Control to talk to it from your phone.
+
 You can also skip the lead for small things. Write the request and add `/kit:go` at the end
 ("fix the typo in the footer /kit:go"), the way Boris writes "Claude do blah blah /go".
 
@@ -481,6 +499,7 @@ change that comes without an eval result. The `picks-llm-skill`, `builds-llm-too
 |---|---|
 | Turn a messy idea into a clear, launchable goal | just write it (auto) or `/kit:shape` |
 | One conversation that drives a goal to done | `/kit:lead <goal>` |
+| Keep talking and adding work while it runs: a coordinator with a board, background workers and standing loops | `/kit:lead captain` (`/loop /kit:lead captain` for a heartbeat) |
 | A few independent changes at once | the lead with implementers in worktrees (automatic) |
 | 5–100 similar items, or results cross-checked | `/kit:ship`, `/kit:review`, or ask for "a workflow" |
 | Keep going until a condition holds | `/goal <condition>` (+ the Stop hook); no enforced token or turn cap |
@@ -558,7 +577,7 @@ needed.**
 |---|---|---|
 | `/kit:intake <repo or name>` | Runs the four checks on a candidate, writes the `CATALOG.md` row and proposes a pinned marketplace entry and a trial | built (0.2.0) |
 | Verifier memory | `kit:verifier` has `memory: project`: it reads and adds recurring pitfalls per repo | built (0.2.0) |
-| Kit evals (`plugins/kit/evals/`) | `verifier-catches-bug` (claimed-done change with a bug) and `lead-verifies-before-done` (a small goal driven to done must include verification evidence); `picks-llm-skill` and `optimize-needs-evals` (LLM-quality requests reach `kit:llm-evals` / `kit:prompt-optimize`, and nobody tunes a prompt without a measure); `builds-llm-tool`, `llm-edit-detected` and `injection-aware` (0.7.0: a new tool keeps arithmetic in code with a strict schema and an eval case; an LLM file edit with no LLM words in the prompt still reaches `kit:llm-build`; web search plus private data plus rendered links is treated as the lethal trifecta) | built; see §5 for how to run (0.7.0 cases not yet run). 0.8.0: `investigate-asks-for-evidence` (a production failure with console-only logs: the answer asks once for exports of a failing and a working run, with the query, before any fix) and `investigate-logs-root-cause` (log exports plus a repo: the fix lands where the bad data enters, with a regression test), not yet run. 0.10.0: `go-reports-risk-and-evidence` (`/kit:go` on a finished CLI change: intent, evidence from running the CLI and not only the unit test, a risk rating) and `overnight-sets-budget` (an "overnight" request reaches `kit:overnight` with a gate, a stop condition and an explicit budget choice), not yet run. `kit:overnight`'s runner has a stdlib self-check with a fake agent: `python3 plugins/kit/skills/overnight/tests/test_overnight.py` |
+| Kit evals (`plugins/kit/evals/`) | `verifier-catches-bug` (claimed-done change with a bug) and `lead-verifies-before-done` (a small goal driven to done must include verification evidence); `picks-llm-skill` and `optimize-needs-evals` (LLM-quality requests reach `kit:llm-evals` / `kit:prompt-optimize`, and nobody tunes a prompt without a measure); `builds-llm-tool`, `llm-edit-detected` and `injection-aware` (0.7.0: a new tool keeps arithmetic in code with a strict schema and an eval case; an LLM file edit with no LLM words in the prompt still reaches `kit:llm-build`; web search plus private data plus rendered links is treated as the lethal trifecta) | built; see §5 for how to run (0.7.0 cases not yet run). 0.8.0: `investigate-asks-for-evidence` (a production failure with console-only logs: the answer asks once for exports of a failing and a working run, with the query, before any fix) and `investigate-logs-root-cause` (log exports plus a repo: the fix lands where the bad data enters, with a regression test), not yet run. 0.10.0: `go-reports-risk-and-evidence` (`/kit:go` on a finished CLI change: intent, evidence from running the CLI and not only the unit test, a risk rating) and `overnight-sets-budget` (an "overnight" request reaches `kit:overnight` with a gate, a stop condition and an explicit budget choice) and `lead-captain-dispatches` (captain mode turns one message into board items and background workers, at most `parallel` at once, with short status replies), not yet run. `kit:overnight`'s runner has a stdlib self-check with a fake agent: `python3 plugins/kit/skills/overnight/tests/test_overnight.py` |
 
 First eval result (2026-10-16, one run per arm): `verifier-catches-bug` scored 1.00 with the
 kit and 1.00 without (delta 0). The planted bug is obvious enough that Claude catches it either
@@ -632,11 +651,16 @@ Rules for changing the kit:
   https://x.com/bcherny/status/2007179833990885678
 - `/go`: https://x.com/bcherny/status/2044847858634064115
 - `/loop`: https://x.com/bcherny/status/2038454341884154269
+- Loops instead of prompts: Boris Cherny on his loops (`/loop 5m /babysit`, `/loop 30m
+  /slack-feedback`, `/loop /post-merge-sweeper`, `/loop 1h /pr-pruner`; turn workflows into
+  skills, then loop them): https://x.com/bcherny/status/2038454341884154269 ; interview report:
+  https://officechai.com/ai/i-now-just-write-loops-to-prompt-claude-code-claude-code-creator-boris-cherny/
 - Kun Chen, "L8 Principal's Agentic Engineering Workflow" (June 2026):
   https://www.youtube.com/watch?v=iQyg-KypKAA. Methods adapted (nothing copied, all MIT):
   no-mistakes (https://github.com/kunchenguid/no-mistakes) for `/kit:go` and `/kit:review`,
   gnhf (https://github.com/kunchenguid/gnhf) for `kit:overnight`, AXI (https://axi.md) for the
-  `kit:llm-build` tool checklist, "Your AGENTS.md is a Neural Net"
+  `kit:llm-build` tool checklist, firstmate (https://github.com/kunchenguid/firstmate) for captain
+  mode, "Your AGENTS.md is a Neural Net"
   (https://blog.kunchenguid.com/p/your-agentsmd-is-a-neural-net) for `/kit:learn`.
 - Workflows: https://x.com/bcherny/status/2060048877944778995
 - Claude Code docs:

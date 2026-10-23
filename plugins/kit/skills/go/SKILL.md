@@ -1,8 +1,8 @@
 ---
 name: go
-description: Finishes work end to end - intent, sync with base, live evidence, review, risk rating, commit, PR, then watches CI until green. Use when the user appends "/go" or says the work is ready to ship; "/kit:go babysit <PR>" only watches a PR.
+description: Finishes work end to end - intent, sync with base, live evidence, review, risk rating, commit, PR, then watches CI until green. Use when the user appends "/go" or says the work is ready to ship; "/kit:go babysit [PR]" only watches open PRs.
 disable-model-invocation: true
-argument-hint: "[optional: what was built, PR title hint, 'no-pr', 'no-babysit', 'babysit <PR>']"
+argument-hint: "[optional: what was built, PR title hint, 'no-pr', 'no-babysit', 'babysit [PR]']"
 ---
 
 # /go: from first-pass code to a clean, verified PR
@@ -15,7 +15,8 @@ read the diff to decide whether to read the diff.
 (Method adapted from kunchenguid/no-mistakes, MIT: intent first, rebase before review, live
 evidence, findings with an action, risk assessment, CI babysitting. Nothing copied.)
 
-If the arguments are `babysit <PR>`, skip to step 9.
+If the arguments are `babysit [PR]`, skip to step 9 (no PR number = each open PR of yours in
+this repo, from `gh pr list --author @me`).
 
 1. **Finish the work first.** If the request this was appended to is not done yet, do it now.
 2. **Intent.** Write 2-5 lines: what the user asked for and why, the constraints they gave, and
