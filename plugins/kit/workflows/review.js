@@ -28,8 +28,9 @@ const LENSES = input.lenses || [
 
 const SCOPE = {
   type: 'object',
-  required: ['changed', 'intent', 'declined'],
+  required: ['root', 'changed', 'intent', 'declined'],
   properties: {
+    root: { type: 'string', description: 'absolute path of the repo root (git rev-parse --show-toplevel)' },
     changed: { type: 'array', items: { type: 'string' }, description: 'every changed file path, relative to the repo root' },
     intent: { type: 'string', description: 'what the change is for, 2-4 lines' },
     declined: { type: 'array', items: { type: 'string' }, description: 'findings already declined, one line each' },
@@ -96,7 +97,7 @@ const results = await pipeline(
   lens => agent(`Review the changes on the current branch versus ${BASE} (committed and uncommitted) through this lens only:
 ${lens}${FOCUS}${CONTEXT}
 Judge the change against its intent, not against the commit messages: what the author says the code does is a claim to check.
-Read every changed file that matters for this lens and list them in reviewed_paths.
+Read every changed file that matters for this lens and list them in reviewed_paths, as paths relative to the repo root.
 Report only real problems with a concrete failure scenario. An empty list is a fine answer.`,
     { label: `find:${lens.split(':')[0]}`, phase: 'Find', schema: FINDINGS }),
   (found, lens) => parallel((found ? found.findings : []).map(f => () =>
@@ -116,10 +117,15 @@ const disputed = all.filter(f => f.upheld === 1)
 const rank = { high: 0, medium: 1, low: 2 }
 confirmed.sort((a, b) => rank[a.severity] - rank[b.severity])
 
-// A changed file no lens read is not certified by a clean review. Agents write paths in
-// different shapes (./x, a/x, /abs/repo/x): compare on the normalised tail.
-const norm = p => String(p).trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/^[ab]\//, '')
-const sameFile = (a, b) => { const x = norm(a), y = norm(b); return x === y || x.endsWith('/' + y) || y.endsWith('/' + x) }
+// A changed file no lens read is not certified by a clean review. Agents write paths as
+// ./x or /abs/repo/x: strip those prefixes, then require the same repo-relative path.
+const ROOT = scope && scope.root ? String(scope.root).replace(/\\/g, '/').replace(/\/+$/, '') + '/' : null
+const norm = p => {
+  let x = String(p).trim().replace(/\\/g, '/')
+  if (ROOT && x.startsWith(ROOT)) x = x.slice(ROOT.length)
+  return x.replace(/^(\.\/)+/, '')
+}
+const sameFile = (a, b) => norm(a) === norm(b)
 const reviewedPaths = lensResults.flatMap(r => r.reviewed || [])
 const failedLenses = lensResults.filter(r => r.failed).map(r => r.lens)
 const notCovered = scope ? CHANGED.filter(c => !reviewedPaths.some(r => sameFile(c, r))) : null

@@ -209,7 +209,10 @@ def main(argv=None):
     p.add_argument("--agent-cmd", default=os.environ.get("KIT_OVERNIGHT_AGENT", "claude"))
     p.add_argument("--resume", help="run directory of an earlier run to continue")
     p.add_argument("--dry-run", action="store_true", help="print the plan and the first prompt, run nothing")
+    argv = sys.argv[1:] if argv is None else list(argv)
     args = p.parse_args(argv)
+    given = {a.dest for a in p._actions
+             if any(tok.split("=", 1)[0] in a.option_strings for tok in argv if tok.startswith("-"))}
 
     root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel"))
     main_checkout = root
@@ -220,7 +223,7 @@ def main(argv=None):
         for key, val in state["args"].items():  # a flag given now wins; an omitted one keeps the saved value
             if key in ("resume", "dry_run"):
                 continue
-            if getattr(args, key, None) == p.get_default(key):
+            if key not in given:
                 setattr(args, key, val)
         state["failures"] = 0  # a resumed run gets a fresh failure streak
         state["stop_reason"] = None

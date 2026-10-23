@@ -107,8 +107,8 @@ iterations in a row failed verification.
 A standing coordinator the user talks to while workers run in the background: a board on disk,
 dispatch, steering, standing loops, a heartbeat. When the argument is `captain`, or the user
 asks to keep talking and adding work while things run, read
-[captain.md](captain.md) (`${CLAUDE_SKILL_DIR}/captain.md`) and follow it; sections 0-5 above
-still apply to every item.
+[captain.md](captain.md) (`${CLAUDE_SKILL_DIR}/captain.md`) and follow it. Sections 0-3 above
+apply to every item; captain.md replaces sections 4 and 5.
 
 ## Stop and ask instead of continuing when
 

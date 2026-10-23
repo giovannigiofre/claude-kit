@@ -244,6 +244,18 @@ def test_resume_resets_the_failure_streak():
     assert len(end2["commits"]) == 2 and end2["stop_reason"].startswith("stop condition met"), end2
 
 
+def test_resume_flag_with_default_value_wins():
+    d, fake = repo(["noop"] * 12)
+    _, end, run_dir = run(d, fake, "--max-failures", "5")
+    assert end["iteration"] == 5, end
+    out = subprocess.run([sys.executable, str(SCRIPT), "--resume", str(run_dir), "--max-failures", "3",
+                          "--agent-cmd", f"{sys.executable} {fake}"],
+                         cwd=d, capture_output=True, text=True, timeout=120, env=env(d))
+    assert out.returncode == 0, out.stderr
+    end2 = json.loads((run_dir / "end-state.json").read_text())
+    assert end2["iteration"] == 8, end2  # 3 more, not 5
+
+
 def test_dry_run_creates_nothing():
     d, fake = repo(["change"])
     out = subprocess.run([sys.executable, str(SCRIPT), "x", "--dry-run", "--agent-cmd", "false"],
