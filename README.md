@@ -114,9 +114,16 @@ That registers the marketplace and installs `kit` at user scope. `kit-ui` and `k
 installed per project when the kit offers them, or by hand:
 `claude plugin install kit-llm@claude-kit --scope project`.
 
-Recommended in `~/.claude/settings.json` (auto mode is already the default on Pro and Max):
-`"attribution": {"commit": "", "pr": "", "sessionUrl": false}` so commits and PRs carry no Claude
-trailer, footer or session link (you are the only author); system notifications on; `"env": {"CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "4"}` if you want a
+**On every machine, the kit sets itself up.** At the first session (or in `install.sh`), Claude
+explains and asks once to add two things to `~/.claude/settings.json`, which no plugin or project
+file can set: `"attribution": {"commit": "", "pr": "", "sessionUrl": false}` (no Claude trailer,
+footer or session link: you are the only author) and an `autoMode.allow` rule that lets agents
+rewrite and force-push, with lease, the branches they created. On yes it merges them in (with a
+backup, other keys kept); on no it never asks again on that machine
+(`hooks/scripts/machine_setup.py --apply | --decline | --check`).
+
+Also worth having in `~/.claude/settings.json` (auto mode is already the default on Pro and Max):
+system notifications on; `"env": {"CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "4"}` if you want a
 hard cap on parallel threads. To change the mode default everywhere, put `{"mode": "light"}`
 (or `"loop"`) in `~/.claude/kit.json`; `/kit-mode` sets it per project.
 

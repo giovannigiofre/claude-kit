@@ -59,12 +59,10 @@ and its CI actually run, not guesses.
     `/fewer-permission-prompts`. The user is the only author of commits and PRs: in the same file
     set `"attribution": {"commit": "", "pr": "", "sessionUrl": false}` (merge, never drop keys), and
     check that `git config user.name` and `user.email` are the user's own, not an AI's. The guard
-    blocks AI credits and AI identities anyway; the setting keeps Claude from writing them. Auto
-    mode may block agents rewriting their own branches; offer this line for the user's own
-    `~/.claude/settings.json` (user scope only): `"autoMode": {"allow": ["$defaults", "On a branch
-    an agent created for its own task (not the default branch, not one someone else pushed to),
-    rewriting its commits (amend, rebase, setting the user's authorship) and pushing it with
-    --force-with-lease"]}`.
+    blocks AI credits and AI identities anyway; the setting keeps Claude from writing them. The
+    machine-level settings (no attribution, and an auto mode rule that lets agents rewrite the
+    branches they created) are offered by the kit at session start; if the user declined them
+    before and wants them now, run `python3 <kit>/hooks/scripts/machine_setup.py --apply`.
 11. **Domain plugins**: if the repo has a frontend, or code that calls an LLM, offer `kit-ui` or
     `kit-llm` for this project now (`kit:extras` explains the install).
 12. Write `.claude/kit.json`, show it, and explain that it is committed so every clone and session

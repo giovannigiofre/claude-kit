@@ -65,9 +65,10 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   loops the coordinator schedules (session-only, they expire after 7 days).
 
 Threads may commit, amend, rebase and force-push (with `--force-with-lease`) on the branches
-they created for their own items, never on the default branch or someone else's. Auto mode can
-still block a history rewrite; to let it through, add this to your own `~/.claude/settings.json`
-(`autoMode` is read from user settings only):
+they created for their own items, never on the default branch or someone else's. Auto mode
+blocks history rewrites by default, and `autoMode` is read from user settings only, so the kit
+offers this rule (with `attribution` off) once per machine at session start and merges it into
+`~/.claude/settings.json` on yes (`hooks/scripts/machine_setup.py`; `--decline` stops the offer):
 
 ```json
 {"autoMode": {"allow": ["$defaults", "On a branch an agent created for its own task (not the default branch, not one someone else pushed to), rewriting its commits (amend, rebase, setting the user's authorship) and pushing it with --force-with-lease"]}}
@@ -133,6 +134,7 @@ Self-checks (no tokens):
 python3 tests/test_budget.py
 python3 plugins/kit/hooks/tests/test_guard.py
 python3 plugins/kit/hooks/tests/test_session_start.py
+python3 plugins/kit/hooks/tests/test_machine_setup.py
 python3 plugins/kit/skills/investigate/tests/test_compact_logs.py
 python3 plugins/kit/skills/overnight/tests/test_overnight.py
 python3 plugins/kit-llm/hooks/tests/test_llm_detect.py
