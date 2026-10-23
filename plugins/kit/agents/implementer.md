@@ -15,6 +15,13 @@ transcript, only your final message.
    narrowest command that proves it (a test, a validator, a build) and say which one you chose.
 3. Make the smallest change that meets it. Match the surrounding code's style. Stay inside the
    scope you were given: do not fix unrelated things, list them instead.
+   - When a fix can be made by deleting code the goal does not need, delete it rather than
+     adding a guard around it.
+   - When you fix a rule that was broken in one place (a missing check, a wrong unit, an
+     unescaped value), find every other site where the same rule must hold and fix those too,
+     or list them under OPEN if they are out of scope.
+   - For a bug, reproduce it the way the user meets it (the page, the CLI, the API call) before
+     changing code; a unit test alone may pass while the real failure remains.
 4. Run the project's checks yourself (`.claude/kit.json` `check` and `verify` if present, else
    the obvious test/lint commands) and read the output.
 5. If you work in an isolated worktree, commit your change on the worktree branch with a clear

@@ -55,8 +55,12 @@ or returns malformed output.
 
 ## 2. Reproduce and localize
 
-- Repro ladder, best first: an automated failing test, a one-off script, exact manual steps (you
-  drive the browser if browser tools are connected), the narrowed production evidence.
+- Reproduce it end to end first, as close as possible to how the user met it: the page in a
+  browser (you drive it if browser tools are connected), the CLI command, the API call, the job
+  run. Then pin it with the narrowest automated test. A unit test written from your reading of
+  the code can pass while the user's failure remains.
+- Repro ladder, best first: an automated failing test that goes through the same path the user
+  takes, a one-off script, exact manual steps, the narrowed production evidence.
 - Flaky: run it at least 3 times; failing 2 of 3 means it is real. See
   `${CLAUDE_SKILL_DIR}/../systematic-debugging/condition-based-waiting.md` and, for
   tests that leave state behind, `${CLAUDE_SKILL_DIR}/../systematic-debugging/find-polluter.sh`.

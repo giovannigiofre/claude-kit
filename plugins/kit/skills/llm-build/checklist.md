@@ -20,6 +20,9 @@ the diff, a test or an eval result. Source keys are listed at the end.
 - [ ] Input schemas are strict (types, enums, required fields), and inputs are validated in code before running [TOOLS, SO]
 - [ ] Errors come back as short, actionable messages the model can act on [TOOLS, 12F]
 - [ ] Results are compact, with stable ids for citation; long results are paginated or truncated with a note [TOOLS]
+- [ ] Agent ergonomics of each tool's output: a few fields per item by default with a flag or argument for the full record; truncated text says how much was cut; counts and statuses are precomputed so the agent does not page to count; an empty result says "0 results" instead of returning nothing; the output names the useful next call [AXI]
+- [ ] Tools never prompt interactively, repeating a call is safe (idempotent writes), and unknown arguments fail loudly with a structured error and exit code [AXI, 12F]
+- [ ] Where a CLI and an MCP server both reach the same system (GitHub, a browser), the choice is measured on success rate, tokens and turns for the real tasks, not assumed [AXI, EVALS]
 - [ ] Irreversible or costly actions (send, pay, delete, write) are gated: confirmation, allowlist or a human [OAI, TOOLS]
 - [ ] Tool selection is covered by eval cases (right tool, sensible arguments) [TOOLS, EVALS]
 
@@ -93,6 +96,7 @@ the diff, a test or an eval result. Source keys are listed at the end.
 - VV: Shankar et al., Who Validates the Validators?: https://arxiv.org/abs/2404.12272
 - RAGAS: https://docs.ragas.io/
 - LT: Simon Willison, The lethal trifecta: https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/
+- AXI: Kun Chen, AXI (agent experience interface) design principles, MIT: https://axi.md, https://github.com/kunchenguid/axi (its benchmarks are the author's own: treat them as a hypothesis to test)
 - PI: Beurer-Kellner et al., Design Patterns for Securing LLM Agents against Prompt Injections: https://arxiv.org/abs/2506.08837
 - OWASP: OWASP Top 10 for LLM Applications 2025: https://genai.owasp.org/llm-top-10/
 - PF: promptfoo (MIT): https://github.com/promptfoo/promptfoo

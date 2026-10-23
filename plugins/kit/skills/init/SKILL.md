@@ -31,15 +31,29 @@ The kit hooks do nothing until `.claude/kit.json` exists. Build it from evidence
    to `.gitignore`, and append a `# Compact instructions` section to CLAUDE.md (3-5 lines: keep
    the goal, decisions and user preferences, in-flight work, failing checks and file paths;
    drop tool output already acted on). Skip any part the project already has.
+   Also add `.claude/evidence/` (live evidence from `/kit:go` and the verifier) and
+   `.claude/overnight/` (run logs of `kit:overnight`) to `.gitignore`. `.claude/review-decisions.md`
+   (findings the user declined) stays committed, so every clone's reviews skip them.
 7. **lead**: `read` = the 1-3 files a lead should read before planning (backlog, decision log),
    `backlog` = where the next work item comes from, `notes` = one line of project-specific
    orchestration advice.
-8. Write `.claude/kit.json`, show it to the user, and explain that it is committed with the repo
+   For captain mode, optionally: `ship` (`local-only`, `pr` or `pr+babysit`), `parallel` (default
+   3), `budget` (`{"items": N}` or `"none"`), `board` (default `.claude/lead/board.md`) and `loops`
+   (`[{"name", "every", "run"}]`, e.g. PR babysitting every 10m). Add `.claude/lead/` to
+   `.gitignore` unless the user wants the board shared.
+8. **Safety.** Explain in three lines: the kit guard is on with `kit.json` (blocks deletes
+   outside the repo, pushes to main, discarding uncommitted work, `sudo`, `curl | sh`, reading
+   credentials; best effort, it reads shell text); offer `{"guard": "on"}` in `~/.claude/kit.json` to cover every project, and a
+   subagent cap (`guard.agentsAsk`/`agentsDeny`) only if the user wants one. Then ask which
+   profile this project uses: **Host** (no OS sandbox) or **Sandbox** (Bash sandbox in
+   `.claude/settings.local.json`, written by `/kit-safety sandbox` or the panel). Recommend auto
+   mode in the user's `~/.claude/settings.json`; propose, never write it silently.
+9. Write `.claude/kit.json`, show it to the user, and explain that it is committed with the repo
    so every clone and every session gets the same gates.
-9. **Permissions.** Propose (do not silently add) allow rules in `.claude/settings.json` for the
+10. **Permissions.** Propose (do not silently add) allow rules in `.claude/settings.json` for the
    read-only and check/verify commands, so long runs are not interrupted. If the built-in
    `/fewer-permission-prompts` skill is available, suggest running it.
-10. Confirm the hooks fire: make a trivial edit to a file matching an `onEdit` glob and revert
+11. Confirm the hooks fire: make a trivial edit to a file matching an `onEdit` glob and revert
    it, and report what ran.
 
 Schema:
