@@ -88,6 +88,18 @@ def kit_gate(root):
     return cfg.get("verify") or cfg.get("check")
 
 
+def sandbox_settings(checkout):
+    """The project's sandbox block from .claude/settings.local.json (where the kit's Safety:
+    Sandbox, or /sandbox, writes it), when it is on. A worktree does not carry that untracked
+    file, so the runner passes the block to each iteration with --settings."""
+    try:
+        local = json.loads((Path(checkout) / ".claude" / "settings.local.json").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    block = local.get("sandbox") if isinstance(local, dict) else None
+    return block if isinstance(block, dict) and block.get("enabled") is True else None
+
+
 def run_gate(cmd, root, timeout):
     if not cmd:
         return True, "no gate configured"
@@ -156,6 +168,8 @@ def run_agent(args, prompt, root, budget_left):
         cmd += ["--permission-mode", args.permission_mode]
     if args.model:
         cmd += ["--model", args.model]
+    if getattr(args, "sandbox_block", None):
+        cmd += ["--settings", json.dumps({"sandbox": args.sandbox_block})]
     per_iter = [b for b in (budget_left, args.iteration_usd) if b is not None]
     if per_iter:
         cmd += ["--max-budget-usd", f"{max(min(per_iter), 0.01):.2f}"]
@@ -206,6 +220,8 @@ def main(argv=None):
     p.add_argument("--worktree", help="run in a new git worktree at this path instead of the current checkout")
     p.add_argument("--permission-mode", help="passed to the agent, e.g. auto or acceptEdits (default: your settings)")
     p.add_argument("--model", help="passed to the agent")
+    p.add_argument("--no-sandbox", action="store_true",
+                   help="do not pass the project's sandbox settings to the iterations")
     p.add_argument("--agent-cmd", default=os.environ.get("KIT_OVERNIGHT_AGENT", "claude"))
     p.add_argument("--resume", help="run directory of an earlier run to continue")
     p.add_argument("--dry-run", action="store_true", help="print the plan and the first prompt, run nothing")
@@ -246,6 +262,7 @@ def main(argv=None):
 
     # the gate comes from the checkout the run starts from (a worktree may not exist yet)
     gate = args.gate or kit_gate(root if root.exists() else main_checkout)
+    args.sandbox_block = None if args.no_sandbox else sandbox_settings(main_checkout)
     notes_path = run_dir / "notes.md"
     caps = [c for c in (args.max_iterations and f"{args.max_iterations} iterations",
                         args.max_usd is not None and f"USD {args.max_usd:.2f}",
@@ -254,6 +271,8 @@ def main(argv=None):
     print(f"overnight: gate {gate or 'none (the agent checks itself)'}; caps: {', '.join(caps) or 'NONE'}"
           f"; stops after {args.max_failures} failures in a row"
           + (f" or when: {args.stop_when}" if args.stop_when else ""))
+    print("overnight: sandbox " + ("on (the project's .claude/settings.local.json, passed with --settings)"
+                                   if args.sandbox_block else "off (host: the kit guard still applies)"))
     if not caps:
         print("overnight: WARNING no budget set - the run ends only on the stop condition, "
               f"{args.max_failures} consecutive failures, or Ctrl-C")

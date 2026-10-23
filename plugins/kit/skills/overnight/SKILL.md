@@ -50,6 +50,10 @@ answer permission prompts; without allow rules or auto mode most iterations fail
 - The gate passes on the starting commit: run it once. A red gate at the start fails every
   iteration.
 - No production credentials in the environment the agent will see.
+- Safety: with the project on **Sandbox** (`/kit-safety sandbox` or the kit panel) the runner
+  passes the Bash sandbox to every iteration, worktrees included (`--no-sandbox` to skip); on
+  **Host** the kit guard still blocks irreversible actions. For `--permission-mode
+  bypassPermissions`, only inside a microVM or devcontainer, never on the bare machine.
 - Dry run to show the plan and the first prompt:
   `python3 ${CLAUDE_SKILL_DIR}/scripts/overnight.py "<objective>" --stop-when "<condition>" <caps> --dry-run`
   (if `${CLAUDE_SKILL_DIR}` is not substituted, the script is in `scripts/` next to this file).

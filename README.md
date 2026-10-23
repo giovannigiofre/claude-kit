@@ -70,6 +70,33 @@ on its own.
 Your time goes to the two ends: saying clearly what you want, and judging the PR. The middle is
 the loops' job.
 
+**The kit panel.** `/kit-panel` opens a pane beside the chat (it opens by itself in loop mode),
+and the status line always shows the summary (`kit loop · host · $1.20 · 2 running · 1 need you`):
+- **Mode**, per project: **Light** (a normal session, as before captain mode existed; the lead
+  only when you call it) or **Loop** (every message goes to the lead in captain mode). Press the
+  button, or `/kit-mode light|loop`. A personal default goes in `~/.claude/kit.json` as
+  `{"mode": "loop"}`.
+- **Safety**, per project: **Host** or **Sandbox** (below). Button, or `/kit-safety host|sandbox`.
+- **What runs**: session cost and context, the 5-hour and weekly limits, every agent with its
+  tokens, the captain's board with NEEDS YOU first, overnight runs (iteration, commits, cost),
+  scheduled loops.
+
+**Safety: two profiles, one guard.**
+- **Host** (your personal Mac): no OS sandbox, commands run on the machine as you. The kit
+  guard still blocks what can't be undone or leaks credentials: recursive deletes outside the
+  repo, pushes or force pushes to main, `git reset --hard`/`clean` over uncommitted work, `sudo`,
+  `curl … | sh`, reading `~/.ssh`, `~/.aws`, gh/docker/kube config or the keychain.
+- **Sandbox** (overnight runs, unfamiliar repos): the same guard, plus Claude Code's Bash sandbox
+  in `.claude/settings.local.json`: writes only inside the project and temp, network only to
+  GitHub, npm, PyPI and the Anthropic API (new hosts are asked for, or reviewed in auto mode),
+  credential folders unreadable, no unsandboxed fallback. `kit:overnight` passes it to every
+  iteration, worktrees included.
+- **Full isolation**, for `--dangerously-skip-permissions` only: a microVM (Docker Sandboxes) or
+  a devcontainer. Never on the bare Mac.
+
+Auto mode (`"permissions": {"defaultMode": "auto"}` in `~/.claude/settings.json`) sits on top of
+either profile: it reviews each action, the guard and the sandbox are the hard limits.
+
 **First time with a new piece?** Try it small: one overnight iteration
 (`overnight.py "<objective>" --max-iterations 1`) and the captain on a small repo.
 
@@ -115,6 +142,10 @@ the loops' job.
     turn.complete (hooks module compact.ts) → past `compactAt` (80 %) with a current handoff note,
                        compacts the conversation at the end of the turn, no /compact needed
     Stop         → runs the fast `check`; if it fails, Claude must keep fixing (max 3 tries)
+    PreToolUse   → guard: blocks irreversible or credential-leaking actions (Bash, Read, Grep,
+                   Glob) whatever the permission mode; optional cap on subagents per session
+  Hooks module (kit.tsx), in every session: the kit panel and status line, light/loop mode,
+    host/sandbox safety, tokens per agent; the end-of-turn compaction
 ```
 
 ### What's in the plugin (`plugins/kit/`)
@@ -143,7 +174,8 @@ the loops' job.
 | Agent | `kit:plan-reviewer` | Reviews a plan as a "staff engineer" before any code is written |
 | Workflow | `/kit:ship` | Runs N tasks in parallel worktrees: implement → verify → fix loop |
 | Workflow | `/kit:review` | Reviews the branch through 6 lenses (the `llm` lens only reports when the diff touches LLM code); 2 skeptics try to refute each finding; each finding carries an action; reports changed files no lens read, and a risk rating. Skips findings you declined in `.claude/review-decisions.md` |
-| Hooks | (automatic) | `shape_detect`, `session_start`, `context_guard`, `protect`, `on_edit`, `llm_detect`, `stop_check` |
+| Hooks | (automatic) | `shape_detect`, `session_start`, `context_guard`, `protect`, `guard`, `on_edit`, `llm_detect`, `stop_check` |
+| Mod | `/kit-panel`, `/kit-mode`, `/kit-safety` | `hooks/kit.tsx` (+ `panel.tsx`, `compact.ts`): pane beside the chat and status line; light/loop mode per project; host/sandbox safety per project; tokens per agent; captain board, overnight runs, loops. Needs Claude Code with mods (2.1.287+) |
 
 ### Two layers: generic and project-specific
 
@@ -177,6 +209,7 @@ scope never changes a project you haven't opted in.
     {"glob": "data/raw/**", "mode": "no-overwrite", "reason": "raw files are immutable"},
     {"glob": "vendor/**", "mode": "read-only", "reason": "vendored code"}
   ],
+  "guard": {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40, "allowCommands": []},
   "shape": "ask",
   "llm": "on",
   "context": {"window": 300000, "warnAt": 0.7, "compactAt": 0.8, "handoff": ".claude/handoff.md"},
@@ -219,6 +252,12 @@ scope never changes a project you haven't opted in.
 - `lead.ship`, `lead.parallel`, `lead.budget`, `lead.board` and `lead.loops` configure captain
   mode (below); all optional, and the captain asks for what is missing. `budget` is
   `{"items": N}` or `"none"`.
+- `guard`: on by default in a project with `kit.json`; `"off"` turns it off. Options:
+  `protectedBranches` (default main, master and the remote's default branch), `agentsAsk` /
+  `agentsDeny` (optional cap on subagents per session: ask past one, refuse past the other;
+  leave both out for no cap), `allowCommands` (regexes of commands the guard lets through).
+  `{"guard": "on"}` in `~/.claude/kit.json` guards every project, also those without a
+  `kit.json`.
 - `protect` modes:
   - `read-only` blocks every edit.
   - `no-overwrite` lets Claude create new files but blocks edits to existing ones.
@@ -677,6 +716,9 @@ Hook and script self-checks (no tokens):
 python3 plugins/kit/hooks/tests/test_context.py && python3 plugins/kit/hooks/tests/test_llm_detect.py
 python3 plugins/kit/skills/investigate/tests/test_compact_logs.py
 python3 plugins/kit/skills/overnight/tests/test_overnight.py
+python3 plugins/kit/hooks/tests/test_guard.py
+claude plugin test plugins/kit          # the mod (panel, modes, safety) against the engine
+claude plugin validate plugins/kit
 ```
 
 Test a hook by hand:

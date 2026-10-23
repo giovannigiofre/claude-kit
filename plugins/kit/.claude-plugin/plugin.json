@@ -1,8 +1,9 @@
 {
   "name": "kit",
-  "description": "Lead/orchestrator skill, worker agents, ship/review workflows, a budgeted overnight runner and per-project quality hooks driven by .claude/kit.json",
+  "description": "Lead/captain orchestrator, worker agents, ship/review workflows, a budgeted overnight runner, guardrails, and a panel mod with light/loop mode and host/sandbox safety",
   "version": "0.10.0",
   "author": {
     "name": "giovannigiofre"
-  }
+  },
+  "types": "./types/index.d.ts"
 }

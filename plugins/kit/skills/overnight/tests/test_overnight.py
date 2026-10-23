@@ -31,6 +31,7 @@ counter.write_text(str(n + 1))
 action = plan[n] if n < len(plan) else "noop"
 prompt = sys.argv[sys.argv.index("-p") + 1]
 (state / ".fake_last_prompt").write_text(prompt)
+(state / ".fake_last_argv").write_text(json.dumps(sys.argv[1:]))
 if action == "error":
     print("boom", file=sys.stderr); sys.exit(1)
 if action == "limit":
@@ -254,6 +255,26 @@ def test_resume_flag_with_default_value_wins():
     assert out.returncode == 0, out.stderr
     end2 = json.loads((run_dir / "end-state.json").read_text())
     assert end2["iteration"] == 8, end2  # 3 more, not 5
+
+
+def test_project_sandbox_is_passed_to_iterations():
+    d, fake = repo(["change", "done"])
+    (d / ".claude").mkdir(exist_ok=True)
+    block = {"enabled": True, "network": {"allowedDomains": ["github.com"]}}
+    (d / ".claude" / "settings.local.json").write_text(json.dumps({"sandbox": block}))
+    (d / ".gitignore").write_text(".fake_*\n.claude/settings.local.json\n")
+    subprocess.run(["git", "-C", str(d), "commit", "-qam", "ignore local settings"], check=True)
+    wt = d.parent / f"{d.name}-wt3"
+    out = subprocess.run([sys.executable, str(SCRIPT), "x", "--worktree", str(wt), "--gate", "true",
+                          "--agent-cmd", f"{sys.executable} {fake}"],
+                         cwd=d, capture_output=True, text=True, timeout=120, env=env(d))
+    assert out.returncode == 0 and "sandbox on" in out.stdout, out.stdout + out.stderr
+    argv = json.loads((d / ".fake_last_argv").read_text())
+    assert argv[argv.index("--settings") + 1] == json.dumps({"sandbox": block}), argv
+    d2, fake2 = repo(["done"])
+    out = subprocess.run([sys.executable, str(SCRIPT), "x", "--gate", "true", "--agent-cmd", f"{sys.executable} {fake2}"],
+                         cwd=d2, capture_output=True, text=True, timeout=120, env=env(d2))
+    assert "sandbox off" in out.stdout and "--settings" not in (d2 / ".fake_last_argv").read_text()
 
 
 def test_dry_run_creates_nothing():
