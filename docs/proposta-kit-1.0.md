@@ -8,6 +8,10 @@ Proposta del 23 ottobre 2026, scritta dopo una ricerca su tre fronti:
 
 Il modello di riferimento è **Opus 5.5**. Le fonti sono in fondo. Quelle segnate *[sec.]* sono state lette solo tramite riassunti o mirror.
 
+> **Stato: implementata in kit 1.0** (23 ottobre 2026), tutta in un passaggio invece che a fasi.
+> Cosa è cambiato rispetto al testo qui sotto è nella sezione finale
+> [Come è stata implementata](#come-è-stata-implementata).
+
 ---
 
 ## In breve
@@ -357,3 +361,38 @@ I tuoi eval sono già lo strumento giusto: `claude plugin eval` confronta con e 
 - Mitchell Hashimoto, My AI Adoption Journey (feb 2026) *[sec.]*: https://mitchellh.com/writing/my-ai-adoption-journey
 - OpenAI, Harness engineering (11 feb 2026) *[sec.]*
 - Cognition, Multi-Agents: What's Actually Working (22 apr 2026) *[sec.]*
+
+---
+
+## Come è stata implementata
+
+Differenze rispetto alla proposta, decise con l'utente il 23 ottobre 2026:
+
+- **Claude Projects non è ancora disponibile**, né da terminale né su questo account. Quindi
+  `kit:lead` non è il "captain snello" della §3: è **Claude Projects ricostruito per il
+  terminale**. Ha una conversazione che smista ogni messaggio, un thread in background per ogni
+  pezzo di lavoro (`kit:implementer` nel proprio worktree, che arriva fino alla PR e alla CI
+  verde), una board con gli stati di Projects (`working`, `review`, `needs-you`, `landing`,
+  `done`), regole permanenti dette dall'utente salvate nella board, e una notifica quando un thread
+  finisce mentre l'utente è via. Il loop mode del pannello manda ogni messaggio al coordinatore con
+  una sola riga di contesto. Quando Projects arriverà in CLI, si confronta con `kit:lead` e se ne
+  tiene uno (riga in `CATALOG.md`).
+- **I plugin di dominio si offrono da soli.** La nuova skill `kit:extras` (circa 400 caratteri sempre
+  caricati) riconosce un lavoro UI o LLM in un progetto senza `kit-ui` o `kit-llm` e chiede "Vuoi
+  usare Kit UI/LLM per questo?". Su "sì, per questo progetto" installa il plugin con scope progetto e
+  lo usa subito leggendo la skill dal marketplace, senza `/reload-plugins`.
+- **Nomi tenuti per continuità:** `kit:lead` (come prima, `/loop 30m /kit:lead next` continua a
+  funzionare) e `kit:verifier` (la memoria di progetto dei pitfall è legata al nome). Il verifier
+  cambia ruolo: è una review a contesto pulito al confine del PR, usata per rischio medio o alto.
+- **`kit-llm`** ha due skill invece di quattro: `llm-evals` contiene `prompt-optimize.md` e
+  `model-select.md` come file collegati. Il suo hook è ora attivo dovunque il plugin è
+  installato.
+- **Non fatto:** l'eval a tre bracci "prima di tagliare". I tagli sono stati fatti subito su richiesta
+  dell'utente; gli eval si eseguono ora sul kit 1.0 contro nessun kit.
+
+Misure dopo l'implementazione (`claude plugin details`, stesso metodo per entrambe le versioni):
+il testo sempre caricato del plugin core passa da **circa 2.718 a circa 1.340 token**. Lo strumento
+conta anche le descrizioni delle skill solo-utente, che secondo la documentazione non entrano nel
+contesto: il costo effettivo è circa 870 token. In più spariscono le iniezioni periodiche (il
+richiamo del contesto ogni 5 tool call e il testo di circa 80 parole del loop mode a ogni prompt).
+Il nuovo test `tests/test_budget.py` impedisce di tornare indietro senza accorgersene.

@@ -1,6 +1,0 @@
-schema_version: "1.1"
-name: lead-captain-dispatches
-description: In captain mode, a message with several pieces of work becomes items on a board and background workers, and control comes back to the user with a short status instead of a long foreground run.
-tags: [lead, captain]
-context:
-  scaffold_script: fixture.sh

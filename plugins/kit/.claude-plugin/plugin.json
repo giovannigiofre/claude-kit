@@ -1,7 +1,7 @@
 {
   "name": "kit",
-  "description": "Lead/captain orchestrator, worker agents, ship/review workflows, a budgeted overnight runner, guardrails, and a panel mod with light/loop mode and host/sandbox safety",
-  "version": "0.10.0",
+  "description": "A coordinator you talk to that runs each piece of work in a background thread (worktree, gate, evidence, PR), deterministic gates (check before stop, formatters, protected paths, guard), an overnight runner, debugging and learning, and a panel with light/loop mode and host/sandbox safety",
+  "version": "1.0.0",
   "author": {
     "name": "giovannigiofre"
   },

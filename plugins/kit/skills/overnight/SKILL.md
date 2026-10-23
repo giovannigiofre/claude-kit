@@ -40,7 +40,8 @@ caps, write them in the command and say they are your assumption:
    Ctrl-C. Fine on a subscription the user is happy to spend; say plainly that nothing caps it.
 
 Other knobs: `--max-tokens` (input + cache-write + output), `--iteration-usd` (cap per
-iteration), `--max-failures` (default 3), `--permission-mode auto` (headless sessions cannot
+iteration), `--max-failures` (default 3), `--effort` (`medium` is a good default for small steps;
+raise it only where a run shows it helps), `--permission-mode auto` (headless sessions cannot
 answer permission prompts; without allow rules or auto mode most iterations fail).
 
 ## 3. Check before launching
@@ -70,7 +71,10 @@ python3 <kit>/skills/overnight/scripts/overnight.py "Pretend you are a 7-year-ol
 ```
 
 What each iteration does: one small step, the gate, then commit (`overnight #N: <summary>`)
-or `git reset --hard` + `git clean -fd`. A step that changes nothing counts as a failure. The
+or `git reset --hard` + `git clean -fd`. A step that changes nothing counts as a failure. Each
+iteration's system prompt gets a short note that nobody is there to answer, and an iteration
+that reports progress with no change (an early stop that only announced the next step) is
+resumed with the same session, at most `--max-continuations` times (default 2). The
 agent reports `blocked` when a human decision is needed, which stops the run. Rate limits are
 waited out (`--rate-limit-wait`, default 900 s, up to 4 times in a row).
 
@@ -84,6 +88,6 @@ Run files in `.claude/overnight/<run id>/` (kept out of git through `.git/info/e
 1. Read `end-state.json` (stop reason, commits, cost) and `notes.md`.
 2. `git log --oneline <base>..<branch>`: decide which commits to keep. Drop the rest with an
    interactive rebase or cherry-pick the good ones onto a fresh branch.
-3. Run `/kit:review` on the branch, then `/kit:go` to open the PR with evidence and a risk
-   rating. The overnight commits are first-pass work, not reviewed work.
-4. If a failure repeated in the notes, run `/kit:learn` so the next run avoids it.
+3. Have `kit:verifier` review the branch against the objective, then `/kit:go` to open the PR
+   with evidence and a risk rating. The overnight commits are first-pass work, not reviewed work.
+4. If a failure repeated in the notes, suggest `/kit:learn` so the next run avoids it.

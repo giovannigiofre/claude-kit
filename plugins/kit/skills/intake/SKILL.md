@@ -1,6 +1,7 @@
 ---
 name: intake
 description: Evaluates a third-party skill, plugin or tool before it joins the setup - licence, what it runs as the user, context cost, overlap with the kit - then writes the CATALOG.md entry and proposes a pinned marketplace entry and a trial. Use when the user mentions adopting, installing or trying an outside skill/plugin/tool ("should we use X", "add Y to the kit", "install Z").
+disable-model-invocation: true
 argument-hint: <github owner/repo, URL or name>
 ---
 
@@ -26,19 +27,24 @@ The kit lives at the marketplace named `claude-kit` (find its directory with
    - its always-on text: SessionStart/SubagentStart injections, skill descriptions. Estimate
      the per-session context cost (after a trial install, `claude plugin details <name>` gives
      the real figure).
-4. **Overlap and conflict with the kit.** Compare with `kit:lead`, the kit agents, `/kit:go`,
-   `/kit:review`, and the kit hooks (SessionStart notice, PreToolUse protect, PostToolUse onEdit,
-   Stop check). Two Stop hooks, two formatters or two auto-continue mechanisms fight; say which
-   one should win.
-5. **Claims.** Separate vendor-reported numbers from independent evidence. A vendor benchmark is
+4. **Overlap and conflict.** Compare with Claude Code's built-ins first (`/code-review`,
+   `/simplify`, `/goal`, `/loop`, `/autofix-pr`, agent view, workflows: a third-party copy of a
+   native feature is usually a reject), then with the kit: `kit:lead`, the kit agents, `/kit:go`,
+   and the hooks (SessionStart notice, PreToolUse protect and guard, PostToolUse onEdit, Stop
+   check). Two Stop hooks, two formatters or two auto-continue mechanisms fight; say which one
+   should win.
+5. **Instructions it adds.** Generic behaviour rules ("think step by step", "keep it simple",
+   mandatory TDD or planning) have measurably lowered pass rates and raised cost on current
+   models; count them as a cost, not a feature.
+6. **Claims.** Separate vendor-reported numbers from independent evidence. A vendor benchmark is
    not evidence that it helps in this user's projects.
-6. **Decide a proposal**: `adopted-user`, `adopted-project` (which repos), `vendored`, `trial`
+7. **Decide a proposal**: `adopted-user`, `adopted-project` (which repos), `vendored`, `trial`
    (default for anything plausible), or `rejected`, with the reason in one or two sentences.
-7. **Write it down**: add or update the row in `CATALOG.md` (date = today). For `trial`/adopted
+8. **Write it down**: add or update the row in `CATALOG.md` (date = today). For `trial`/adopted
    plugins, add a marketplace entry pinned to the reviewed commit:
    `{"name": "<name>", "source": {"source": "github", "repo": "<owner/repo>", "sha": "<sha>"}, "description": "..."}`
    and run `claude plugin validate <kit dir>`.
-8. **Propose the trial** (do not run it without the user's go-ahead): the project, the install
+9. **Propose the trial** (do not run it without the user's go-ahead): the project, the install
    command `claude plugin install <name>@claude-kit --scope local`, any config to change
    (e.g. turn off telemetry or ledgers), what to watch for a week, and - if feasible - a
    `claude plugin eval` comparison. Show the diff of CATALOG.md and marketplace.json; commit only
@@ -47,7 +53,7 @@ The kit lives at the marketplace named `claude-kit` (find its directory with
 ## Writing, adapting or rewriting a skill
 
 When the decision means writing skill text - a kit wrapper that orders outside tools (like
-`kit:ui` over impeccable and taste), an `adapted (method only)` skill, a rewrite of a vendored
+`kit-ui:ui` over impeccable and taste), an `adapted (method only)` skill, a rewrite of a vendored
 skill, or a new kit skill - load `skill-creator` (Anthropic, `skill-creator@claude-plugins-official`,
 Apache-2.0, `adopted-user`) and follow its loop instead of writing freehand:
 
@@ -63,5 +69,8 @@ Apache-2.0, `adopted-user`) and follow its loop instead of writing freehand:
 7. Offer the description optimization loop (`scripts/run_loop.py`) for skills that must
    trigger on their own.
 
-Kit conventions still apply: kit skills live in `plugins/kit/skills/<name>/`, keep `evals/`
-in the repo, add a row to README §1 and, for wrappers, to CATALOG.md.
+Kit conventions still apply: generic skills live in `plugins/kit/skills/<name>/`, domain skills
+in a domain plugin (`plugins/kit-ui`, `plugins/kit-llm`, or a new `kit-<domain>` that
+`kit:extras` then offers); keep `evals/` in the repo, add a row to the README and, for wrappers,
+to CATALOG.md. Run `python3 tests/test_budget.py` from the kit repo: it fails when the kit's
+always-loaded text grows past its budget.

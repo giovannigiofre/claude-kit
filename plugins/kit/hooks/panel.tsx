@@ -1,13 +1,14 @@
 // The kit panel: one place to switch how the session works and to see what runs.
 //
 // - Mode, per project: `light` (a normal session; the lead only when asked) or `loop` (every
-//   prompt is handled by the lead in captain mode). Stored in $.store; a personal default can
-//   live in ~/.claude/kit.json as {"mode": "loop"}.
+//   prompt goes to the coordinator, kit:lead). Stored in $.store; a personal default can live in
+//   ~/.claude/kit.json as {"mode": "loop"}.
 // - Safety, per project: `host` (no OS sandbox; the kit's guard hook still blocks the
 //   irreversible actions) or `sandbox` (Claude Code's Bash sandbox, written by the kit into
 //   .claude/settings.local.json, which the overnight runner passes to its iterations too).
 // - A live view: session cost and context, rate limits, every agent with its tokens, the
-//   captain's board (NEEDS YOU first), overnight runs, scheduled loops. Also a status line.
+//   coordinator's board (NEEDS YOU first, then ready for review, then working), overnight runs,
+//   scheduled loops. Also a status line.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, TurnCompleteInput } from 'claude-code'
 
@@ -39,17 +40,13 @@ export const SANDBOX = {
 }
 
 const LOOP_CONTEXT =
-  'Kit loop mode is on in this project. Handle this message as the kit lead in captain mode: ' +
-  'if the captain has not been started in this conversation, load the kit:lead skill with the ' +
-  'argument "captain" first (it points to skills/lead/captain.md); otherwise follow captain.md ' +
-  'for this message (new work, steering, status or a decision), update the board, reply in 2-4 ' +
-  'lines and hand control back. A quick question that needs no work still gets a direct answer.'
+  'Kit loop mode: you are this project\'s coordinator. Handle this message with the kit:lead ' +
+  'skill (load it first if this conversation has not, or if its rules are gone after a compaction).'
 
 const OFF_CONTEXT =
-  'Kit loop mode was just switched off. Stop acting as the captain: delete the cron jobs you ' +
-  'created for it (CronList, CronDelete), end a self-paced loop if one runs (ScheduleWakeup with ' +
-  'stop: true), let running workers finish, rewrite the board once with what is running, and ' +
-  'from now on answer as a normal session. Mention this in one line.'
+  'Kit loop mode was just switched off. Stop coordinating: delete the cron jobs you created for ' +
+  'it (CronList, CronDelete), let working threads finish, rewrite the board once, and answer as ' +
+  'a normal session from now on. Say so in one line.'
 
 type $ = EngineInterface
 
@@ -113,8 +110,8 @@ async function setMode($: $, root: string, mode: KitMode): Promise<string> {
   if (mode === 'loop') await $.store.delete(`loopOff:${root}`)
   await refresh($)
   return mode === 'loop'
-    ? 'Loop mode on: from your next message the lead runs as captain (it asks once how to ship, parallelism and budget).'
-    : 'Light mode on: a normal session. The captain stops its loops at your next message; /kit:lead still works when you ask.'
+    ? 'Loop mode on: from your next message you talk to the coordinator (kit:lead); it starts a thread for each piece of work.'
+    : 'Light mode on: a normal session. The coordinator stops its loops at your next message; /kit:lead still works when you ask.'
 }
 
 async function getSafety($: $, root: string): Promise<{ safety: KitSafety; from: 'kit' | 'settings' | 'none' }> {
@@ -162,6 +159,14 @@ async function setSafety($: $, root: string, safety: KitSafety): Promise<string>
     : 'Host mode: no OS sandbox. The kit guard still blocks irreversible actions (deletes outside the repo, pushes to main, reading credentials).'
 }
 
+// what the person should look at first: questions, then work ready for review, then the rest
+const STATUS_ORDER = ['needs-you', 'review', 'working', 'landing', 'queued', 'done', 'parked']
+
+function statusRank(status: string): number {
+  const i = STATUS_ORDER.indexOf(status)
+  return i === -1 ? STATUS_ORDER.length : i
+}
+
 function parseBoard(text: string): KitSnapshot['board'] {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean).filter(l => !l.startsWith('```'))
   const header = lines.find(l => l.startsWith('SHIP:')) ?? ''
@@ -172,10 +177,11 @@ function parseBoard(text: string): KitSnapshot['board'] {
     if (rest && !/^(empty|none|-)$/i.test(rest)) needsYou.push(...rest.split(/;\s*/).filter(Boolean))
   }
   const items = lines
-    .filter(l => l.includes('|') && !l.startsWith('SHIP:') && !l.startsWith('NEEDS YOU:') && !l.startsWith('<'))
+    .filter(l => l.includes('|') && !/^(SHIP|RULES|NEEDS YOU):/.test(l) && !l.startsWith('<'))
     .map(l => l.split('|').map(c => c.trim()))
     .filter(c => c.length >= 5)
     .map(c => ({ id: c[0] ?? '', kind: c[1] ?? '', goal: c[2] ?? '', status: c[4] ?? '' }))
+    .sort((a, b) => statusRank(a.status) - statusRank(b.status))
   return { header, needsYou, items }
 }
 
@@ -283,11 +289,13 @@ async function writeSnapshot($: $, snap: KitSnapshot): Promise<void> {
   const rows = await read($, agents)
   const running = rows.filter(r => r.status === 'running' || r.status === 'pending').length
   const needs = board ? board.needsYou.length : 0
+  const ready = board ? board.items.filter(i => i.status === 'review').length : 0
   const live = overnight.filter(r => !r.stopReason).length
   const parts = [`kit ${mode}`, safety]
   if (costUsd !== null) parts.push(`$${costUsd.toFixed(2)}`)
   if (running) parts.push(`${running} running`)
   if (live) parts.push(`${live} overnight`)
+  if (ready) parts.push(`${ready} ready`)
   if (needs) parts.push(`${needs} need you`)
   $.ui.status(parts.join(' · '))
 }
@@ -331,7 +339,7 @@ export async function recordUsage($: $, e: TurnCompleteInput): Promise<void> {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'kit-panel', description: 'Open the kit panel: mode, safety, agents, loops, spend' })
+    await $.command.register({ name: 'kit-panel', description: 'Open the kit panel: mode, safety, board, agents, loops, spend' })
     await $.command.register({ name: 'kit-mode', description: 'Kit mode for this project: light or loop', argumentHint: '[light|loop]' })
     await $.command.register({ name: 'kit-safety', description: 'Kit safety for this project: host or sandbox', argumentHint: '[host|sandbox]' })
     const result = await next(e)
@@ -371,7 +379,7 @@ export const register: Register = on => {
     return { text: `Kit safety for this project: ${now.safety}${now.from === 'settings' ? ' (from your settings)' : ''}. Use /kit-safety host or /kit-safety sandbox.` }
   })
 
-  // Loop mode: every prompt the person types reaches the lead in captain mode.
+  // Loop mode: every prompt the person types reaches the coordinator.
   on('prompt.submit', async ($, e, next) => {
     const kind = e.origin ? e.origin.kind : 'composer'
     if (e.command || e.isMeta || (kind !== 'composer' && kind !== 'bridge')) return next(e)
@@ -443,12 +451,12 @@ export const register: Register = on => {
             {cut(`${r.status.padEnd(9)} ${fmtTokens(r.tokens).padStart(5)}  ${r.label}`, width)}
           </Text>
         ))}
-        {snap.board && snap.board.items.length > 0 && <Text bold>Captain board</Text>}
+        {snap.board && snap.board.items.length > 0 && <Text bold>Board</Text>}
         {snap.board && snap.board.header && <Text dimColor>{cut(snap.board.header, width)}</Text>}
         {snap.board &&
           snap.board.items.slice(0, 10).map(item => (
             <Text key={`item-${item.id}`} dimColor={item.status === 'done' || item.status === 'parked'}>
-              {cut(`${item.id} ${item.status.padEnd(10)} ${item.goal}`, width)}
+              {cut(`${item.id} ${(item.status === 'review' ? 'ready' : item.status).padEnd(10)} ${item.goal}`, width)}
             </Text>
           ))}
         {snap.overnight.length > 0 && <Text bold>Overnight</Text>}

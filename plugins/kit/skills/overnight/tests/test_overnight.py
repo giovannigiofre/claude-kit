@@ -20,6 +20,7 @@ SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "overnight.py"
 #   done    -> edits work.txt, reports done with stop_condition_met
 #   blocked -> edits work.txt, reports blocked
 #   error   -> exits 1
+#   stall   -> changes nothing but reports progress (an early stop the runner resumes)
 FAKE = r'''
 import json, os, sys
 from pathlib import Path
@@ -46,9 +47,9 @@ if action in ("change", "done", "blocked", "blank"):
 if action == "bad":
     Path("bad.txt").write_text("x")
 status = {"change": "progress", "bad": "progress", "noop": "no-op", "done": "done", "blocked": "blocked",
-          "blank": "progress", "commitbad": "progress"}[action]
+          "blank": "progress", "commitbad": "progress", "stall": "progress"}[action]
 summary = "   " if action == "blank" else f"{action} {n}"
-print(json.dumps({"type": "result", "is_error": False, "total_cost_usd": 0.5,
+print(json.dumps({"type": "result", "is_error": False, "total_cost_usd": 0.5, "session_id": f"fake-{n}",
                   "usage": {"input_tokens": 100, "cache_creation_input_tokens": 50, "output_tokens": 10,
                             "cache_read_input_tokens": 9999},
                   "structured_output": {"status": status, "summary": summary,
@@ -112,6 +113,27 @@ def test_noop_and_gate_failures_stop_after_three():
     assert "3 consecutive" in end["stop_reason"]
     assert not (d / "bad.txt").exists() and clean(d)
     assert "gate failed" in (run_dir / "notes.md").read_text()
+
+
+def test_early_stop_is_resumed_then_counted():
+    d, fake = repo(["stall", "change", "done"])
+    _, end, run_dir = run(d, fake, "--effort", "medium")
+    assert len(end["commits"]) == 2 and end["iteration"] == 2, end
+    argv = json.loads((d / ".fake_last_argv").read_text())
+    assert "--append-system-prompt" in argv and "--effort" in argv and argv[argv.index("--effort") + 1] == "medium"
+    log = [json.loads(line) for line in (run_dir / "log.jsonl").read_text().splitlines()]
+    resumed = [e for e in log if e.get("continuation")]
+    assert len(resumed) == 1, log
+    d, fake = repo(["stall", "stall", "stall", "noop", "noop"])
+    _, end, run_dir = run(d, fake, "--max-continuations", "2", "--max-failures", "1")
+    assert end["commits"] == [] and end["iteration"] == 1, end
+    assert "no change" in end["stop_reason"] or "consecutive" in end["stop_reason"], end
+    argv = json.loads((d / ".fake_last_argv").read_text())
+    assert argv[argv.index("--resume") + 1] == "fake-1", argv
+    assert "working tree has no change" in (d / ".fake_last_prompt").read_text()
+    d, fake = repo(["stall", "change"])
+    _, end, _ = run(d, fake, "--max-iterations", "1")
+    assert len(end["commits"]) == 1 and end["iteration"] == 1, "the last iteration is resumed too"
 
 
 def test_failure_counter_resets_after_success():

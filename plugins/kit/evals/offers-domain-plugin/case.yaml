@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: offers-domain-plugin
+description: A UI request in a project without the kit-ui plugin reaches kit:extras, which offers Kit UI (or uses its ui skill for this task) instead of restyling blind.
+tags: [extras, routing]
+context:
+  scaffold_script: fixture.sh

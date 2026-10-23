@@ -1,6 +1,6 @@
 {
   "name": "claude-kit",
-  "description": "Personal Claude Code harness: one lead agent that orchestrates workers, verification loops and quality hooks",
+  "description": "Personal Claude Code harness: a coordinator you talk to that runs work in background threads, deterministic quality gates, and project-scoped domain plugins",
   "owner": {
     "name": "giovannigiofre"
   },
@@ -8,7 +8,17 @@
     {
       "name": "kit",
       "source": "./plugins/kit",
-      "description": "Lead/orchestrator skill, worker agents (implementer, verifier, simplifier, plan reviewer), ship/review workflows, per-project quality hooks"
+      "description": "Core: a coordinator you talk to (threads in worktrees, board, PRs with evidence and risk), deterministic gates (check before stop, formatters, protected paths, guard), overnight runner, debugging, learning"
+    },
+    {
+      "name": "kit-ui",
+      "source": "./plugins/kit-ui",
+      "description": "UI and brand work (impeccable + taste routing, brand boards). Project scope: the kit offers it when a task needs it."
+    },
+    {
+      "name": "kit-llm",
+      "source": "./plugins/kit-llm",
+      "description": "Code that calls LLMs: build checklist, evals, prompt optimization, model choice, LLM-code detector. Project scope: the kit offers it when a task needs it."
     },
     {
       "name": "ponytail",
@@ -26,7 +36,9 @@
         "repo": "Leonxlnx/taste-skill",
         "sha": "6010f91a9935f1c167dfc500fb1a475681892e6b"
       },
-      "skills": ["./skills/taste-skill"],
+      "skills": [
+        "./skills/taste-skill"
+      ],
       "strict": false,
       "description": "Third-party (MIT): frontend art direction for web pages and app screens. TRIAL - see CATALOG.md before enabling."
     }

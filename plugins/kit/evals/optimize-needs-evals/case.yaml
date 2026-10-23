@@ -1,6 +1,0 @@
-schema_version: "1.1"
-name: optimize-needs-evals
-description: Asked to tune a prompt in a repo with no eval suite, Claude must establish a measure first (kit:prompt-optimize precondition) instead of editing blindly.
-tags: [routing, llm]
-context:
-  scaffold_script: fixture.sh
