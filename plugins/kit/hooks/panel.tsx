@@ -1,8 +1,9 @@
 // The kit panel: one place to switch how the session works and to see what runs.
 //
 // - Mode, per project: `light` (a normal session; the lead only when asked) or `loop` (every
-//   prompt goes to the coordinator, kit:lead). Stored in $.store; a personal default can live in
-//   ~/.claude/kit.json as {"mode": "loop"}.
+//   prompt goes to the coordinator, kit:lead). Stored in $.store. Without a choice: the personal
+//   default in ~/.claude/kit.json ({"mode": "light"} or "loop"), else loop in a project that has
+//   .claude/kit.json and light elsewhere.
 // - Safety, per project: `host` (no OS sandbox; the kit's guard hook still blocks the
 //   irreversible actions) or `sandbox` (Claude Code's Bash sandbox, written by the kit into
 //   .claude/settings.local.json, which the overnight runner passes to its iterations too).
@@ -100,7 +101,9 @@ async function getMode($: $, root: string): Promise<KitMode> {
   const stored = await $.store.get(`mode:${root}`)
   if (stored === 'loop' || stored === 'light') return stored
   const user = await userKit($)
-  return user && user.mode === 'loop' ? 'loop' : 'light'
+  if (user && (user.mode === 'loop' || user.mode === 'light')) return user.mode
+  // a project that opted into the kit talks to the coordinator unless someone chose otherwise
+  return (await readJson($, `${root}/.claude/kit.json`)) !== undefined ? 'loop' : 'light'
 }
 
 async function setMode($: $, root: string, mode: KitMode): Promise<string> {

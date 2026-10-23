@@ -34,6 +34,10 @@ and its CI actually run, not guesses.
    CLI command, the API call, the page and the browser tool to drive it), what output or
    screenshot counts as proof, and the known traps. This is the knowledge a model can't infer,
    and threads, `/kit:go` and the verifier rely on it. Try each step once while writing it.
+   Threads start in a fresh worktree: the skill says how to set one up (install dependencies,
+   migrate a local database), and untracked files the app needs to run (`.env`, local config)
+   go in `.worktreeinclude` (gitignore syntax), which Claude Code copies into every new
+   worktree.
 7. **gitignore**: `.claude/evidence/` (proof from `/kit:go` and threads), `.claude/overnight/`
    (run logs) and `.claude/lead/` (the board), unless the user wants the board shared.
    `.claude/review-decisions.md` stays committed so every clone skips declined findings.

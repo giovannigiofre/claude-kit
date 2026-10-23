@@ -60,7 +60,9 @@ you declined, so reviews don't raise them again). Gitignored: `.claude/evidence/
 - **Light**: a normal session. `/kit:lead <work>` starts the coordinator when you want it.
 - **Loop**: every message you type (terminal or Remote Control) gets one line of context sending
   it to the coordinator; headless runs, scheduled prompts and notifications never do. `/kit-mode
-  loop|light`, or the panel buttons. Personal default: `{"mode": "loop"}` in `~/.claude/kit.json`.
+  loop|light`, or the panel buttons. Without a choice for the project, the personal default in
+  `~/.claude/kit.json` (`{"mode": "light"}` or `"loop"`) applies, else loop in a project with
+  `.claude/kit.json` and light elsewhere.
 - **Board** (`.claude/lead/board.md`):
 
   ```

@@ -90,6 +90,29 @@ test('a personal default of loop applies until the project chooses', async ($, o
   expect((seen.at(-1) ?? []).join(' ')).toContain('coordinator')
 })
 
+test('a project with kit.json starts in loop mode unless the person chose light', async ($, on) => {
+  world(on, { '/repo/.claude/kit.json': JSON.stringify({ check: 'make lint' }) })
+  const seen = promptCatcher(on)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'add a login page' } as any)
+  expect((seen.at(-1) ?? []).join(' ')).toContain('coordinator')
+  await $.command.run({ command: 'kit-mode', args: 'light' } as any)
+  await $.prompt.submit({ text: 'what changed?' } as any)
+  await $.prompt.submit({ text: 'and now?' } as any)
+  expect(seen.at(-1) ?? []).toEqual([])
+})
+
+test('a personal default of light beats the kit.json default', async ($, on) => {
+  world(on, {
+    '/repo/.claude/kit.json': JSON.stringify({ check: 'make lint' }),
+    '/home/u/.claude/kit.json': JSON.stringify({ mode: 'light' }),
+  })
+  const seen = promptCatcher(on)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'hello' } as any)
+  expect(seen.at(-1) ?? []).toEqual([])
+})
+
 test('sandbox writes the kit block to settings.local.json and host removes only that', async ($, on) => {
   const written = world(on, { '/repo/.claude/settings.local.json': JSON.stringify({ permissions: { allow: ['Bash(npm test)'] } }) })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })

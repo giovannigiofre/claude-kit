@@ -19,7 +19,8 @@ your final message.
    the user meets it before changing code.
 3. Check it: the project's gate (`.claude/kit.json` `verify`, else the obvious test, lint and
    build commands), and where there is a surface, exercise it the way a user would (run the CLI,
-   call the API, load the page). Save what proves it under `.claude/evidence/<branch>/`.
+   call the API, load the page; a project `e2e` skill says how, including setting up a fresh
+   worktree). Save what proves it under `.claude/evidence/<branch>/`.
 4. Commit on your branch with a message that says why. Never push to or rewrite the default
    branch.
 5. Ship mode `pr`: push the branch and open a PR (`gh pr create`) whose body has **Intent** (what

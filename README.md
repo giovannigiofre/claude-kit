@@ -18,7 +18,7 @@ the model can't do alone, re-checked when a new model lands.
 | When | Type | What happens |
 |---|---|---|
 | Once per project | `/kit:init` | writes `.claude/kit.json` (check, verify, formatters, protected paths), an e2e skill that says how to exercise the app, and proposes safety and permissions |
-| All day | `/kit-mode loop` once, then just talk | every message goes to the coordinator (`kit:lead`): it answers, or starts a thread, or steers one; replies in at most four lines |
+| All day | just talk | in a project with `kit.json`, loop mode is on by default: every message goes to the coordinator (`kit:lead`), which answers, starts a thread or steers one, in at most four lines |
 | A messy idea | just write it | the coordinator (or `kit:shape`) asks 2-3 multiple-choice rounds and writes a brief with a checkable DONE WHEN |
 | Something broke | describe it | `kit:investigate`: evidence (asks you once, with exact export steps), reproduction, hypotheses, a regression-tested fix |
 | UI or LLM work | describe it | the kit asks "Use Kit UI / Kit LLM for this?" and installs that plugin for the project on yes |
@@ -41,7 +41,8 @@ the coordinator sends a notification (desktop, or phone with Remote Control).
 
 **The panel.** `/kit-panel` opens a pane beside the chat; the status line shows the summary
 (`kit loop · host · $1.20 · 2 running · 1 ready · 1 need you`). Mode per project: **Light** (a
-normal session) or **Loop** (every typed message goes to the coordinator). Safety per project:
+normal session) or **Loop** (every typed message goes to the coordinator; the default in a
+project with `kit.json`). Safety per project:
 **Host** or **Sandbox**. Also session cost and context, limits, every agent's tokens, the board,
 overnight runs and scheduled loops.
 
@@ -111,8 +112,8 @@ installed per project when the kit offers them, or by hand:
 
 Recommended in `~/.claude/settings.json` (auto mode is already the default on Pro and Max):
 system notifications on; `"env": {"CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "4"}` if you want a
-hard cap on parallel threads. A personal default of loop mode: `{"mode": "loop"}` in
-`~/.claude/kit.json`.
+hard cap on parallel threads. To change the mode default everywhere, put `{"mode": "light"}`
+(or `"loop"`) in `~/.claude/kit.json`; `/kit-mode` sets it per project.
 
 Two lines worth having in your personal `~/.claude/CLAUDE.md`, because models trained on human
 estimates otherwise pick the cheap, brittle option and test only in units:

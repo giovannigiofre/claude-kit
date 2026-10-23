@@ -387,6 +387,10 @@ Differenze rispetto alla proposta, decise con l'utente il 23 ottobre 2026:
 - **`kit-llm`** ha due skill invece di quattro: `llm-evals` contiene `prompt-optimize.md` e
   `model-select.md` come file collegati. Il suo hook è ora attivo dovunque il plugin è
   installato.
+- **Loop mode è il default** in ogni progetto con `.claude/kit.json` ("devo solo pensare a parlare
+  con il loop"); `{"mode": "light"}` in `~/.claude/kit.json` o `/kit-mode light` lo spengono.
+- **Worktree dei thread:** `/kit:init` mette in `.worktreeinclude` i file non versionati che servono
+  all'app (`.env`) e la skill e2e dice come preparare un worktree nuovo.
 - **Non fatto:** l'eval a tre bracci "prima di tagliare". I tagli sono stati fatti subito su richiesta
   dell'utente; gli eval si eseguono ora sul kit 1.0 contro nessun kit.
 
