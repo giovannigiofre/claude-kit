@@ -50,6 +50,7 @@ one. Claude Code keeps transcripts as JSONL under `~/.claude/projects/<folder>/`
 folder name is the project's absolute path with every non-alphanumeric character replaced by
 `-`; list `~/.claude/projects` to find it. Read them with an Explore agent (they are large;
 ask it for user turns that correct, reject or redo Claude's work, with a short quote and the
-session date, and for checks that failed the same way more than once). Then apply steps 2-6: only patterns seen in at least
-two sessions, at most 4 proposed changes, each approved by the user. If the transcript folder
+session date, and for checks that failed the same way more than once). Then apply steps
+2-6: only patterns seen in at least two sessions, at most 4 proposed changes, each approved by
+the user. If the transcript folder
 is not there, say so and fall back to this session.

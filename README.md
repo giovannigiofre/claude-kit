@@ -25,6 +25,56 @@ Sources are at the end.
 
 ---
 
+## 0. Quick start: how I work
+
+Five commands cover the day. Everything else (implementers, verifiers, reviews, hooks) runs
+on its own.
+
+| When | Type | What happens |
+|---|---|---|
+| New idea | just write it | `kit:shape` asks 2-3 multiple-choice rounds and writes a brief with a checkable DONE WHEN |
+| Once per project | `/kit:init` | writes `.claude/kit.json` (check, verify, formatters, protected files, captain settings) |
+| During the day | `/loop /kit:lead captain` | a coordinator you talk to; it dispatches, verifies and ships in the background |
+| Evening | "tonight, keep doing X until Y" | `kit:overnight`: small verified commits all night, with or without a budget |
+| Finishing a piece by hand | `/kit:go` | PR with intent, live evidence, what was fixed, risk; watches CI until green |
+
+**A new project, step by step** (example: an app to split expenses between flatmates)
+
+1. **Idea to brief.** `mkdir spese && cd spese && git init && claude`, then write what you have
+   in mind, messy is fine. Answer the multiple-choice rounds (or "accept the recommendations").
+   Pick "Start now": the lead builds the skeleton with tests.
+2. **Rules of the project.** Run `/kit:init` once the skeleton has a test command. From now on
+   the hooks format every edit, protect what must not change, and run `check` before Claude
+   stops.
+3. **Day: talk to the captain.** In tmux or the desktop app (turn on Remote Control to reach it
+   from your phone): `/loop /kit:lead captain`. Confirm once how work ships (branch, PR, or PR
+   kept green), how many items run at once, and a budget or none. Then just talk:
+   - "add magic-link login, and find out whether Supabase or SQLite is better to start with"
+   - "also a CSV export, high priority"
+   - "status" / "drop the CSV" / "stop"
+
+   Each reply is 2-4 lines: what started, what finished (with PR or branch), and **NEEDS YOU**,
+   the decisions only you can make. Workers run in the background; you keep talking.
+4. **Read PRs, not diffs.** Each PR says what was intended, shows the proof it works (output,
+   screenshot), lists what the pipeline already fixed, and rates the risk. Low risk with live
+   evidence: read the summary and merge. High risk: read the diff.
+5. **Evening.** "Tonight bring e2e coverage of the expense flow to 80%, then stop." The skill
+   asks for a budget (caps, iterations only, or none), does a dry run and gives you the command;
+   run it in a terminal. It works in its own worktree; a step is committed only if `verify`
+   passes.
+6. **Morning.** Read `.claude/overnight/<run>/end-state.json` and `notes.md`, keep the good
+   commits, then `/kit:review` and `/kit:go`.
+7. **Weekly.** `/kit:learn sweep` turns corrections you had to repeat into at most 4 rules you
+   approve; `/kit:techdebt` cleans up.
+
+Your time goes to the two ends: saying clearly what you want, and judging the PR. The middle is
+the loops' job.
+
+**First time with a new piece?** Try it small: one overnight iteration
+(`overnight.py "<objective>" --max-iterations 1`) and the captain on a small repo.
+
+---
+
 ## 1. How it works
 
 ```
