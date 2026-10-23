@@ -52,6 +52,15 @@ def bash(home, repo, command):
     return code, err
 
 
+def verdict(home, repo, command):
+    code, out, err = call(home, repo, "Bash", {"command": command})
+    if code == 2:
+        return "block"
+    if out.strip() and json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "ask":
+        return "ask"
+    return "allow"
+
+
 CASES = [
     # (command, blocked?)
     ("rm -rf node_modules dist", False),
@@ -93,6 +102,41 @@ CASES = [
     ("echo 'rm -rf / is dangerous'", False),
 ]
 
+# (command, expected verdict): the shapes Claude writes every day, and the ones that hide a delete
+MORE = [
+    ("echo hi\nrm -rf ~", "block"),
+    ("(rm -rf ~)", "block"),
+    ("{ rm -rf ~; }", "block"),
+    ("if true; then rm -rf ~; fi", "block"),
+    ("for d in a b; do rm -rf ~/$d; done", "ask"),
+    ("echo $(rm -rf ~)", "block"),
+    ("echo `rm -rf /`", "block"),
+    ("find ~ -name '*.log' -delete", "block"),
+    ("find / -exec rm -rf {} +", "block"),
+    ("find . -name '*.pyc' -delete", "allow"),
+    ("python3 -c 'import shutil, os; shutil.rmtree(os.path.expanduser(\"~\"))'", "block"),
+    ("python3 -c 'print(1)'", "allow"),
+    ("cd .. && rm -rf app", "block"),
+    ("cd build && rm -rf dist", "allow"),
+    ('rm -rf "$TARGET"', "ask"),
+    ("ls | xargs rm -rf", "ask"),
+    ('rm -rf "$HOME"', "block"),
+    ("rm -rf $TMPDIR/build", "allow"),
+    ("rm -rf ~/.cache/pip", "allow"),
+    ("rm -rf ~/Library/Caches/foo", "allow"),
+    ('echo "see ~/.ssh/config for hosts"', "allow"),
+    ('grep -rn "~/.ssh" plugins/', "allow"),
+    ('git commit -m "do not read ~/.aws"', "allow"),
+    ("ls -la ~/.ssh", "block"),
+    ("tar czf /tmp/k.tgz $HOME/.ssh", "block"),
+    ("npm test 2>&1 | tail -20", "allow"),
+    ("cat <<'EOF' > notes.md\nrm -rf ~ is in this text\nEOF", "allow"),
+    ("git checkout -- src/app.py", "allow"),
+    ("git push --force-with-lease origin feat/x", "allow"),
+    ("git push origin HEAD:refs/heads/main", "block"),
+    ("cat .env", "allow"),
+]
+
 
 def main():
     failed = 0
@@ -103,6 +147,24 @@ def main():
         if not ok:
             failed += 1
             print(f"FAIL {'block' if blocked else 'allow'}: {command!r} -> exit {code} {err.strip()[:120]}")
+
+    for command, expected in MORE:
+        got = verdict(home, repo, command)
+        if got != expected:
+            failed += 1
+            print(f"FAIL {expected}: {command!r} -> {got}")
+
+    # a symlink into a credential store is followed
+    (home / ".ssh").mkdir(exist_ok=True)
+    (home / ".ssh" / "id_rsa").write_text("k")
+    (repo / "innocent.txt").symlink_to(home / ".ssh" / "id_rsa")
+    if call(home, repo, "Read", {"file_path": str(repo / "innocent.txt")})[0] != 2:
+        failed += 1
+        print("FAIL Read through a symlink into ~/.ssh should block")
+    if verdict(home, repo, "cat innocent.txt") != "block":
+        failed += 1
+        print("FAIL cat through a symlink into ~/.ssh should block")
+    (repo / "innocent.txt").unlink()
 
     # discard-work only when there is something to lose
     (repo / "a.txt").write_text("changed\n")
@@ -169,7 +231,8 @@ def main():
     decisions = []
     for _ in range(4):
         code, out, _ = call(h6, r6, "Agent", {"description": "x", "prompt": "y"}, session="cap")
-        decisions.append(json.loads(out)["hookSpecificOutput"]["permissionDecision"] if out.strip() else "allow")
+        decisions.append("deny" if code == 2 else
+                         json.loads(out)["hookSpecificOutput"]["permissionDecision"] if out.strip() else "allow")
     if decisions != ["allow", "allow", "ask", "deny"]:
         failed += 1
         print(f"FAIL agent cap decisions {decisions}")

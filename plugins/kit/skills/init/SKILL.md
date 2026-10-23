@@ -43,7 +43,7 @@ The kit hooks do nothing until `.claude/kit.json` exists. Build it from evidence
    `.gitignore` unless the user wants the board shared.
 8. **Safety.** Explain in three lines: the kit guard is on with `kit.json` (blocks deletes
    outside the repo, pushes to main, discarding uncommitted work, `sudo`, `curl | sh`, reading
-   credentials); offer `{"guard": "on"}` in `~/.claude/kit.json` to cover every project, and a
+   credentials; best effort, it reads shell text); offer `{"guard": "on"}` in `~/.claude/kit.json` to cover every project, and a
    subagent cap (`guard.agentsAsk`/`agentsDeny`) only if the user wants one. Then ask which
    profile this project uses: **Host** (no OS sandbox) or **Sandbox** (Bash sandbox in
    `.claude/settings.local.json`, written by `/kit-safety sandbox` or the panel). Recommend auto

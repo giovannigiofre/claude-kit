@@ -262,7 +262,13 @@ def main(argv=None):
 
     # the gate comes from the checkout the run starts from (a worktree may not exist yet)
     gate = args.gate or kit_gate(root if root.exists() else main_checkout)
-    args.sandbox_block = None if args.no_sandbox else sandbox_settings(main_checkout)
+    if args.no_sandbox:
+        args.sandbox_block = None
+    elif args.resume and "sandbox_block" in state:
+        args.sandbox_block = state["sandbox_block"]  # a worktree has no settings.local.json of its own
+    else:
+        args.sandbox_block = sandbox_settings(main_checkout)
+    state["sandbox_block"] = args.sandbox_block
     notes_path = run_dir / "notes.md"
     caps = [c for c in (args.max_iterations and f"{args.max_iterations} iterations",
                         args.max_usd is not None and f"USD {args.max_usd:.2f}",

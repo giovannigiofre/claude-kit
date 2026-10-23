@@ -19,13 +19,17 @@ const agents = atom({ plugin: 'kit', key: 'agents' } as const, [], { shape: 'age
 
 export const SANDBOX = {
   enabled: true,
-  failIfUnavailable: true,
+  // where the sandbox cannot start, commands run unsandboxed (with a warning) rather than all
+  // failing; /sandbox shows whether it is really on
+  failIfUnavailable: false,
   allowUnsandboxedCommands: false,
   network: {
     allowedDomains: [
       'github.com', '*.github.com', '*.githubusercontent.com',
       'registry.npmjs.org', '*.npmjs.org', 'registry.yarnpkg.com',
       'pypi.org', 'files.pythonhosted.org',
+      'crates.io', 'index.crates.io', 'static.crates.io',
+      'proxy.golang.org', 'sum.golang.org', 'rubygems.org',
       'api.anthropic.com',
     ],
   },
@@ -72,6 +76,23 @@ async function readJson($: $, path: string): Promise<any> {
   }
 }
 
+// { exists, value } for a file the kit may rewrite: a file that exists and does not parse is
+// reported as such, so the kit never replaces it.
+async function readJsonForWrite($: $, path: string): Promise<{ exists: boolean; value: any; isBroken: boolean }> {
+  let text: string
+  try {
+    text = await $.fs.read(path)
+  } catch {
+    return { exists: false, value: {}, isBroken: false }
+  }
+  try {
+    const value = JSON.parse(text)
+    return { exists: true, value: value && typeof value === 'object' ? value : {}, isBroken: !(value && typeof value === 'object') }
+  } catch {
+    return { exists: true, value: {}, isBroken: true }
+  }
+}
+
 async function userKit($: $): Promise<any> {
   const home = await $.env.get('HOME')
   if (!home) return undefined
@@ -112,7 +133,11 @@ async function getSafety($: $, root: string): Promise<{ safety: KitSafety; from:
 
 async function setSafety($: $, root: string, safety: KitSafety): Promise<string> {
   const path = `${root}/.claude/settings.local.json`
-  const local = (await readJson($, path)) ?? {}
+  const file = await readJsonForWrite($, path)
+  if (file.isBroken) {
+    return '.claude/settings.local.json is not valid JSON; the kit did not touch it. Fix the file, then try again.'
+  }
+  const local = file.value
   const ours = (await $.store.get(`sandbox:${root}`)) === true
   if (safety === 'sandbox') {
     if (local.sandbox && !ours) {
@@ -123,7 +148,7 @@ async function setSafety($: $, root: string, safety: KitSafety): Promise<string>
     await $.fs.write(path, JSON.stringify(local, null, 2) + '\n')
     await $.store.set(`sandbox:${root}`, true)
     await refresh($)
-    return 'Sandbox on for this project (.claude/settings.local.json): Bash runs inside the OS sandbox, network limited to GitHub, npm, PyPI and the Anthropic API, credential folders unreadable. New hosts are asked for (or reviewed in auto mode). If /sandbox does not show it yet, restart the session.'
+    return 'Sandbox on for this project (.claude/settings.local.json): Bash runs inside the OS sandbox, writes only in the project and temp, network limited to GitHub and the main package registries plus the Anthropic API, credential folders unreadable. New hosts are asked for (or reviewed in auto mode); add your own under sandbox.network.allowedDomains in that file. Check with /sandbox; if it does not show it yet, start a new session.'
   }
   if (ours && local.sandbox) {
     delete local.sandbox
@@ -189,7 +214,17 @@ async function overnightRuns($: $, root: string): Promise<KitOvernightRun[]> {
   return runs.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6)
 }
 
-export async function refresh($: $): Promise<void> {
+let lastKey = ''
+
+async function paneOpen($: $): Promise<boolean> {
+  try {
+    return (await $.ui.panes()).some(p => p.id === PANE)
+  } catch {
+    return false
+  }
+}
+
+export async function refresh($: $, full = true): Promise<void> {
   const root = await projectRoot($)
   const mode = await getMode($, root)
   const { safety, from } = await getSafety($, root)
@@ -205,6 +240,13 @@ export async function refresh($: $): Promise<void> {
     // figures unavailable: draw without them
   }
   let board: KitSnapshot['board'] = null
+  const previous = await read($, snapshot)
+  if (!full && previous) {
+    // the cheap tick: mode, safety and spend for the status line; the rest only while drawn
+    const cheap: KitSnapshot = { ...previous, mode, safety, sandboxFrom: from, costUsd, contextPercent, limits }
+    await writeSnapshot($, cheap)
+    return
+  }
   const kitJson = await readJson($, `${root}/.claude/kit.json`)
   const boardPath = (kitJson && kitJson.lead && kitJson.lead.board) || '.claude/lead/board.md'
   try {
@@ -228,7 +270,16 @@ export async function refresh($: $): Promise<void> {
     root, mode, safety, sandboxFrom: from, costUsd, contextPercent, limits, board, overnight, crons,
     updatedAt: await $.clock.now(),
   }
+  await writeSnapshot($, snap)
+}
+
+async function writeSnapshot($: $, snap: KitSnapshot): Promise<void> {
+  const { updatedAt, ...content } = snap
+  const key = JSON.stringify(content)
+  if (key === lastKey) return
+  lastKey = key
   await update($, snapshot, () => snap)
+  const { mode, safety, costUsd, overnight, board } = snap
   const rows = await read($, agents)
   const running = rows.filter(r => r.status === 'running' || r.status === 'pending').length
   const needs = board ? board.needsYou.length : 0
@@ -285,14 +336,16 @@ export const register: Register = on => {
     await $.command.register({ name: 'kit-safety', description: 'Kit safety for this project: host or sandbox', argumentHint: '[host|sandbox]' })
     const result = await next(e)
     try {
+      // nothing to draw in a headless run (claude -p, an overnight iteration): no timer there
+      if ((await $.session.surfaces()).length === 0) return result
       await refresh($)
-      const root = await projectRoot($)
-      if ((await getMode($, root)) === 'loop') void $.ui.open({ id: PANE, title: 'Kit' })
     } catch {
-      // the panel never blocks a session's start
+      return result // the panel never blocks a session's start
     }
-    $.clock.every(5000, () => {
-      void refresh($).catch(() => undefined)
+    $.clock.every(15000, () => {
+      void paneOpen($)
+        .then(open => refresh($, open))
+        .catch(() => undefined)
     })
     return result
   })
@@ -320,7 +373,8 @@ export const register: Register = on => {
 
   // Loop mode: every prompt the person types reaches the lead in captain mode.
   on('prompt.submit', async ($, e, next) => {
-    if (e.command || e.isMeta) return next(e)
+    const kind = e.origin ? e.origin.kind : 'composer'
+    if (e.command || e.isMeta || (kind !== 'composer' && kind !== 'bridge')) return next(e)
     try {
       const root = await projectRoot($)
       const extra: string[] = []

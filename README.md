@@ -70,10 +70,12 @@ on its own.
 Your time goes to the two ends: saying clearly what you want, and judging the PR. The middle is
 the loops' job.
 
-**The kit panel.** `/kit-panel` opens a pane beside the chat (it opens by itself in loop mode),
-and the status line always shows the summary (`kit loop · host · $1.20 · 2 running · 1 need you`):
+**The kit panel.** `/kit-panel` opens a pane beside the chat, and the status line always shows
+the summary (`kit loop · host · $1.20 · 2 running · 1 need you`):
 - **Mode**, per project: **Light** (a normal session, as before captain mode existed; the lead
-  only when you call it) or **Loop** (every message goes to the lead in captain mode). Press the
+  only when you call it) or **Loop** (every message you type, at the terminal or through Remote
+  Control, goes to the lead in captain mode; headless runs, scheduled prompts and notifications
+  never do). Press the
   button, or `/kit-mode light|loop`. A personal default goes in `~/.claude/kit.json` as
   `{"mode": "loop"}`.
 - **Safety**, per project: **Host** or **Sandbox** (below). Button, or `/kit-safety host|sandbox`.
@@ -84,18 +86,24 @@ and the status line always shows the summary (`kit loop · host · $1.20 · 2 ru
 **Safety: two profiles, one guard.**
 - **Host** (your personal Mac): no OS sandbox, commands run on the machine as you. The kit
   guard still blocks what can't be undone or leaks credentials: recursive deletes outside the
-  repo, pushes or force pushes to main, `git reset --hard`/`clean` over uncommitted work, `sudo`,
-  `curl … | sh`, reading `~/.ssh`, `~/.aws`, gh/docker/kube config or the keychain.
+  repo (rm, find -delete, rmtree), pushes or force pushes to main, `git reset --hard`/`clean`
+  over uncommitted work, `sudo`, `curl … | sh`, reading `~/.ssh`, `~/.aws`, gh/docker/kube
+  config or the keychain (symlinks followed). A delete whose target is only known at run time
+  (`rm -rf "$DIR"`, `xargs rm`) is asked about. The guard reads shell text, so it is best effort:
+  an obfuscated command can get past it.
 - **Sandbox** (overnight runs, unfamiliar repos): the same guard, plus Claude Code's Bash sandbox
   in `.claude/settings.local.json`: writes only inside the project and temp, network only to
   GitHub, npm, PyPI and the Anthropic API (new hosts are asked for, or reviewed in auto mode),
   credential folders unreadable, no unsandboxed fallback. `kit:overnight` passes it to every
-  iteration, worktrees included.
+  iteration, worktrees included. Check it with `/sandbox`; add hosts under
+  `sandbox.network.allowedDomains` in that file. Where the sandbox cannot start (a missing
+  dependency), commands run unsandboxed with a warning rather than all failing.
 - **Full isolation**, for `--dangerously-skip-permissions` only: a microVM (Docker Sandboxes) or
   a devcontainer. Never on the bare Mac.
 
 Auto mode (`"permissions": {"defaultMode": "auto"}` in `~/.claude/settings.json`) sits on top of
-either profile: it reviews each action, the guard and the sandbox are the hard limits.
+either profile: it reviews each action. The sandbox is the OS boundary; the guard is a
+deterministic check on top, best effort.
 
 **First time with a new piece?** Try it small: one overnight iteration
 (`overnight.py "<objective>" --max-iterations 1`) and the captain on a small repo.

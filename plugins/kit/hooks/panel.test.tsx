@@ -8,6 +8,8 @@ function world(on: On, files: Record<string, string> = {}) {
   mock.env(on, { HOME: '/home/u' })
   const written: Record<string, string> = {}
   on('session.cwd', () => ({ value: '/repo' }))
+  on('session.surfaces', () => ({ value: ['terminal'] }))
+  on('ui.panes', () => ({ value: [] }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, percent: 12 }, rateLimits: [], cost: { usd: 1.5 } } }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: '/repo\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.read', (_, e: any) => {
@@ -58,6 +60,26 @@ test('light mode adds nothing; loop mode hands every prompt to the captain; off 
 
   await $.prompt.submit({ text: 'and now?' } as any)
   expect(seen.at(-1) ?? []).toEqual([])
+})
+
+test('loop mode never reaches headless or scheduled prompts', async ($, on) => {
+  world(on, { '/home/u/.claude/kit.json': JSON.stringify({ mode: 'loop' }) })
+  const seen = promptCatcher(on)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  for (const kind of ['sdk', 'scheduled-trigger', 'task-notification', 'peer']) {
+    await $.prompt.submit({ text: 'tick', origin: { kind } } as any)
+    expect(seen.at(-1) ?? []).toEqual([])
+  }
+  await $.prompt.submit({ text: 'from my phone', origin: { kind: 'bridge' } } as any)
+  expect((seen.at(-1) ?? []).join(' ')).toContain('captain mode')
+})
+
+test('a settings file that does not parse is never rewritten', async ($, on) => {
+  const written = world(on, { '/repo/.claude/settings.local.json': '{ "permissions": { "allow": [ ' })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  const answer = await $.command.run({ command: 'kit-safety', args: 'sandbox' } as any)
+  expect(JSON.stringify(answer)).toContain('not valid JSON')
+  expect(written['/repo/.claude/settings.local.json']).toBeUndefined()
 })
 
 test('a personal default of loop applies until the project chooses', async ($, on) => {
