@@ -12,4 +12,4 @@ claude plugin marketplace update claude-kit >/dev/null 2>&1 || true
 claude plugin list 2>/dev/null | grep -q "kit@claude-kit" || claude plugin install kit@claude-kit --scope user
 claude plugin list | grep -A2 "kit@claude-kit"
 echo
-echo "Done. In each project: open claude and run /kit:init (writes .claude/kit.json; commit it)."
+echo "Done. In each project: open claude, run /kit:init (writes .claude/kit.json; commit it). From then on you talk to the coordinator (loop mode)."

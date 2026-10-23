@@ -1,773 +1,183 @@
 # claude-kit
 
-My personal Claude Code harness. It gives you **one lead agent to talk to**. The lead plans the
-work, hands it to worker agents, has every result checked by a separate verifier, and loops until
-the work passes. Quality gates run on their own through hooks. The whole thing is a git repo
-installed once as a plugin, and it works in every project.
+My personal Claude Code harness. You talk to **one coordinator**: it starts a background thread
+for each piece of work, every thread works in its own worktree and ends with a PR you can judge
+without reading the diff, and deterministic hooks keep the quality gates on. It is a git repo
+installed once as a plugin marketplace, and it works in every project.
 
-Nothing in here is new. It packages what the Claude Code team describes publicly:
-
-- Several Claudes running in parallel, each in its own worktree.
-- A checked-in CLAUDE.md that grows every time Claude gets something wrong ("compounding
-  engineering").
-- Specialist subagents (`verify-app`, `code-simplifier`).
-- A PostToolUse formatter hook, and a Stop hook that keeps Claude working.
-- `/go` (verify → simplify → PR).
-- `/loop` for recurring work, and a budgeted overnight runner for long unattended runs.
-- Dynamic workflows for large fan-outs.
-- From Kun Chen's agentic workflow (2026): a PR you can judge without reading the diff (intent,
-  live evidence, findings already fixed, a risk rating), CI babysitting, overnight loops of small
-  verified commits, and instruction files trained from evidence like weights.
-- Above all, **verification**. Boris Cherny calls it "probably the most important thing", and
-  says it can "2-3x the quality".
-
-Sources are at the end.
+Design rule, from the research in [docs/proposta-kit-1.0.md](docs/proposta-kit-1.0.md): **few
+instructions, deterministic checks, native features first.** Current models verify their own
+work and follow instructions literally, so generic rules and mandated process cost tokens and can
+lower quality; tests, gates and hooks don't. Every piece of the kit is an assumption about what
+the model can't do alone, re-checked when a new model lands.
 
 ---
 
-## 0. Quick start: how I work
-
-Five commands cover the day. Everything else (implementers, verifiers, reviews, hooks) runs
-on its own.
+## A day with the kit
 
 | When | Type | What happens |
 |---|---|---|
-| New idea | just write it | `kit:shape` asks 2-3 multiple-choice rounds and writes a brief with a checkable DONE WHEN |
-| Once per project | `/kit:init` | writes `.claude/kit.json` (check, verify, formatters, protected files, captain settings) |
-| During the day | `/loop /kit:lead captain` | a coordinator you talk to; it dispatches, verifies and ships in the background |
-| Evening | "tonight, keep doing X until Y" | `kit:overnight`: small verified commits all night, with or without a budget |
-| Finishing a piece by hand | `/kit:go` | PR with intent, live evidence, what was fixed, risk; watches CI until green |
+| Once per project | `/kit:init` | writes `.claude/kit.json` (check, verify, formatters, protected paths), an e2e skill that says how to exercise the app, and proposes safety and permissions |
+| All day | just talk | in a project with `kit.json`, loop mode is on by default: every message goes to the coordinator (`kit:lead`), which answers, starts a thread or steers one, in at most four lines |
+| A messy idea | just write it | the coordinator (or `kit:shape`) asks 2-3 multiple-choice rounds and writes a brief with a checkable DONE WHEN |
+| Something broke | describe it | `kit:investigate`: evidence (asks you once, with exact export steps), reproduction, hypotheses, a regression-tested fix |
+| UI or LLM work | describe it | the kit asks "Use Kit UI / Kit LLM for this?" and installs that plugin for the project on yes |
+| First PR in a project | answer once | "Do I merge PRs once they're green, or do you always review them first?"; the answer is saved in `kit.json` (`lead.merge`) |
+| Finishing by hand | `/kit:go` | PR with intent, live evidence, what was fixed, risk; keeps CI green; merges if the project allows it |
+| Evening | "tonight keep doing X until Y" | `kit:overnight`: a fresh session per small step, a commit only when the gate passes, caps or none |
+| Weekly | `/kit:learn sweep` | turns repeated corrections into checks or rules, and prunes instructions that no longer help (at most 4 changes, each approved) |
 
-**A new project, step by step** (example: an app to split expenses between flatmates)
+Your time goes to the two ends: saying what you want, and judging the PR. The middle is the
+threads' job.
 
-1. **Idea to brief.** `mkdir spese && cd spese && git init && claude`, then write what you have
-   in mind, messy is fine. Answer the multiple-choice rounds (or "accept the recommendations").
-   Pick "Start now": the lead builds the skeleton with tests.
-2. **Rules of the project.** Run `/kit:init` once the skeleton has a test command. From now on
-   the hooks format every edit, protect what must not change, and run `check` before Claude
-   stops.
-3. **Day: talk to the captain.** In tmux or the desktop app (turn on Remote Control to reach it
-   from your phone): `/loop /kit:lead captain`. Confirm once how work ships (branch, PR, or PR
-   kept green), how many items run at once, and a budget or none. Then just talk:
-   - "add magic-link login, and find out whether Supabase or SQLite is better to start with"
-   - "also a CSV export, high priority"
-   - "status" / "drop the CSV" / "stop"
+**The coordinator** is Claude Projects for the terminal (Projects runs only on web, desktop and
+mobile today). One conversation routes each message: a question is answered in place, new work
+becomes a thread (`kit:implementer` in its own worktree, in the background), a follow-up goes to
+the thread already working in that area. The board (`.claude/lead/board.md`) holds every item as
+`working`, `review` (ready for you), `needs-you`, `done`; it survives compaction and restarts, and
+comes back into context after a compaction. Threads run the project's gate, exercise the change,
+and per the ship mode commit, open a PR, and fix CI; on their own branches they may rebase and
+force-push as the work needs. Every commit and PR is yours: `kit.json` `author` sets your git
+identity, and nothing credits an AI. Who merges is per project: you, or the coordinator for green,
+reviewed, not-high-risk PRs. Medium- or high-risk work gets a review by
+`kit:verifier` in a fresh context before it reaches you. When a thread finishes while you're away,
+the coordinator sends a notification (desktop, or phone with Remote Control).
 
-   Each reply is 2-4 lines: what started, what finished (with PR or branch), and **NEEDS YOU**,
-   the decisions only you can make. Workers run in the background; you keep talking.
-4. **Read PRs, not diffs.** Each PR says what was intended, shows the proof it works (output,
-   screenshot), lists what the pipeline already fixed, and rates the risk. Low risk with live
-   evidence: read the summary and merge. High risk: read the diff.
-5. **Evening.** "Tonight bring e2e coverage of the expense flow to 80%, then stop." The skill
-   asks for a budget (caps, iterations only, or none), does a dry run and gives you the command;
-   run it in a terminal. It works in its own worktree; a step is committed only if `verify`
-   passes.
-6. **Morning.** Read `.claude/overnight/<run>/end-state.json` and `notes.md`, keep the good
-   commits, then `/kit:review` and `/kit:go`.
-7. **Weekly.** `/kit:learn sweep` turns corrections you had to repeat into at most 4 rules you
-   approve; `/kit:techdebt` cleans up.
-
-Your time goes to the two ends: saying clearly what you want, and judging the PR. The middle is
-the loops' job.
-
-**The kit panel.** `/kit-panel` opens a pane beside the chat, and the status line always shows
-the summary (`kit loop · host · $1.20 · 2 running · 1 need you`):
-- **Mode**, per project: **Light** (a normal session, as before captain mode existed; the lead
-  only when you call it) or **Loop** (every message you type, at the terminal or through Remote
-  Control, goes to the lead in captain mode; headless runs, scheduled prompts and notifications
-  never do). Press the
-  button, or `/kit-mode light|loop`. A personal default goes in `~/.claude/kit.json` as
-  `{"mode": "loop"}`.
-- **Safety**, per project: **Host** or **Sandbox** (below). Button, or `/kit-safety host|sandbox`.
-- **What runs**: session cost and context, the 5-hour and weekly limits, every agent with its
-  tokens, the captain's board with NEEDS YOU first, overnight runs (iteration, commits, cost),
-  scheduled loops.
-
-**Safety: two profiles, one guard.**
-- **Host** (your personal Mac): no OS sandbox, commands run on the machine as you. The kit
-  guard still blocks what can't be undone or leaks credentials: recursive deletes outside the
-  repo (rm, find -delete, rmtree), pushes or force pushes to main, `git reset --hard`/`clean`
-  over uncommitted work, `sudo`, `curl … | sh`, reading `~/.ssh`, `~/.aws`, gh/docker/kube
-  config or the keychain (symlinks followed). A delete whose target is only known at run time
-  (`rm -rf "$DIR"`, `xargs rm`) is asked about. The guard reads shell text, so it is best effort:
-  an obfuscated command can get past it.
-- **Sandbox** (overnight runs, unfamiliar repos): the same guard, plus Claude Code's Bash sandbox
-  in `.claude/settings.local.json`: writes only inside the project and temp, network only to
-  GitHub, npm, PyPI and the Anthropic API (new hosts are asked for, or reviewed in auto mode),
-  credential folders unreadable, no unsandboxed fallback. `kit:overnight` passes it to every
-  iteration, worktrees included. Check it with `/sandbox`; add hosts under
-  `sandbox.network.allowedDomains` in that file. Where the sandbox cannot start (a missing
-  dependency), commands run unsandboxed with a warning rather than all failing.
-- **Full isolation**, for `--dangerously-skip-permissions` only: a microVM (Docker Sandboxes) or
-  a devcontainer. Never on the bare Mac.
-
-Auto mode (`"permissions": {"defaultMode": "auto"}` in `~/.claude/settings.json`) sits on top of
-either profile: it reviews each action. The sandbox is the OS boundary; the guard is a
-deterministic check on top, best effort.
-
-**First time with a new piece?** Try it small: one overnight iteration
-(`overnight.py "<objective>" --max-iterations 1`) and the captain on a small repo.
+**The panel.** `/kit-panel` opens a pane beside the chat; the status line shows the summary
+(`kit loop · host · $1.20 · 2 running · 1 ready · 1 need you`). Mode per project: **Light** (a
+normal session) or **Loop** (every typed message goes to the coordinator; the default in a
+project with `kit.json`). Safety per project:
+**Host** or **Sandbox**. Also session cost and context, limits, every agent's tokens, the board,
+overnight runs and scheduled loops.
 
 ---
 
-## 1. How it works
+## How it works
 
 ```
-                 you  (any prompt, even a brain-dump of ideas)
-                  │
-                  ▼
-      SHAPE (automatic on brain-dumps: hook → kit:shape)
-        splits the ideas, looks facts up, asks ≤3 rounds of
-        multiple-choice questions → BRIEF (goal, DONE WHEN, scope,
-        skills, mechanism) → "Start now?" ─────────────┐
-                                                        │  (or type "/kit:lead <goal>" directly,
-                  ┌─────────────────────────────────────┘   or /loop 30m /kit:lead next)
-                  ▼
-      ┌──────── LEAD (your main session) ─────────┐
-      │ reads CLAUDE.md + .claude/kit.json         │
-      │ defines a checkable "done"                 │
-      │ splits into tasks, picks the mechanism     │
-      └──┬──────────────┬──────────────┬───────────┘
-         │              │              │
-   kit:implementer  kit:implementer  workflow /kit:ship  (many tasks, parallel worktrees)
-   (worktree A)     (worktree B)     workflow /kit:review (lenses + adversarial verify + coverage + risk)
-         │              │
-         ▼              ▼
-     kit:verifier   kit:verifier     ← independent; PASS / FAIL / CANNOT_VERIFY
-         │ FAIL → back to implementer (max 3 rounds) → escalate to you
-         ▼
-      LEAD merges, runs `verify`, reports → /kit:go (intent, evidence, risk, PR, CI) → /kit:learn
+ you ── message ──► COORDINATOR (kit:lead, loop mode)
+                     │ answers in place, or
+                     │ starts / steers a thread ──► kit:implementer (background, own worktree)
+                     │                                 change → `verify` gate → exercise it →
+                     │                                 commit → PR (Intent, Evidence, Fixed, Risk) → CI fixes
+                     │ ◄── report ─────────────────────┘
+                     │ medium/high risk ──► kit:verifier (fresh context) ──► findings back to the thread
+                     ▼
+                   board.md: NEEDS YOU · ready for review · working   (+ notification)
 
-  Hooks, in every session of a project that has .claude/kit.json:
-    UserPromptSubmit → spots brain-dump prompts and routes them to kit:shape (mode: ask/auto/off;
-                       also active without kit.json if ~/.claude/kit.json sets "shape")
-    SessionStart → tells Claude the project's gates; after a compaction re-injects the handoff note
-    PreToolUse   → blocks edits to protected paths (e.g. raw data that must never be overwritten)
-    PostToolUse  → runs the formatter/validator for the edited file, feeds errors back;
-                   once per session, if the edited file is LLM code, points Claude to kit:llm-build
-    UserPromptSubmit + PostToolUse → context guard: from 70 % of the auto-compact window, nags
-                       Claude every few tool calls until the handoff note is rewritten (not appended)
-    turn.complete (hooks module compact.ts) → past `compactAt` (80 %) with a current handoff note,
-                       compacts the conversation at the end of the turn, no /compact needed
-    Stop         → runs the fast `check`; if it fails, Claude must keep fixing (max 3 tries)
-    PreToolUse   → guard: blocks irreversible or credential-leaking actions (Bash, Read, Grep,
-                   Glob) whatever the permission mode; optional cap on subagents per session
-  Hooks module (kit.tsx), in every session: the kit panel and status line, light/loop mode,
-    host/sandbox safety, tokens per agent; the end-of-turn compaction
+ Hooks in every project with .claude/kit.json (silent when all is well):
+   PreToolUse   protect  blocks edits to protected paths
+                guard    blocks irreversible or credential-leaking commands, in any permission mode
+   PostToolUse  on_edit  runs the formatter/validator for the edited file, feeds errors back
+   Stop         check    runs the fast `check`; on failure Claude keeps fixing (max 3 tries)
+   SessionStart          lists the project's gates; after a compaction, re-injects the board
 ```
 
-### What's in the plugin (`plugins/kit/`)
+## What's in it
 
-| Piece | Name in Claude Code | What it does |
-|---|---|---|
-| Skill | `/kit:shape [idea]` | Turns a brain-dump into a precise brief with multiple-choice questions, then launches it. Starts on its own via the prompt hook |
-| Skill | `/kit:lead <goal>` | Makes the session the lead: plan, delegate, verify, loop, report |
-| Skill | `/kit:go` | Finishes the work: intent → sync with base → verify with live evidence → review (findings as auto-fix / ask-user / no-op) → simplify + docs → risk rating → commit → PR → watches CI until green. `/kit:go babysit <PR>` only watches |
-| Skill | `/kit:learn` | Writes a correction into CLAUDE.md, a skill or kit.json so it sticks: evidence for every rule, at most 4 changes per run, each approved by you, task-specific rules moved into skills. `/kit:learn sweep` mines the last sessions' transcripts |
-| Skill | `kit:overnight` | Sets up and launches `scripts/overnight.py`: a fresh `claude -p` per iteration, one commit per step that passes the gate, reset on failure, `notes.md` as memory, stop condition, optional caps on iterations / USD / tokens (or none) |
-| Skill | `/kit:techdebt` | End-of-session sweep for duplication, dead code and stale docs |
-| Skill | `/kit:init` | Sets up the harness in a project by writing `.claude/kit.json` |
-| Skill | `/kit:brand [app]` | New brand or rebrand: brief, three brand-board options on a Design canvas (via impeccable), then applies the chosen one, sweeps old-brand leftovers and runs two UI reviews |
-| Skill | `/kit:ui [task]` | Any UI or design task: routes between impeccable (product UI, critique, audit) and taste (art direction of marketing pages, real-browser inspector) with one precedence rule and one done-check |
-| Skill | `/kit:intake <tool>` | Evaluates an outside skill or plugin before adoption (§4); any skill the kit writes or rewrites goes through Anthropic's `skill-creator` loop |
-| Skill | `kit:llm-build` | Design, build and review of any LLM code (SDK or raw HTTP calls, prompts, tools, model config): workflow vs agent, tools, context, structured output and grounding, injection defences (lethal trifecta), budgets, operations; checklist A-H in `checklist.md` and a "Done when" the verifier enforces (replaces `kit:llm-design`, 0.7.0) |
-| Skill | `kit:llm-evals` | Error analysis → failure taxonomy → code checks + calibrated binary judges → CI gate. Extends the project's existing harness |
-| Skill | `kit:prompt-optimize` | Eval-driven prompt loop: baseline, diagnose, minimal edit, keep/revert on a held-out split, fixed budget, run log |
-| Skill | `kit:model-select` | Same suite across candidate models per role; pick from the quality/cost/latency frontier |
-| Skill | `/kit:investigate [symptom]` | Root-cause debugging for any failure (backend, cloud, frontend, CI, data, integrations, performance): evidence intake that asks you once, with exact export steps, when only you can reach the logs; `scripts/compact_logs.py` reads big log exports and diffs a failing run against a working one; falsifiable hypotheses (in parallel for hard bugs); a regression-tested fix checked by `kit:verifier`. Builds on `kit:systematic-debugging` |
-| Skill | `kit:systematic-debugging`, `kit:verification-before-completion` | Vendored from obra/superpowers (MIT, licence inside) |
-| Agent | `kit:implementer` | Does one scoped task and returns a structured report |
-| Agent | `kit:verifier` | Checks the work independently; assumes it's broken until proven otherwise. Keeps a per-project memory of recurring pitfalls |
-| Agent | `kit:code-simplifier` | Simplifies the diff without changing behaviour |
-| Agent | `kit:plan-reviewer` | Reviews a plan as a "staff engineer" before any code is written |
-| Workflow | `/kit:ship` | Runs N tasks in parallel worktrees: implement → verify → fix loop |
-| Workflow | `/kit:review` | Reviews the branch through 6 lenses (the `llm` lens only reports when the diff touches LLM code); 2 skeptics try to refute each finding; each finding carries an action; reports changed files no lens read, and a risk rating. Skips findings you declined in `.claude/review-decisions.md` |
-| Hooks | (automatic) | `shape_detect`, `session_start`, `context_guard`, `protect`, `guard`, `on_edit`, `llm_detect`, `stop_check` |
-| Mod | `/kit-panel`, `/kit-mode`, `/kit-safety` | `hooks/kit.tsx` (+ `panel.tsx`, `compact.ts`): pane beside the chat and status line; light/loop mode per project; host/sandbox safety per project; tokens per agent; captain board, overnight runs, loops. Needs Claude Code with mods (2.1.287+) |
+**Core plugin `kit`** (user scope, every project):
 
-### Two layers: generic and project-specific
+| Piece | What it does |
+|---|---|
+| `kit:lead` | The coordinator: board, threads, routing, short replies, standing loops, notifications |
+| `kit:shape` | A brain-dump into a brief through at most 3 multiple-choice rounds |
+| `kit:investigate` | Root-cause debugging for any failure; `scripts/compact_logs.py` reads big log exports and diffs a failing run against a working one |
+| `kit:overnight` | Launches `scripts/overnight.py`: fresh `claude -p` per step, commit on a green gate, reset otherwise, notes as memory, optional caps, resumes early stops |
+| `kit:extras` | Offers `kit-ui` or `kit-llm` when a task needs one the project lacks |
+| `/kit:go` | Intent → sync → test like a user → `/code-review` → `/simplify` → risk → PR → CI green |
+| `/kit:init` | Sets up a project (kit.json, e2e skill, safety, permissions) |
+| `/kit:learn` | Corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
+| `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
+| `kit:implementer` | A thread: one item from brief to PR in its own worktree, effort medium |
+| `kit:verifier` | A fresh-context review against the intent, with a per-project memory of pitfalls |
+| Hooks + panel | `protect`, `guard`, `on_edit`, `stop_check`, `session_start`; the panel mod (`kit.tsx`) |
 
-- **This repo is the generic layer.** It's the same in every project, and you install it once
-  per machine.
-- **Each project adds a thin layer of its own**, committed in that project:
-  - `CLAUDE.md` / `AGENTS.md`: the project's rules. These always win over the kit.
-  - `.claude/kit.json`: the project's commands for `check`, `verify`, `onEdit`, `protect` and
-    `lead`.
-  - `.claude/review-decisions.md`: review findings you declined, one line each with the reason;
-    `/kit:review` and `/kit:go` don't raise them again. `.claude/evidence/` (live evidence) and
-    `.claude/overnight/` (run logs) stay out of git.
-  - `.claude/skills/*`: domain skills that workers load. For example, myinsurance has
-    `collect-insurer-documents` and `run-group`.
+**Domain plugins** (project scope, offered by `kit:extras` when a task needs them):
 
-**The hooks do nothing until a project has `.claude/kit.json`.** So installing the kit at user
-scope never changes a project you haven't opted in.
+| Plugin | Skills |
+|---|---|
+| `kit-ui` | `kit-ui:ui` (impeccable and taste as one team, one precedence rule, one done-check), `kit-ui:brand` (three brand boards, then an applied design system) |
+| `kit-llm` | `kit-llm:llm-build` (build checklist A-H for code that calls an LLM), `kit-llm:llm-evals` (error analysis, calibrated judges, then prompt optimization or model choice), and a hook that spots LLM code on edit |
 
-### `.claude/kit.json` reference
+**Native features the kit uses instead of its own copies:** `/code-review`, `/simplify`,
+`/goal`, `/loop`, `/autofix-pr`, agent view (`claude agents`), the Workflow tool, auto-compact
+with a `# Compact instructions` section in CLAUDE.md, auto mode, `/doctor prompt-audit`.
 
-```json
-{
-  "check": "fast gate (< ~30 s): lint + format check (+ types). Runs before every stop if files changed",
-  "verify": "full gate: tests, evals, build. Used by kit:verifier, /kit:go and as the kit:overnight gate",
-  "checkTimeout": 540,
-  "maxStopRetries": 3,
-  "onEdit": [
-    {"glob": "**/*.py", "run": "uv run ruff format -q \"$FILE\"", "timeout": 120}
-  ],
-  "protect": [
-    {"glob": "data/raw/**", "mode": "no-overwrite", "reason": "raw files are immutable"},
-    {"glob": "vendor/**", "mode": "read-only", "reason": "vendored code"}
-  ],
-  "guard": {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40, "allowCommands": []},
-  "shape": "ask",
-  "llm": "on",
-  "context": {"window": 300000, "warnAt": 0.7, "compactAt": 0.8, "handoff": ".claude/handoff.md"},
-  "lead": {
-    "read": ["docs/backlog.md"],
-    "backlog": "where the next work item comes from",
-    "notes": "one line of project-specific orchestration advice",
-    "ship": "pr+babysit",
-    "parallel": 3,
-    "budget": "none",
-    "loops": [{"name": "babysit-prs", "every": "10m", "run": "/kit:go babysit"}]
-  }
-}
-```
-
-- `onEdit` commands run from the repo root. `$FILE` is the absolute path of the edited file and
-  `$REL` is the path relative to the repo. `**` matches across directories; `*` stays within
-  one directory.
-- `shape` controls what happens on a brain-dump prompt:
-  - `ask`: Claude first asks "Shape this into a brief first?";
-  - `auto`: it shapes straight away;
-  - `off`: nothing happens.
-
-  Your personal default for every project, including ones without a `kit.json`, lives in
-  `~/.claude/kit.json`: `{"shape": "ask"}`.
-- `llm` (default `on` when the project has a `kit.json`): after an Edit/Write of a code file (or
-  anything under a `prompts/` directory) whose content imports an LLM SDK (anthropic, openai,
-  google-genai, mistral, cohere, ollama, litellm, langchain, llama_index, dspy, Vercel `ai`),
-  calls a provider endpoint (`api.anthropic.com`, `api.openai.com`, `openrouter.ai/api`,
-  `/chat/completions`, `/v1/messages` next to an Anthropic name, AWS Bedrock runtime calls, ...) or defines a system prompt or tool schema, the
-  `llm_detect` hook tells Claude once per session (and once per subagent) to load
-  `kit:llm-build`. Regex only, no model call. `"llm": "off"` silences it; without a project
-  `kit.json` it follows `~/.claude/kit.json` (`"llm": "on"`), else stays off.
-- `context` keeps long sessions lean (see "Context and compaction" below). `warnAt` (default 0.7)
-  is where the handoff must be rewritten, `compactAt` (default 0.8) where the kit compacts at the
-  end of a turn, both fractions of `window`. `window` should match your `autoCompactWindow`; `$CLAUDE_CODE_AUTO_COMPACT_WINDOW`, if set, wins
-  over it (as in Claude Code); default 300000. Put
-  `{"context": {}}` in `~/.claude/kit.json` to have it in every project whose `kit.json` (if any)
-  has no `context` key. Without either, the guard and the re-injection stay off.
-- `lead.ship`, `lead.parallel`, `lead.budget`, `lead.board` and `lead.loops` configure captain
-  mode (below); all optional, and the captain asks for what is missing. `budget` is
-  `{"items": N}` or `"none"`.
-- `guard`: on by default in a project with `kit.json`; `"off"` turns it off. Options:
-  `protectedBranches` (default main, master and the remote's default branch), `agentsAsk` /
-  `agentsDeny` (optional cap on subagents per session: ask past one, refuse past the other;
-  leave both out for no cap), `allowCommands` (regexes of commands the guard lets through).
-  `{"guard": "on"}` in `~/.claude/kit.json` guards every project, also those without a
-  `kit.json`.
-- `protect` modes:
-  - `read-only` blocks every edit.
-  - `no-overwrite` lets Claude create new files but blocks edits to existing ones.
-- The Stop hook runs only when the working tree changed since the last passing check, so
-  question-and-answer turns cost nothing. After `maxStopRetries` failures in a row it lets
-  Claude stop, and Claude must then report the failure.
-
----
-
-## 2. Install
-
-### Once per machine
-
-Quickest route, which registers the marketplace and installs the kit:
+## Install
 
 ```bash
 git clone git@github.com:giovannigiofre/claude-kit.git ~/Documents/repositories/claude-kit
 ~/Documents/repositories/claude-kit/install.sh            # or: install.sh --github
 ```
 
-By hand:
+That registers the marketplace and installs `kit` at user scope. `kit-ui` and `kit-llm` are
+installed per project when the kit offers them, or by hand:
+`claude plugin install kit-llm@claude-kit --scope project`.
 
-```bash
-# from GitHub (after you push this repo):
-claude plugin marketplace add giovannigiofre/claude-kit
-# or from the local clone (edits take effect after /reload-plugins, no version bump needed):
-claude plugin marketplace add ~/Documents/repositories/claude-kit
+Recommended in `~/.claude/settings.json` (auto mode is already the default on Pro and Max):
+`"attribution": {"commit": "", "pr": "", "sessionUrl": false}` so commits and PRs carry no Claude
+trailer, footer or session link (you are the only author); system notifications on; `"env": {"CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "4"}` if you want a
+hard cap on parallel threads. To change the mode default everywhere, put `{"mode": "light"}`
+(or `"loop"`) in `~/.claude/kit.json`; `/kit-mode` sets it per project.
 
-claude plugin install kit@claude-kit          # user scope = every project on this machine
-claude plugin list                            # kit@claude-kit  ✔ enabled
-```
-
-Recommended user settings, which Boris also uses (`~/.claude/settings.json`, or through `/config`):
-
-- `"permissions": {"defaultMode": "auto"}`: auto mode, so long runs don't stop for permission
-  prompts.
-- Turn on system notifications, so you know when a session needs you.
-- `"autoCompactWindow": 300000`: compact at ~300k tokens instead of near the 1M limit.
-
-Recommended lines for your personal `~/.claude/CLAUDE.md` (loaded into every session of every
-project, so keep that file to a few dozen lines; everything task-specific belongs in a skill):
+Two lines worth having in your personal `~/.claude/CLAUDE.md`, because models trained on human
+estimates otherwise pick the cheap, brittle option and test only in units:
 
 ```markdown
-- When making technical decisions, don't give weight to development cost: you implement in
-  minutes what a human estimate puts in weeks. Weigh correctness, maintainability, scalability
-  and running cost. Never estimate in days or weeks.
-- For a bug fix, first reproduce the bug end to end, as close as possible to how the user meets
-  it (the page, the CLI, the API call), not only in a unit test.
+- When making technical decisions, don't give weight to development cost: weigh correctness,
+  maintainability, scalability and running cost. Never estimate in days or weeks.
+- For a bug fix, first reproduce the bug end to end, as the user meets it, not only in a unit test.
 ```
 
-The first one corrects a bias of models trained on human estimates: they assume the better
-option costs weeks and pick the cheap, brittle one. The kit's lead, shape and plan reviewer
-already apply it; the investigate skill, implementer and verifier apply the second.
-
-### Context and compaction
-
-Answer quality drops long before a 1M window is full, and every turn re-sends the whole
-context. So the kit compacts early and makes compaction lossless:
-
-1. **Compact earlier.** `autoCompactWindow` (100000 to 1000000, user or project
-   `settings.json`) sets the window. Claude Code compacts on its own at the window minus 13k
-   tokens (about 96 % of 300k), or at `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` percent of it if that is
-   lower. The kit recommends 300000 for the main session; `/kit:init` writes it to the project's
-   `.claude/settings.json`. The kit's agents set `autoCompactWindow: 200000` in their frontmatter
-   (Claude Code 2.1.296+): workers need the brief, not a long history.
-   `CLAUDE_CODE_AUTO_COMPACT_WINDOW` overrides both.
-2. **Rewrite the handoff first.** The context guard reads the context size from the transcript.
-   From `warnAt` (70 %) it tells Claude, imperatively and every 5 tool calls (every call from
-   85 %), to rewrite `.claude/handoff.md` as a whole: goal, decisions, in-flight agents and
-   branches, next steps, session rules, max ~80 lines. It keeps nagging until the file really
-   changed, and it rejects a change that only appended lines, a file over 100 lines, and a note
-   last rewritten more than 60 tool calls ago. Subagents are skipped.
-3. **Then compact, automatically.** No command hook can start a compaction, but a hooks module
-   can: `hooks/compact.ts` runs at the end of every main-loop turn and, when the context is past
-   `compactAt` (80 %) and the guard says the note is current, compacts the conversation, as
-   `/compact` would. If the turn never ends (a long autonomous run), Claude Code's own
-   auto-compact is the backstop; set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to have it fire earlier
-   (below). Hooks modules are an early-access Claude Code API (checked on 2.1.306); on a build without
-   them the kit still nags and re-injects, and you compact with `/compact` or wait for auto-compact.
-4. **Re-inject after.** On `SessionStart` with source `compact`, the kit prints the handoff note
-   back into context, with a warning if it was not current at compaction time, and CLAUDE.md is
-   reloaded from disk anyway.
-5. **Tell the summarizer what matters.** A `# Compact instructions` section in CLAUDE.md is read
-   by the compaction summarizer; `/kit:init` adds one.
-
-Optional backstop for long autonomous turns, in the project's `.claude/settings.json` (a plugin
-cannot set `env`; project env applies once the folder is trusted):
-
-```json
-{"autoCompactWindow": 300000, "env": {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "88"}}
-```
-
-That makes Claude Code compact mid-turn at 264k instead of 287k, still after the kit's 80 %.
-`.claude/handoff.md` is per checkout and should be gitignored. In a live session you can still run
-`/compact <focus>` yourself at a natural boundary.
-
-### Every new project (about 2 minutes)
-
-```bash
-cd my-new-project
-claude
-```
-
-```
-/kit:init
-```
-
-`/kit:init` reads the repo: its CI, `package.json`, `pyproject.toml`, Makefile and CLAUDE.md. It
-times the candidate commands and writes `.claude/kit.json`, then proposes permission allow rules.
-Read the file, adjust it, and commit it with the repo. That's all; the hooks are active from the
-next edit.
-
-Optional, per project:
-
-- Run `/init` (built in) if the repo has no CLAUDE.md yet.
-- Add domain skills under `.claude/skills/` for recurring tasks specific to that project.
-- To have collaborators prompted to install the kit, commit this in the project's
-  `.claude/settings.json`:
-
-  ```json
-  {
-    "extraKnownMarketplaces": {
-      "claude-kit": { "source": { "source": "github", "repo": "giovannigiofre/claude-kit" } }
-    },
-    "enabledPlugins": { "kit@claude-kit": true }
-  }
-  ```
-
-### Update
-
-```bash
-cd ~/Documents/repositories/claude-kit && git pull     # or edit locally
-claude plugin marketplace update claude-kit             # GitHub-installed copies
-```
-
-In a running session, run `/reload-plugins`. When you change behaviour, bump `version` in
-`plugins/kit/.claude-plugin/plugin.json`.
-
-### Uninstall or pause
-
-- `claude plugin disable kit@claude-kit` turns it off everywhere.
-- Delete `.claude/kit.json` to turn the hooks off in one project only.
-
----
-
-## 3. Use it
-
-### Daily loop
-
-0. Just write what you have in mind, even several ideas at once. If it reads like a brain-dump,
-   the prompt hook routes it to `kit:shape`. That skill splits the ideas, looks up whatever it
-   can find itself, asks you a few multiple-choice rounds (recommended option first), and writes
-   a brief with a checkable "done". It then offers to start the lead with the right skills
-   attached. To skip it, start the prompt with `/`, or write `!go` or "just do it".
-1. Start `claude` in the project and describe the goal through the lead:
-   `/kit:lead add rate limiting to the /api/chat endpoint, tests included`
-2. The lead:
-   - writes a checkable "done";
-   - for a risky plan, asks `kit:plan-reviewer`;
-   - launches implementers (in parallel worktrees when tasks are independent);
-   - sends each result to `kit:verifier`;
-   - loops on failures and merges the branches.
-3. When it reports everything verified, type `/kit:go`. You spend your time at the two ends:
-   a clear brief at the start, and the PR at the end, where the intent, the live evidence, what
-   the pipeline already fixed and the risk rating tell you how closely to read the diff. Low
-   risk with live evidence: skim. High risk: read the diff.
-4. If you corrected it along the way, type `/kit:learn`. Once a week, `/kit:learn sweep`.
-5. At the end of the day, run `/kit:techdebt`.
-
-**Or talk to a captain.** `/kit:lead captain` (or `/loop /kit:lead captain` for a self-paced
-heartbeat) turns the session into a standing coordinator. You keep talking in plain language:
-"fix the login redirect", "also find out why the export is slow", "drop the CSV thing",
-"status". Each message becomes items on a board (`.claude/lead/board.md`), workers run in the
-background in their own worktrees, the verifier checks each one, finished work goes through the
-`/kit:go` steps to a PR, and standing loops (PR babysitting every 10 minutes, say) run beside
-it. Control comes back to you after every reply; decisions that need you are batched under
-NEEDS YOU. This is Boris Cherny's idea that loops do the prompting while he talks to one
-coordinating Claude, built from the kit's pieces. Start it in a terminal you keep open (or the
-desktop app) and turn on Remote Control to talk to it from your phone.
-
-You can also skip the lead for small things. Write the request and add `/kit:go` at the end
-("fix the typo in the footer /kit:go"), the way Boris writes "Claude do blah blah /go".
-
-### Examples
-
-**A brain-dump: shaping starts on its own**
-```
-I'd like a premium history page, maybe a chart too, and then a weekly e-mail,
-another idea is comparing cantons with deductibles, not sure if now or after launch?
-```
-In `ask` mode Claude first asks "Shape this into a brief first?". Round 1 is a multi-select of
-the four ideas (now or park). Rounds 2–3 cover scope, the done-criterion and constraints, using
-facts it looked up itself, like existing pages and the backlog. Then comes a BRIEF, and
-"Start now" launches `kit:lead` with it. To skip shaping, start the prompt with "!go".
-
-**A feature split across workers**
-```
-/kit:lead Add CSV export to the admin stats page: backend endpoint, frontend button,
-tests. Done = pytest green and the button downloads a valid CSV in the browser.
-```
-
-**Many similar tasks in parallel: the ship workflow**
-```
-Run /kit:ship with tasks:
- - {id: "es-dict", goal: "add Spanish dictionary", scope: "web/src/dictionaries", done: "npm test passes"}
- - {id: "es-routes", goal: "add /es routes", scope: "web/src/app", done: "build passes, /es renders"}
-```
-Each task runs in its own worktree, is verified independently, and is fixed up to 3 times. The
-result is a table of PASS/FAIL per task, with branches ready to merge.
-
-**A bug, including one only you can see in a dashboard**
-```
-/kit:investigate the nightly ingest job on Cloud Run fails since yesterday, I only have console access
-```
-Claude collects what it can reach itself (code, git history, tests), then asks you once for the
-rest: the Logs Explorer query to paste, a JSON export of the failed run **and** of a working
-one, the execution ID. It compacts the exports with `compact_logs.py --diff`, writes falsifiable
-hypotheses to `.debug/NOTES.md`, reproduces the bug in a failing test, fixes the root cause and
-has `kit:verifier` check it. The report says what to re-check in the console after the deploy.
-A plain "the checkout page is blank since this morning" works too: the skill starts from its
-description.
-
-**Review before merging**
-```
-/kit:review
-```
-Six lenses look for problems: correctness, project rules, tests, security/data, simplicity and,
-when the diff touches LLM code, `llm` (the `kit:llm-build` checklist).
-Each finding is then attacked by 2 skeptics, and only findings both skeptics fail to refute are
-reported as confirmed. Each one comes with an action: **auto-fix** (mechanical, does not change
-what you asked for), **ask-user** (touches the intent or a product decision) or **no-op**. Every
-lens lists the files it read, and changed files nobody read are reported as not covered: a clean
-review that skipped a file certifies nothing. The review ends with a low/medium/high risk
-rating. Findings you decline go to `.claude/review-decisions.md` and are not raised again.
-
-**Ship with evidence**
-```
-/kit:go
-```
-Writes the intent, syncs with the base branch, verifies with live evidence (the page loaded,
-the CLI run, a screenshot or log under `.claude/evidence/`; mocks don't count), fixes the
-auto-fix findings, asks you once about the ask-user ones, simplifies, updates docs, rates the
-risk, opens the PR with all of that in the body, and watches CI until it is green (up to 3 fix
-rounds). `/kit:go no-babysit` stops at the PR; `/kit:go babysit 42` only watches PR 42.
-
-**Overnight: small verified steps with a budget (or without)**
-```
-Run kit:overnight: pretend you are a 7-year-old, use the app end to end, fix the first
-usability problem you meet; repeat. Max 40 iterations, USD 25, in a worktree.
-```
-The skill checks the gate, asks for the budget (caps, iterations only, or none), does a dry
-run, and gives you the command, which you start in a terminal or tmux:
-```
-python3 <kit>/skills/overnight/scripts/overnight.py "<objective>" --stop-when "<condition>" \
-  --worktree ../app-overnight --max-iterations 40 --max-usd 25 --permission-mode auto
-```
-Every iteration is a fresh `claude -p` session that makes one small change; the runner runs the
-gate and commits it, or throws it away. It stops on the stop condition, a cap, a `blocked`
-report, or 3 failed iterations in a row (a step that changes nothing counts as failed). With no
-cap at all it runs until one of those or Ctrl-C. In the morning: `end-state.json`, `notes.md`,
-pick the commits, `/kit:review`, `/kit:go`.
-
-**Keep working until a condition holds**
-```
-/goal every test in tests/api passes and ruff is clean
-```
-`/goal` uses a fast model to judge from the conversation, and the kit's Stop hook additionally
-runs the real `check`. A convincing transcript alone can't end the run.
-
-**Recurring work: a loop**
-```
-/loop 30m /kit:lead next
-```
-Every 30 minutes the lead takes the next backlog item from `kit.json` `lead.backlog` and drives
-it through implement → verify. It stops when the backlog is empty, when an item needs your
-decision, or after two failed iterations in a row. Other loop ideas in Boris's style:
-`/loop 10m babysit my open PRs: fix CI failures and answer review comments`, or
-`/loop 1h /kit:techdebt`.
-
-**Unattended work in the background**
-
-Run `claude agents` (agent view) and dispatch several sessions, each with its own prompt such as
-`/kit:lead <goal>`. Each one gets its own worktree, and the screen shows which session needs
-you. Use this for "dozens of Claudes running".
-
-**Scheduled in the cloud: routines**
-
-Set up nightly or weekly jobs, like a drift check or a dependency update, at
-claude.ai/code/routines or with `/schedule`. Each one opens a PR that a human reviews.
-
-**myinsurance (the first project using the kit)**
-```
-/kit:lead run-group atupri sympany
-```
-The lead reads the decision log and backlog listed in `kit.json`, finds each group's next stage,
-and runs one worker per group. Each worker loads the matching project skill. A verifier re-runs
-the gate (G3/G5/G6/G8) and checks provenance. The hooks keep `data/raw` immutable and validate
-manifests on every edit.
-
-**Building or improving an LLM feature: the four LLM-quality skills**
-
-```
-kit:llm-build  ──► kit:llm-evals ──► kit:prompt-optimize ──► kit:model-select
- (design, build,    (error analysis,   (baseline → diagnose →   (same suite across
-  review, gate)      taxonomy, judges   edit → keep/revert,      models; pick per role
-                     calibrated vs you)  held-out split, budget)  on the Pareto frontier)
-```
-
-Each one checks its precondition and hands off to the next: `prompt-optimize` and
-`model-select` refuse to run without a suite you trust and send you to `llm-evals` first.
-Selection is automatic: Claude Code matches your request against the skill descriptions
-("the chatbot gives wrong premiums", "tune the system prompt", "is a cheaper model good
-enough?"), and `kit:lead` routes any task that touches a prompt, tool, orchestration or model
-to them. There is no prompt classifier (it would cost context on every turn), but a
-file-content detector costs nothing on turns that don't touch LLM code: the `llm_detect` hook
-catches requests like "fix the retry in llm.py" that never mention an LLM, including raw HTTP
-calls to a provider with no SDK import. `kit:verifier` fails a prompt, tool-schema or model
-change that comes without an eval result. The `picks-llm-skill`, `builds-llm-tool`,
-`llm-edit-detected` and `injection-aware` evals check the routing and the build discipline.
-
-```
-/kit:lead raise the advisor's completeness score without new hard-check failures, budget USD 15
-```
-
-### Which mechanism, when
-
-| You want | Use |
-|---|---|
-| Turn a messy idea into a clear, launchable goal | just write it (auto) or `/kit:shape` |
-| One conversation that drives a goal to done | `/kit:lead <goal>` |
-| Keep talking and adding work while it runs: a coordinator with a board, background workers and standing loops | `/kit:lead captain` (`/loop /kit:lead captain` for a heartbeat) |
-| A few independent changes at once | the lead with implementers in worktrees (automatic) |
-| 5–100 similar items, or results cross-checked | `/kit:ship`, `/kit:review`, or ask for "a workflow" |
-| Keep going until a condition holds | `/goal <condition>` (+ the Stop hook); no enforced token or turn cap |
-| Hours of small verified steps while you sleep, with or without a budget | `kit:overnight` |
-| A PR you can judge without reading the diff, kept green | `/kit:go` (or `/kit:go babysit <PR>`) |
-| Repeat on an interval while your laptop is on | `/loop <interval> <prompt>` |
-| Repeat on a schedule with the laptop off | routines (`/schedule`) |
-| Many long sessions you check on now and then | `claude agents` (agent view) |
-| Find and fix a bug (error, failing test, broken page or job) | just describe it, or `/kit:investigate <symptom>`; the lead routes bugs to it |
-| Improve an LLM feature (chatbot, agent, RAG) | just describe it (or just edit the code): Claude picks `kit:llm-build` / `kit:llm-evals` / `kit:prompt-optimize` / `kit:model-select` from their descriptions, and the lead routes LLM tasks to them; or call one by name |
-| Teammates that talk to each other | agent teams: experimental, `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`; the kit's agent definitions work as teammate types |
-
----
-
-## 4. Add third-party skills and tools
-
-Before any outside skill, plugin or tool joins the setup, it goes through the same steps below.
-Every decision is recorded in [`CATALOG.md`](CATALOG.md) (adopted, trial or rejected, with the
-date and the reason), so the same tool is never evaluated twice from scratch.
-
-### 4.1 One curated marketplace
-
-The claude-kit marketplace can list other people's plugins too, **pinned to a commit**. Add an
-entry to `.claude-plugin/marketplace.json`:
-
-```json
-{ "name": "ponytail", "source": { "source": "github", "repo": "DietrichGebert/ponytail", "sha": "<commit>" } }
-```
-
-That gives you one place to install from (`claude plugin install ponytail@claude-kit`).
-Upstream changes never arrive silently: updating means reading the upstream diff and bumping
-the `sha`.
-
-### 4.2 Four checks before adopting
-
-1. **Licence.** It decides the route:
-   - a permissive licence (MIT, Apache-2.0) allows vendoring an unchanged copy, with its
-     `LICENSE` and `UPSTREAM_COMMIT`;
-   - anything else is installed from upstream (pinned) and never copied.
-2. **What it runs as you.** Read every hook, script and MCP server. A plugin runs with your user
-   permissions. Reject anything that sends code or data to a third party without saying so, or
-   that evades site protections.
-3. **Context cost.** `claude plugin details <name>` shows the tokens added to *every* session.
-   The kit costs about 2,700 (0.10.0, 17 skills and 4 agents). A tool that costs more than it saves gets a project scope or a
-   reject.
-4. **Overlap and conflict with the kit.** Hooks matter most: two Stop hooks, two formatters or
-   two "auto-continue" mechanisms fight each other. If a tool duplicates a kit piece, keep one
-   of them.
-
-### 4.3 Trial, then decide
-
-1. Install at **local scope** in one real project, for about a week:
-   `claude plugin install <name>@claude-kit --scope local`.
-2. Measure where possible with `claude plugin eval`. It runs the same cases with and without the
-   plugin and scores the difference. A vendor's benchmark doesn't count as evidence.
-3. Write the outcome in `CATALOG.md`:
-   - **adopted (user scope):** generic, useful in every project; installed via the kit;
-   - **adopted (project scope):** domain-specific, e.g. frontend design; enabled only in the
-     repos that need it, through that repo's `.claude/settings.json`;
-   - **rejected:** with the reason, so it isn't re-evaluated from scratch.
-
-Scope rule: **generic → user scope through the kit; domain-specific → project scope only where
-needed.**
-
-### 4.4 Keep the setup lean
-
-- Once a month, run the built-in `/checkup`. It flags unused plugins and MCP servers and slims
-  CLAUDE.md, and asks before changing anything.
-- In `/plugin` → Installed, the "Not used recently" group lists plugins you can turn off.
-- Remove what isn't used. Every always-on skill description costs context in every session.
-
-### 4.5 Tools that support this
-
-| Piece | What | Status |
-|---|---|---|
-| `/kit:intake <repo or name>` | Runs the four checks on a candidate, writes the `CATALOG.md` row and proposes a pinned marketplace entry and a trial | built (0.2.0) |
-| Verifier memory | `kit:verifier` has `memory: project`: it reads and adds recurring pitfalls per repo | built (0.2.0) |
-| Kit evals (`plugins/kit/evals/`) | `verifier-catches-bug` (claimed-done change with a bug) and `lead-verifies-before-done` (a small goal driven to done must include verification evidence); `picks-llm-skill` and `optimize-needs-evals` (LLM-quality requests reach `kit:llm-evals` / `kit:prompt-optimize`, and nobody tunes a prompt without a measure); `builds-llm-tool`, `llm-edit-detected` and `injection-aware` (0.7.0: a new tool keeps arithmetic in code with a strict schema and an eval case; an LLM file edit with no LLM words in the prompt still reaches `kit:llm-build`; web search plus private data plus rendered links is treated as the lethal trifecta) | built; see §5 for how to run (0.7.0 cases not yet run). 0.8.0: `investigate-asks-for-evidence` (a production failure with console-only logs: the answer asks once for exports of a failing and a working run, with the query, before any fix) and `investigate-logs-root-cause` (log exports plus a repo: the fix lands where the bad data enters, with a regression test), not yet run. 0.10.0: `go-reports-risk-and-evidence` (`/kit:go` on a finished CLI change: intent, evidence from running the CLI and not only the unit test, a risk rating) and `overnight-sets-budget` (an "overnight" request reaches `kit:overnight` with a gate, a stop condition and an explicit budget choice) and `lead-captain-dispatches` (captain mode turns one message into board items and background workers, at most `parallel` at once, with short status replies), not yet run. `kit:overnight`'s runner has a stdlib self-check with a fake agent: `python3 plugins/kit/skills/overnight/tests/test_overnight.py` |
-
-First eval result (2026-10-16, one run per arm): `verifier-catches-bug` scored 1.00 with the
-kit and 1.00 without (delta 0). The planted bug is obvious enough that Claude catches it either
-way, and for a one-line question it doesn't delegate to the verifier. The case therefore works
-as a regression check, not as proof that the kit helps. A case that tells the two arms apart
-needs a defect you only find by running the code; add one when a real one turns up in a project.
-
-LLM-quality evals (2026-10-17, one run per arm): `picks-llm-skill` 1.00 with and 1.00 without
-(Δ 0; the kit loaded `kit:llm-evals`, but plain Claude also proposes measuring first, so it is a
-routing check). `optimize-needs-evals` first scored 0.00 in both arms: asked to "optimize the
-system prompt", Claude rewrote it blind and never loaded `kit:prompt-optimize`, whose
-description then said "against an existing eval suite". After rewording the trigger ("with or
-without an eval suite ... never rewrite a prompt blind") it scored 1.00 with the kit and 0.00
-without (Δ +1.00).
-
----
-
-## 5. Develop the kit
-
-```bash
-claude plugin validate ./plugins/kit && claude plugin validate .
-claude --plugin-dir ./plugins/kit            # try changes in one session without installing
-```
-
-Run the evals (they spend real tokens; `--max-cost-usd` caps the estimate):
-
-```bash
-cd plugins/kit
-claude plugin eval . --case verifier-catches-bug --scaffold --trust-plugin --no-publish --max-cost-usd 4
-claude plugin eval . --case lead-verifies-before-done --scaffold --trust-plugin --no-publish \
-  --allow-tools Write Edit "Bash(python3 *)" "Bash(pytest *)" "Bash(git *)" --max-cost-usd 10
-claude plugin eval . --case picks-llm-skill --scaffold --trust-plugin --no-publish --max-cost-usd 3
-claude plugin eval . --case optimize-needs-evals --scaffold --trust-plugin --no-publish --max-cost-usd 3
-claude plugin eval . --case builds-llm-tool --scaffold --trust-plugin --no-publish \
-  --allow-tools Write Edit "Bash(python3 *)" "Bash(git *)" --max-cost-usd 6
-claude plugin eval . --case llm-edit-detected --scaffold --trust-plugin --no-publish \
-  --allow-tools Write Edit "Bash(python3 *)" --max-cost-usd 4
-claude plugin eval . --case injection-aware --scaffold --trust-plugin --no-publish --max-cost-usd 3
-claude plugin eval . --case investigate-asks-for-evidence --scaffold --trust-plugin --no-publish --max-cost-usd 3
-claude plugin eval . --case investigate-logs-root-cause --scaffold --trust-plugin --no-publish \
-  --allow-tools Write Edit "Bash(python3 *)" "Bash(git *)" --max-cost-usd 6
-```
-
-Hook and script self-checks (no tokens):
-
-```bash
-python3 plugins/kit/hooks/tests/test_context.py && python3 plugins/kit/hooks/tests/test_llm_detect.py
-python3 plugins/kit/skills/investigate/tests/test_compact_logs.py
-python3 plugins/kit/skills/overnight/tests/test_overnight.py
-python3 plugins/kit/hooks/tests/test_guard.py
-claude plugin test plugins/kit          # the mod (panel, modes, safety) against the engine
-claude plugin validate plugins/kit
-```
-
-Test a hook by hand:
-
-```bash
-echo '{"cwd":"'$PWD'","tool_input":{"file_path":"'$PWD'/src/x.py"}}' \
-  | python3 plugins/kit/hooks/scripts/on_edit.py; echo $?
-```
-
-Rules for changing the kit:
-
-- Keep it generic. Anything project-specific goes in that project's `kit.json` or skills.
-- The hooks use the Python 3.9+ standard library only, so they run on a stock macOS.
-- Vendored skills stay unchanged. Update `UPSTREAM_COMMIT` when you refresh them.
+**Every new project:** `cd project && claude`, then `/kit:init`. Read `.claude/kit.json`, adjust
+it, commit it. The hooks do nothing in a project without it, so a user-scope install never
+changes a project you haven't opted in. Details of every key: [docs/reference.md](docs/reference.md).
+
+**Update:** `git pull` in the clone (or `claude plugin marketplace update claude-kit`), then
+`/reload-plugins`. Bump `version` in the plugin's `plugin.json` when behaviour changes.
+
+**Pause:** `claude plugin disable kit@claude-kit` everywhere, or delete `.claude/kit.json` in one
+project.
+
+## Safety
+
+- **Host** (your own machine): no OS sandbox. The guard still blocks recursive deletes outside
+  the repo, pushes or force pushes to main, `git reset --hard` or `clean` over uncommitted work,
+  `sudo`, `curl … | sh`, and reading `~/.ssh`, `~/.aws`, gh, docker or kube config and the
+  keychain. It also keeps you the only author: it blocks a commit, PR, issue or comment that
+  credits an AI (`Co-Authored-By: Claude`, "Generated with Claude Code", a session link), through
+  git, `gh` or the GitHub MCP tools, and a commit made under an AI git identity. It reads shell
+  text, so it is best effort.
+- **Sandbox** (overnight runs, unfamiliar repos): the same guard plus Claude Code's Bash sandbox
+  in `.claude/settings.local.json` (writes in the project and temp, network to GitHub, package
+  registries and the Anthropic API, credential folders unreadable). `kit:overnight` passes it to
+  every iteration.
+- **Full isolation** for `--dangerously-skip-permissions` only: a microVM or a devcontainer.
+
+## Changing the kit
+
+- Keep it generic; anything project-specific goes in that project's `kit.json` or skills. Domain
+  knowledge goes in a domain plugin that `kit:extras` offers.
+- `python3 tests/test_budget.py` must pass: always-on description budgets per plugin, short
+  SKILL.md files, no shouted rules, no per-prompt or every-tool hooks in core, and every
+  `kit:` reference resolving. Raise a budget only with a reason.
+- Prefer a check a machine runs (a hook, a script, a test) over a sentence. Explain the why
+  instead of commanding; don't tell the model to verify or plan, give it something to run.
+- Hooks and scripts use the Python 3.9+ standard library only.
+- **When a new model lands:** run `/doctor prompt-audit` on the plugins, re-run the kit's evals
+  with and without the kit, and delete what no longer changes the result.
+
+Tests and evals: [docs/reference.md#develop](docs/reference.md#develop).
 
 ## Sources
 
-- How Boris Cherny uses Claude Code (index of his posts, with links):
-  https://howborisusesclaudecode.com/
-- His Jan 2026 thread on parallel sessions, CLAUDE.md, `/commit-push-pr`, subagents, the
-  PostToolUse formatter hook and verification:
-  https://x.com/bcherny/status/2007179833990885678
-- `/go`: https://x.com/bcherny/status/2044847858634064115
-- `/loop`: https://x.com/bcherny/status/2038454341884154269
-- Loops instead of prompts: Boris Cherny on his loops (`/loop 5m /babysit`, `/loop 30m
-  /slack-feedback`, `/loop /post-merge-sweeper`, `/loop 1h /pr-pruner`; turn workflows into
-  skills, then loop them): https://x.com/bcherny/status/2038454341884154269 ; interview report:
-  https://officechai.com/ai/i-now-just-write-loops-to-prompt-claude-code-claude-code-creator-boris-cherny/
-- Kun Chen, "L8 Principal's Agentic Engineering Workflow" (June 2026):
-  https://www.youtube.com/watch?v=iQyg-KypKAA. Methods adapted (nothing copied, all MIT):
-  no-mistakes (https://github.com/kunchenguid/no-mistakes) for `/kit:go` and `/kit:review`,
-  gnhf (https://github.com/kunchenguid/gnhf) for `kit:overnight`, AXI (https://axi.md) for the
-  `kit:llm-build` tool checklist, firstmate (https://github.com/kunchenguid/firstmate) for captain
-  mode, "Your AGENTS.md is a Neural Net"
-  (https://blog.kunchenguid.com/p/your-agentsmd-is-a-neural-net) for `/kit:learn`.
-- Workflows: https://x.com/bcherny/status/2060048877944778995
-- Claude Code docs:
-  - parallel agents: https://code.claude.com/docs/en/agents
-  - workflows: https://code.claude.com/docs/en/workflows
-  - agent teams: https://code.claude.com/docs/en/agent-teams
-  - subagents: https://code.claude.com/docs/en/sub-agents
-  - plugins: https://code.claude.com/docs/en/plugins
-  - marketplaces: https://code.claude.com/docs/en/plugins/create-marketplace
-  - hooks: https://code.claude.com/docs/en/hooks
+- Research behind this version (Anthropic's guides for Opus 5 and 5.5, the Claude Code team,
+  measured studies of context files and instruction following, practitioners' loops):
+  [docs/proposta-kit-1.0.md](docs/proposta-kit-1.0.md).
+- Boris Cherny: verification as the main lever, `/go`, loops that do the prompting:
+  https://x.com/bcherny/status/2044847858634064115, https://x.com/bcherny/status/2038454341884154269
+- Claude Code docs, Projects (the model for `kit:lead`): https://code.claude.com/docs/en/claude-projects
+- Kun Chen (MIT, methods adapted, nothing copied): no-mistakes for `/kit:go`, gnhf for
+  `kit:overnight`, firstmate for the coordinator, "Your AGENTS.md is a Neural Net" for
+  `/kit:learn`: https://github.com/kunchenguid
+- Third-party tools considered, with decisions: [CATALOG.md](CATALOG.md).

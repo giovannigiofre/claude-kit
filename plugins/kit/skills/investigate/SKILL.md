@@ -1,6 +1,6 @@
 ---
 name: investigate
-description: Finds and fixes the root cause of any reported failure - backend, cloud/production, frontend/browser, CI/build, data pipeline, third-party integration, performance. Use when the user reports an error, a stack trace, a failing test, a broken page, a failed job or deploy, wrong output, or says something "doesn't work" / "stopped working" and wants it fixed, including when the logs or dashboards are reachable only by the user. Runs evidence intake (asks once, with exact export steps), reproduction, falsifiable hypotheses, a regression-tested fix and independent verification.
+description: Finds and fixes the root cause of a reported failure - an error, stack trace, failing test, broken page, failed job or deploy, wrong output, something that "stopped working" - in any layer (backend, cloud, frontend, CI, data, integrations, performance), including when only the user can reach the logs. Gets the evidence, reproduces, tests hypotheses, lands a regression-tested fix.
 argument-hint: "[the symptom, error or failing command]"
 ---
 
@@ -8,14 +8,15 @@ argument-hint: "[the symptom, error or failing command]"
 
 Symptom: $ARGUMENTS (if empty, the failure the conversation is about).
 
-**Iron law: no fix without a confirmed root cause, and no "fixed" without evidence from where it
-failed.** The debugging discipline is `kit:systematic-debugging` (vendored from obra/superpowers):
-load it and follow its four phases. This skill adds what it leaves open: getting the evidence
-when only the user can reach it, reading large log exports without flooding context, the kit's
-agents and gates, and closing the loop. (Method sources at the end.)
+No fix before a confirmed root cause, and no "fixed" without evidence from where it failed: a
+fix for a guessed cause tends to move the bug, and a green unit test proves nothing about the
+page or job the user saw. The phases below are evidence, reproduction, hypotheses, fix,
+verification; this skill adds what generic debugging advice leaves open: getting evidence only
+the user can reach, reading large log exports without flooding context, and closing the loop.
+(Method sources at the end.)
 
 **LLM behaviour is different.** If the "bug" is answer quality of an LLM feature (wrong, worse or
-inconsistent answers, a judge score dropped), use `kit:llm-evals` first: a prompt change without
+inconsistent answers, a judge score dropped), use `kit-llm:llm-evals` first (offered through `kit:extras` if this project lacks it): a prompt change without
 a measure is the failure mode, not the fix. Use this skill for LLM code that crashes, times out
 or returns malformed output.
 
@@ -28,8 +29,8 @@ or returns malformed output.
 - **Users affected right now?** Propose mitigation first (rollback, revert, feature flag) and ask
   before touching production. Root cause after.
 - Make sure `.debug/` is gitignored before anything lands there: exports carry PII and secrets.
-  `.debug/NOTES.md` is the audit trail (hypotheses, checks, results); at phase boundaries also
-  bring the kit handoff note (`.claude/handoff.md`) up to date.
+  `.debug/NOTES.md` is the audit trail (hypotheses, checks, results), and what survives a
+  compaction.
 
 ## 1. Evidence
 
@@ -61,13 +62,12 @@ or returns malformed output.
   the code can pass while the user's failure remains.
 - Repro ladder, best first: an automated failing test that goes through the same path the user
   takes, a one-off script, exact manual steps, the narrowed production evidence.
-- Flaky: run it at least 3 times; failing 2 of 3 means it is real. See
-  `${CLAUDE_SKILL_DIR}/../systematic-debugging/condition-based-waiting.md` and, for
-  tests that leave state behind, `${CLAUDE_SKILL_DIR}/../systematic-debugging/find-polluter.sh`.
-- Localize with the cheapest technique that halves the search space:
-  `${CLAUDE_SKILL_DIR}/../systematic-debugging/root-cause-tracing.md` (trace the bad value
-  back to its origin), plus good-vs-bad diff, boundary instrumentation, `git bisect run` and
-  input minimization in [references/techniques.md](references/techniques.md).
+- Flaky: run it at least 3 times; failing 2 of 3 means it is real. Waiting on a condition
+  instead of a time, and finding the test that leaves state behind, are in
+  [references/techniques.md](references/techniques.md).
+- Localize with the cheapest technique that halves the search space: tracing the bad value back
+  to its origin, good-vs-bad diff, boundary instrumentation, `git bisect run`, input
+  minimization ([references/techniques.md](references/techniques.md)).
 - Phase output: the component, and ideally the line, where behaviour departs from expectation.
 
 ## 3. Hypotheses
@@ -85,22 +85,20 @@ or returns malformed output.
 ## 4. Fix
 
 1. A failing test (or script) that reproduces the bug. Run it, see it fail for the right reason.
-2. One fix at the root cause: no "while I'm here" edits, no bundled refactor. Called from
-   `kit:lead`, or a fix that spans several areas: brief a `kit:implementer` with the root cause,
-   the regression test and the done-criterion below.
+2. One fix at the root cause: no "while I'm here" edits, no bundled refactor.
 3. The test passes; the project's `check` from `.claude/kit.json` passes.
 4. It did not work: revert it and go back to step 2 with what you learned. Never stack fixes.
 5. **Three failed fixes: stop.** The model of the problem, or the architecture, is wrong. Show
-   NOTES to the user and decide together before attempt four (same limit as `kit:lead`).
-6. Optional, after the real fix: defense in depth at the boundary where the bad value entered
-   (`${CLAUDE_SKILL_DIR}/../systematic-debugging/defense-in-depth.md`).
+   NOTES to the user and decide together before attempt four.
+6. Optional, after the real fix: one validation at the boundary where the bad value entered
+   ([references/techniques.md](references/techniques.md)).
 
 ## 5. Verify and close
 
 - **Done-criterion:** the regression test fails without the fix and passes with it, the
   project's `verify` passes, and the original signature is gone where it failed.
-- Send the change to `kit:verifier` with that done-criterion and the root-cause evidence. Never
-  report your own "fixed"; follow `kit:verification-before-completion`.
+- For a risky fix (shared code, data, money, auth), have `kit:verifier` review it in a fresh
+  context with that done-criterion and the root-cause evidence.
 - Where only the user can see the failing environment (a production dashboard, their device),
   say exactly what to re-check after the deploy (the same query or steps as in step 1) and what
   "fixed" looks like (signature gone, status 200, the run succeeds). Until they confirm, report
@@ -113,13 +111,12 @@ SYMPTOM: <one line>
 ROOT CAUSE: <what, where (file:line) - the evidence that proves it>
 FIX: <what changed and why it removes the cause>
 REGRESSION TEST: <name - fails before, passes after>
-VERIFIED: <verifier verdict + gate lines; production: confirmed by the user | pending>
+VERIFIED: <gate lines, reviewer verdict if any; production: confirmed by the user | pending>
 NOT VERIFIED / RISK: <gaps, evidence the user could not provide>
 ```
 
-- A non-obvious cause, or a correction from the user: finish with `/kit:learn`. A debugging
-  rule a machine can enforce (a lint, a check) belongs in `.claude/kit.json`. Then offer
-  `/kit:go`.
+- A non-obvious cause, or a correction from the user: suggest `/kit:learn`, which prefers a
+  check a machine runs (a lint, a test, `.claude/kit.json`) over a sentence. Then offer `/kit:go`.
 
 ## Red flags: stop and go back to step 1
 
@@ -132,8 +129,8 @@ NOT VERIFIED / RISK: <gaps, evidence the user could not provide>
 
 ## Sources
 
-obra/superpowers `systematic-debugging` (vendored here: iron law, phases, boundary
-instrumentation, three-fix rule); garrytan/gstack `/investigate` (the name, which avoids the
+obra/superpowers `systematic-debugging` (MIT; its phases, backward tracing, boundary
+instrumentation and three-fix rule, summarized here in the kit's words); garrytan/gstack `/investigate` (the name, which avoids the
 built-in `/debug`); wshobson/agents `parallel-debugging` (competing hypotheses); Anthropic,
 Claude Code best practices (a failing test first, a check Claude can run); David J. Agans,
 *Debugging: The 9 Indispensable Rules* (make it fail, quit thinking and look, keep an audit

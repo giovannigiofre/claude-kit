@@ -1,0 +1,8 @@
+{
+  "name": "kit-llm",
+  "description": "LLM features done with evidence: design, build and review of code that calls an LLM (tools, prompts, grounding, injection defences, budgets), eval suites from error analysis, prompt optimization and model choice against those evals",
+  "version": "1.0.0",
+  "author": {
+    "name": "giovannigiofre"
+  }
+}

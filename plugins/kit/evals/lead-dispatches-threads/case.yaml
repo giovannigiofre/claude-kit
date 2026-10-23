@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: lead-dispatches-threads
+description: The coordinator turns a message with several pieces of work into board items and background threads (at most the parallel limit at once), and hands control back with a short status instead of a long foreground run.
+tags: [lead, coordinator]
+context:
+  scaffold_script: fixture.sh

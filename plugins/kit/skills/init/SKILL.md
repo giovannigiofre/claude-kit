@@ -1,60 +1,75 @@
 ---
 name: init
-description: Sets up the kit harness in the current project - writes .claude/kit.json (fast check, full verify, per-file onEdit commands, protected paths, lead notes) from what the repo actually uses, and proposes a permission allowlist. Use when starting to use the kit in a new project or when the SessionStart notice says kit.json is missing.
+description: Sets up the kit in the current project - writes .claude/kit.json (fast check, full verify, per-file onEdit commands, protected paths, coordinator settings) from what the repo actually uses, a project e2e skill that says how to exercise the app, and proposes permissions and a safety profile. Use when starting to use the kit in a project or when the SessionStart notice says kit.json is missing.
 disable-model-invocation: true
 ---
 
-# /kit:init - opt this project into the kit harness
+# /kit:init: opt this project into the kit
 
-The kit hooks do nothing until `.claude/kit.json` exists. Build it from evidence, not guesses.
+The kit's hooks do nothing until `.claude/kit.json` exists. Build it from evidence: what the repo
+and its CI actually run, not guesses.
 
-1. **Discover the real commands.** Read, if present: CLAUDE.md/AGENTS.md, README, CI config
+1. **Find the real commands.** Read CLAUDE.md or AGENTS.md, the README, CI config
    (`.github/workflows/*`, `.gitlab-ci.yml`), `package.json` scripts, `pyproject.toml`,
-   `Makefile`/`justfile`, `Cargo.toml`, `go.mod`, pre-commit config. Prefer the exact commands
-   CI runs.
-2. **Time them.** Run each candidate once and note the duration.
-   - `check`: lint + format-check (+ type-check) that together run in under ~30 s. Runs before
-     every stop when files changed.
-   - `verify`: the full gate (tests, evals, build). Used by `kit:verifier` and `/kit:go`.
-3. **onEdit**: per glob, the formatter/fixer for one file, using `$FILE` (absolute) or `$REL`
-   (repo-relative), e.g. `{"glob": "**/*.py", "run": "uv run ruff format -q \"$FILE\""}`. Only
-   fast commands (< 5 s). Add validators for structured files the repo has a validator for.
+   `Makefile` or `justfile`, `Cargo.toml`, `go.mod`, pre-commit config. Prefer what CI runs.
+2. **Time them** (run each once):
+   - `check`: lint, format check and type check that together take under about 30 s. It runs
+     before Claude stops whenever files changed.
+   - `verify`: the full gate (tests, evals, build): what "done" means for a thread, `/kit:go`
+     and the overnight runner.
+3. **onEdit**: per glob, a fast (< 5 s) formatter or validator for one file, using `$FILE`
+   (absolute) or `$REL` (repo-relative), e.g.
+   `{"glob": "**/*.py", "run": "uv run ruff format -q \"$FILE\""}`.
 4. **protect**: paths that must never be edited (`read-only`) or never overwritten once written
-   (`no-overwrite`), with a `reason`. Take them from the repo's rules (raw data, generated files,
-   lockfiles, vendored code, migrations already applied).
-5. **shape**: `"ask"` (default: on a brain-dump prompt Claude offers to shape it first),
-   `"auto"` (shapes straight away) or `"off"`. A personal default for every project can live in
-   `~/.claude/kit.json` as `{"shape": "ask"}`.
-6. **context** (keeps long sessions lean): add `"context": {"window": 300000, "warnAt": 0.7,
-   "compactAt": 0.8, "handoff": ".claude/handoff.md"}`, put `"autoCompactWindow": 300000` in the project's
-   `.claude/settings.json` (create or merge, never drop existing keys), add `.claude/handoff.md`
-   to `.gitignore`, and append a `# Compact instructions` section to CLAUDE.md (3-5 lines: keep
-   the goal, decisions and user preferences, in-flight work, failing checks and file paths;
-   drop tool output already acted on). Skip any part the project already has.
-   Also add `.claude/evidence/` (live evidence from `/kit:go` and the verifier) and
-   `.claude/overnight/` (run logs of `kit:overnight`) to `.gitignore`. `.claude/review-decisions.md`
-   (findings the user declined) stays committed, so every clone's reviews skip them.
-7. **lead**: `read` = the 1-3 files a lead should read before planning (backlog, decision log),
-   `backlog` = where the next work item comes from, `notes` = one line of project-specific
-   orchestration advice.
-   For captain mode, optionally: `ship` (`local-only`, `pr` or `pr+babysit`), `parallel` (default
-   3), `budget` (`{"items": N}` or `"none"`), `board` (default `.claude/lead/board.md`) and `loops`
-   (`[{"name", "every", "run"}]`, e.g. PR babysitting every 10m). Add `.claude/lead/` to
-   `.gitignore` unless the user wants the board shared.
-8. **Safety.** Explain in three lines: the kit guard is on with `kit.json` (blocks deletes
-   outside the repo, pushes to main, discarding uncommitted work, `sudo`, `curl | sh`, reading
-   credentials; best effort, it reads shell text); offer `{"guard": "on"}` in `~/.claude/kit.json` to cover every project, and a
-   subagent cap (`guard.agentsAsk`/`agentsDeny`) only if the user wants one. Then ask which
-   profile this project uses: **Host** (no OS sandbox) or **Sandbox** (Bash sandbox in
-   `.claude/settings.local.json`, written by `/kit-safety sandbox` or the panel). Recommend auto
-   mode in the user's `~/.claude/settings.json`; propose, never write it silently.
-9. Write `.claude/kit.json`, show it to the user, and explain that it is committed with the repo
-   so every clone and every session gets the same gates.
-10. **Permissions.** Propose (do not silently add) allow rules in `.claude/settings.json` for the
-   read-only and check/verify commands, so long runs are not interrupted. If the built-in
-   `/fewer-permission-prompts` skill is available, suggest running it.
-11. Confirm the hooks fire: make a trivial edit to a file matching an `onEdit` glob and revert
-   it, and report what ran.
+   (`no-overwrite`), each with a `reason`, from the repo's rules (raw data, generated files,
+   vendored code, applied migrations).
+5. **lead** (the coordinator): `read` (1-3 files to read before planning: backlog, decision
+   log), `backlog`, `notes` (one line of project-specific advice), and optionally `ship`
+   (`local`, `pr` or `pr+fix`), `parallel` (default 3), `budget` (`{"items": N}` or `"none"`),
+   `loops` (`[{"name", "every", "run"}]`). Writing `ship` here is the user's standing go-ahead
+   for threads to push and open PRs, so ask before setting it to `pr` or `pr+fix`. Ask too who
+   merges PRs in this project and write `merge`: `user` (they always review first) or `agent`
+   (the coordinator merges green, reviewed, not-high-risk PRs).
+   Write `author` at the top level: the user's git identity as `"Name <email>"` (from their own
+   recent commits or their global git config, never an AI's; confirm it with them). The kit's
+   SessionStart hook sets it on the repo whenever git's identity is missing or an AI's, so every
+   commit, the threads' included, is theirs.
+6. **An e2e skill.** Write `.claude/skills/e2e/SKILL.md` (about 20 lines, description "How to run
+   and exercise <project> end to end to verify a change"): how to start the app or services
+   (commands, ports, env, seed data), how to exercise each surface the way a user does (the
+   CLI command, the API call, the page and the browser tool to drive it), what output or
+   screenshot counts as proof, and the known traps. This is the knowledge a model can't infer,
+   and threads, `/kit:go` and the verifier rely on it. Try each step once while writing it.
+   Threads start in a fresh worktree: the skill says how to set one up (install dependencies,
+   migrate a local database), and untracked files the app needs to run (`.env`, local config)
+   go in `.worktreeinclude` (gitignore syntax), which Claude Code copies into every new
+   worktree.
+7. **gitignore**: `.claude/evidence/` (proof from `/kit:go` and threads), `.claude/overnight/`
+   (run logs) and `.claude/lead/` (the board), unless the user wants the board shared.
+   `.claude/review-decisions.md` stays committed so every clone skips declined findings.
+8. **Compaction**: add a short `# Compact instructions` section to CLAUDE.md (keep the goal,
+   decisions and user preferences, in-flight work and branches, failing checks and file paths;
+   drop tool output already acted on), unless there is one.
+9. **Safety**, in three lines: the kit guard is on with `kit.json` (blocks deletes outside the
+   repo, pushes to main, discarding uncommitted work, `sudo`, `curl | sh`, reading credentials;
+   best effort, it reads shell text). Then ask which profile the project uses: **Host** (no OS
+   sandbox) or **Sandbox** (`/kit-safety sandbox` or the kit panel).
+10. **Permissions and authorship**: propose (never write silently) allow rules in
+    `.claude/settings.json` for the read-only, check and verify commands; suggest the built-in
+    `/fewer-permission-prompts`. The user is the only author of commits and PRs: in the same file
+    set `"attribution": {"commit": "", "pr": "", "sessionUrl": false}` (merge, never drop keys), and
+    check that `git config user.name` and `user.email` are the user's own, not an AI's. The guard
+    blocks AI credits and AI identities anyway; the setting keeps Claude from writing them. Auto
+    mode may block agents rewriting their own branches; offer this line for the user's own
+    `~/.claude/settings.json` (user scope only): `"autoMode": {"allow": ["$defaults", "On a branch
+    an agent created for its own task (not the default branch, not one someone else pushed to),
+    rewriting its commits (amend, rebase, setting the user's authorship) and pushing it with
+    --force-with-lease"]}`.
+11. **Domain plugins**: if the repo has a frontend, or code that calls an LLM, offer `kit-ui` or
+    `kit-llm` for this project now (`kit:extras` explains the install).
+12. Write `.claude/kit.json`, show it, and explain that it is committed so every clone and session
+    gets the same gates. Confirm the hooks fire: make a trivial edit to a file matching an
+    `onEdit` glob, revert it, and report what ran.
 
 Schema:
 
@@ -66,8 +81,8 @@ Schema:
   "maxStopRetries": 3,
   "onEdit": [{"glob": "**/*.py", "run": "...\"$FILE\"...", "timeout": 120}],
   "protect": [{"glob": "data/raw/**", "mode": "no-overwrite", "reason": "raw files are immutable"}],
-  "shape": "ask",
-  "context": {"window": 300000, "warnAt": 0.7, "compactAt": 0.8, "handoff": ".claude/handoff.md"},
-  "lead": {"read": ["docs/backlog.md"], "backlog": "docs/backlog.md", "notes": "..."}
+  "guard": {"protectedBranches": ["main"], "allowCommands": []},
+  "author": "Name <email>",
+  "lead": {"read": ["docs/backlog.md"], "backlog": "docs/backlog.md", "notes": "...", "ship": "pr", "merge": "user", "parallel": 3}
 }
 ```

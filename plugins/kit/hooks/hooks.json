@@ -26,7 +26,7 @@
         ]
       },
       {
-        "matcher": "^(Bash|Read|Grep|Glob|Agent|Task)$",
+        "matcher": "^(Bash|Read|Grep|Glob|Agent|Task|mcp__.*[Gg]it[Hh]ub.*)$",
         "hooks": [
           {
             "type": "command",
@@ -44,20 +44,6 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/on_edit.py\"",
             "timeout": 180
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/llm_detect.py\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/context_guard.py\"",
-            "timeout": 10
           }
         ]
       }
@@ -69,22 +55,6 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/stop_check.py\"",
             "timeout": 600
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/shape_detect.py\"",
-            "timeout": 10
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/context_guard.py\"",
-            "timeout": 10
           }
         ]
       }

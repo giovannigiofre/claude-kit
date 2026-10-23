@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse (Bash|Read|Grep|Glob|Agent|Task): deterministic guardrails, best effort.
+"""PreToolUse (Bash|Read|Grep|Glob|Agent|Task|GitHub MCP tools): deterministic guardrails, best effort.
 
 A rule in a prompt is a preference; a rule in a hook is checked every time. This hook blocks the
 few actions that cannot be undone or that leak credentials, whatever the permission mode
@@ -21,6 +21,11 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
   secrets          reading credential stores (~/.ssh, ~/.aws, gh/docker/kube config, .netrc,
                    ~/.gnupg, the macOS keychain) with Bash, Read, Grep or Glob, symlinks resolved
   agents           optional cap on subagents per session (guard.agentsAsk / guard.agentsDeny)
+  attribution      the user is the only author: an AI credited in a commit message, a PR, an
+                   issue or a comment (Co-Authored-By: Claude, "Generated with Claude Code", a
+                   claude.ai session link), a commit made under an AI git identity, or git's
+                   identity set to one, by git, gh or a GitHub MCP tool;
+                   guard.attribution = "allow" turns this rule off
 
 Multi-line commands, subshells, braces, if/for/while bodies, $(...) and backticks, sh -c and
 `cd` within one command are followed.
@@ -28,7 +33,7 @@ Multi-line commands, subshells, braces, if/for/while bodies, $(...) and backtick
 Active when the project has .claude/kit.json (unless its "guard" is "off"), or everywhere when
 ~/.claude/kit.json says "guard": "on". Options, under "guard" in either file:
   {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40,
-   "allowCommands": ["^rm -rf /opt/my-build$"]}
+   "allowCommands": ["^rm -rf /opt/my-build$"], "attribution": "block"}
 """
 
 import json
@@ -366,6 +371,104 @@ def check_git(argv, cwd, opts):
     return None
 
 
+AI_CREDIT = re.compile(
+    r"co-authored-by:[^\n]*(?:claude|anthropic\.com)"
+    r"|generated (?:with|by) \[?claude"
+    r"|claude-session:"
+    r"|claude\.ai/code/session_",
+    re.I,
+)
+AI_NAMES = {"claude", "claude code", "claude[bot]", "claude-code"}
+COMMIT_SUBS = {"commit", "merge", "tag", "notes", "commit-tree", "cherry-pick", "revert", "am"}
+MAKES_COMMIT = {"commit", "merge", "commit-tree", "cherry-pick", "revert", "am"}
+GH_WRITES = {"pr", "issue", "release", "api", "gist"}
+NO_AI = ("the user is the only author of commits, PRs and comments: no AI co-author trailer, no "
+         "\"Generated with\" footer, no session link")
+
+
+def is_ai_identity(text):
+    """'Name <email>', a bare name or a bare email that belongs to an AI, not to a person."""
+    m = re.match(r"^\s*(.*?)\s*<([^>]*)>\s*$", text or "")
+    name, email = (m.group(1), m.group(2)) if m else ((text or "").strip(), "")
+    if "@" in name and not email:
+        name, email = "", name
+    return name.strip().lower() in AI_NAMES or email.strip().lower().endswith("anthropic.com")
+
+
+def message_files(args, cwd):
+    """The text of the message or body files a command names (-F, --file, --body-file)."""
+    texts = []
+    for i, a in enumerate(args):
+        path = None
+        if a in ("-F", "--file", "--body-file") and i + 1 < len(args):
+            path = args[i + 1]
+        elif a.startswith(("--file=", "--body-file=")):
+            path = a.split("=", 1)[1]
+        if path and path != "-":
+            target = expand(path, cwd)
+            if target is not UNKNOWN:
+                try:
+                    texts.append(Path(target).read_text(encoding="utf-8", errors="replace")[:200_000])
+                except Exception:
+                    pass
+    return texts
+
+
+def check_attribution(argv, cwd, command):
+    name, args = Path(argv[0]).name, argv[1:]
+    if name == "gh":
+        if args and args[0] in GH_WRITES and any(AI_CREDIT.search(t) for t in [command] + message_files(args, cwd)):
+            return ("deny", "attribution", f"gh {args[0]} text credits an AI; {NO_AI}")
+        return None
+    while args and args[0] in ("-C", "-c", "--git-dir", "--work-tree"):
+        if args[0] == "-C" and len(args) > 1:
+            target = expand(args[1], cwd)
+            cwd = cwd if target is UNKNOWN else target
+        args = args[2:]
+    if not args:
+        return None
+    sub, rest = args[0], args[1:]
+    if sub == "config":
+        values = [a for a in rest if not a.startswith("-")]
+        if len(values) >= 2 and values[0] in ("user.name", "user.email") and is_ai_identity(values[1]):
+            return ("deny", "attribution", f"sets git's {values[0]} to an AI; {NO_AI}")
+        return None
+    if sub not in COMMIT_SUBS:
+        return None
+    # a here-document holding the message is part of the command text
+    if any(AI_CREDIT.search(t) for t in [command] + message_files(rest, cwd)):
+        return ("deny", "attribution", f"the git {sub} message credits an AI; {NO_AI}. Remove those lines")
+    author = next((a.split("=", 1)[1] for a in rest if a.startswith("--author=")), None)
+    if author is None and "--author" in rest[:-1]:
+        author = rest[rest.index("--author") + 1]
+    if author is not None:
+        if is_ai_identity(author):
+            return ("deny", "attribution", f"--author names an AI ('{author}'); {NO_AI}")
+        return None
+    if sub in MAKES_COMMIT:
+        who = f"{git(cwd, 'config', 'user.name')} <{git(cwd, 'config', 'user.email')}>"
+        if is_ai_identity(who):
+            return ("deny", "attribution",
+                    f"git's identity in this checkout is '{who}', an AI; {NO_AI}. Set the user's own "
+                    "identity for this repo first (git config user.name / user.email): `author` in "
+                    ".claude/kit.json, their recent commits (git log --format='%an <%ae>'), or ask them")
+    return None
+
+
+def check_github_tool(tool_input):
+    """A GitHub MCP call (PR, issue, comment, file commit): no AI credit in any text field."""
+    stack = [tool_input]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, str) and AI_CREDIT.search(item):
+            return ("deny", "attribution", f"the text sent to GitHub credits an AI; {NO_AI}")
+    return None
+
+
 def check_system(argv, cwd, root):
     name = Path(argv[0]).name
     if name in ("sudo", "su", "doas"):
@@ -457,6 +560,8 @@ def check_bash(command, cwd, root, opts):
                 Path(seg["piped_from"][0]).name in DOWNLOADERS:
             return ("deny", "pipe-to-shell", f"'{seg['piped_from'][0]} ... | {name}' runs downloaded code")
         checks = [check_secrets(argv, cwd)]
+        if name in ("git", "gh") and opts.get("attribution") != "allow":
+            checks.append(check_attribution(argv, cwd, command))
         if name == "rm":
             checks.append(check_rm(argv, cwd, root))
         elif name == "find":
@@ -512,6 +617,8 @@ def main():
             found = ("deny", "secrets", "globs a credential store")
     elif tool in ("Agent", "Task"):
         found = check_agents(data, opts)
+    elif tool.startswith("mcp__") and "github" in tool.lower() and opts.get("attribution") != "allow":
+        found = check_github_tool(tool_input)
     if not found:
         return 0
     decision, rule, why = found

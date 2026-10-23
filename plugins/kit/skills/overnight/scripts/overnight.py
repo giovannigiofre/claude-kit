@@ -40,6 +40,24 @@ REPORT_SCHEMA = {
     },
 }
 
+# Appended to every iteration's system prompt. Current models sometimes end an unattended turn
+# with a status note that announces the next step instead of taking it; naming that early stop
+# makes it rarer (Anthropic's Opus 5.5 prompting guide, "Unattended agentic runs").
+UNATTENDED = (
+    "This is an unattended run: nobody reads your messages until it ends, and nobody will answer a "
+    "question. A turn that ends with a summary announcing the next step, an offer to continue, or a "
+    "list of decisions that don't block you ends this iteration with nothing done. Finish the step "
+    "you chose, check it, then give your report. Stop early only when nothing can move without a "
+    "human; then report blocked and say what they must decide. Never take destructive or "
+    "irreversible actions outside the repository."
+)
+
+CONTINUE = (
+    "Your report says progress, but the working tree has no change. If you announced a step, take "
+    "it now and finish it; if nothing is worth changing, report no-op; if a human must decide, "
+    "report blocked. Then give your report again."
+)
+
 RATE_LIMIT = re.compile(r"rate.?limit|usage limit|hit your .{0,20}limit|session limit|weekly limit|overloaded|\b429\b", re.I)
 
 
@@ -161,9 +179,14 @@ Never touch files outside this repository, secrets, credentials or production sy
 """
 
 
-def run_agent(args, prompt, root, budget_left):
+def run_agent(args, prompt, root, budget_left, resume=None):
     cmd = shlex.split(args.agent_cmd) + ["-p", prompt, "--output-format", "json",
-                                         "--json-schema", json.dumps(REPORT_SCHEMA)]
+                                         "--json-schema", json.dumps(REPORT_SCHEMA),
+                                         "--append-system-prompt", UNATTENDED]
+    if resume:
+        cmd += ["--resume", resume]
+    if args.effort:
+        cmd += ["--effort", args.effort]
     if args.permission_mode:
         cmd += ["--permission-mode", args.permission_mode]
     if args.model:
@@ -187,7 +210,15 @@ def run_agent(args, prompt, root, budget_left):
         err = (data.get("subtype") or "") + " " + (data.get("result") or out.stderr or out.stdout)[-400:]
         return {"ok": False, "error": err.strip(), "cost": cost, "tokens": tokens,
                 "rate_limited": bool(RATE_LIMIT.search(err)), "budget": "budget" in (data.get("subtype") or "")}
-    return {"ok": True, "report": parse_report(data), "cost": cost, "tokens": tokens}
+    return {"ok": True, "report": parse_report(data), "cost": cost, "tokens": tokens,
+            "session": data.get("session_id")}
+
+
+def spend_cap_reached(args, state):
+    """The cost and token caps only: a continuation belongs to the current iteration, so the
+    iteration cap must not stop it."""
+    return ((args.max_usd is not None and state["cost"] >= args.max_usd)
+            or (args.max_tokens is not None and state["tokens"] >= args.max_tokens))
 
 
 def cap_reached(args, state):
@@ -220,6 +251,9 @@ def main(argv=None):
     p.add_argument("--worktree", help="run in a new git worktree at this path instead of the current checkout")
     p.add_argument("--permission-mode", help="passed to the agent, e.g. auto or acceptEdits (default: your settings)")
     p.add_argument("--model", help="passed to the agent")
+    p.add_argument("--effort", help="passed to the agent: low, medium, high, xhigh or max (default: your settings)")
+    p.add_argument("--max-continuations", type=int, default=2,
+                   help="times to resume an iteration that reports progress without a change (default 2)")
     p.add_argument("--no-sandbox", action="store_true",
                    help="do not pass the project's sandbox settings to the iterations")
     p.add_argument("--agent-cmd", default=os.environ.get("KIT_OVERNIGHT_AGENT", "claude"))
@@ -358,6 +392,24 @@ def main(argv=None):
                 git(root, "reset", "-q", "--soft", start)
 
             report = res["report"] or {"status": "progress", "summary": "", "stop_condition_met": False}
+            # "progress" with nothing changed is an early stop, not a result: resume the same
+            # session and ask for the step, a bounded number of times
+            nudges = 0
+            while (report.get("status") == "progress" and not dirty(root) and res.get("session")
+                   and nudges < args.max_continuations and not spend_cap_reached(args, state)):
+                nudges += 1
+                left = None if args.max_usd is None else args.max_usd - state["cost"]
+                more = run_agent(args, CONTINUE, root, left, resume=res["session"])
+                state["cost"] += more["cost"]
+                state["tokens"] += more["tokens"]
+                log.write(json.dumps({"iteration": state["iteration"], "continuation": nudges, **more}) + "\n")
+                log.flush()
+                if not more["ok"]:
+                    break
+                res = more
+                report = more["report"] or report
+                if git(root, "rev-parse", "HEAD") != start:
+                    git(root, "reset", "-q", "--soft", start)
             status = report.get("status")
             summary = " ".join((report.get("summary") or "").split())[:120]
 

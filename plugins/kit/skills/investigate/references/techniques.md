@@ -1,9 +1,28 @@
 # Localization techniques
 
-Pick the cheapest technique that halves the search space. Backward tracing, defense in depth
-and condition-based waiting are in the vendored `kit:systematic-debugging` folder
-(`root-cause-tracing.md`, `defense-in-depth.md`, `condition-based-waiting.md`,
-`find-polluter.sh`); they are not repeated here.
+Pick the cheapest technique that halves the search space.
+
+## Trace the bad value back to its origin
+The line that crashes is rarely the line that is wrong. From the failure, ask where the bad value
+came from: the caller, its caller, the data or config that fed it. Follow it upstream until you
+reach the first place it was produced or accepted wrongly; fix it there, not where it surfaced.
+When the chain is hard to read, log the value (and a stack trace) at each hop once.
+
+## Waiting on a condition, not on time
+A test that sleeps a fixed time and then checks is flaky by construction. Wait for the condition
+itself (poll the state, await the event, retry the assertion with a deadline) and fail with a
+message that says what never happened.
+
+## Which test leaves state behind
+When a test passes alone and fails in the suite, or a stray file appears, run the tests one at a
+time in a fresh state and check for the artifact after each (the first one that leaves it is the
+polluter); for order-dependent failures, bisect the list of tests that run before the failing
+one.
+
+## Defense in depth, after the fix
+Once the root cause is fixed, consider one validation where the bad value entered the system (a
+parse, a schema check, a guard at the API boundary) so the same class of input fails early and
+loudly next time. Only at that boundary, not at every layer.
 
 ## Good vs bad diff
 Put a working instance next to a broken one: run, commit, input, environment, user, browser.

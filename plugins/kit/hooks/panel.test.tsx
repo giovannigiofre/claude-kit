@@ -39,7 +39,7 @@ function promptCatcher(on: On) {
   return seen
 }
 
-test('light mode adds nothing; loop mode hands every prompt to the captain; off says stop once', async ($, on) => {
+test('light mode adds nothing; loop mode hands every prompt to the coordinator; off says stop once', async ($, on) => {
   world(on)
   const seen = promptCatcher(on)
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
@@ -50,13 +50,13 @@ test('light mode adds nothing; loop mode hands every prompt to the captain; off 
   const turnedOn = await $.command.run({ command: 'kit-mode', args: 'loop' } as any)
   expect(JSON.stringify(turnedOn)).toContain('Loop mode on')
   await $.prompt.submit({ text: 'add a login page' } as any)
-  expect((seen.at(-1) ?? []).join(' ')).toContain('captain mode')
+  expect((seen.at(-1) ?? []).join(' ')).toContain('coordinator')
 
   await $.command.run({ command: 'kit-mode', args: 'light' } as any)
   await $.prompt.submit({ text: 'what changed?' } as any)
   const afterOff = (seen.at(-1) ?? []).join(' ')
   expect(afterOff).toContain('switched off')
-  expect(afterOff).not.toContain('Handle this message as the kit lead')
+  expect(afterOff).not.toContain('Handle this message with the kit:lead')
 
   await $.prompt.submit({ text: 'and now?' } as any)
   expect(seen.at(-1) ?? []).toEqual([])
@@ -71,7 +71,7 @@ test('loop mode never reaches headless or scheduled prompts', async ($, on) => {
     expect(seen.at(-1) ?? []).toEqual([])
   }
   await $.prompt.submit({ text: 'from my phone', origin: { kind: 'bridge' } } as any)
-  expect((seen.at(-1) ?? []).join(' ')).toContain('captain mode')
+  expect((seen.at(-1) ?? []).join(' ')).toContain('coordinator')
 })
 
 test('a settings file that does not parse is never rewritten', async ($, on) => {
@@ -87,7 +87,30 @@ test('a personal default of loop applies until the project chooses', async ($, o
   const seen = promptCatcher(on)
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   await $.prompt.submit({ text: 'go' } as any)
-  expect((seen.at(-1) ?? []).join(' ')).toContain('captain mode')
+  expect((seen.at(-1) ?? []).join(' ')).toContain('coordinator')
+})
+
+test('a project with kit.json starts in loop mode unless the person chose light', async ($, on) => {
+  world(on, { '/repo/.claude/kit.json': JSON.stringify({ check: 'make lint' }) })
+  const seen = promptCatcher(on)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'add a login page' } as any)
+  expect((seen.at(-1) ?? []).join(' ')).toContain('coordinator')
+  await $.command.run({ command: 'kit-mode', args: 'light' } as any)
+  await $.prompt.submit({ text: 'what changed?' } as any)
+  await $.prompt.submit({ text: 'and now?' } as any)
+  expect(seen.at(-1) ?? []).toEqual([])
+})
+
+test('a personal default of light beats the kit.json default', async ($, on) => {
+  world(on, {
+    '/repo/.claude/kit.json': JSON.stringify({ check: 'make lint' }),
+    '/home/u/.claude/kit.json': JSON.stringify({ mode: 'light' }),
+  })
+  const seen = promptCatcher(on)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'hello' } as any)
+  expect(seen.at(-1) ?? []).toEqual([])
 })
 
 test('sandbox writes the kit block to settings.local.json and host removes only that', async ($, on) => {
@@ -134,10 +157,12 @@ const PANE = {
 
 test('the pane shows mode, safety, spend and what needs the person, on every surface', async ($, on) => {
   const board = [
-    'SHIP: pr+babysit | PARALLEL: 3 | BUDGET: none | LOOPS: babysit-prs 10m',
+    'SHIP: pr+fix | PARALLEL: 3 | BUDGET: none',
+    'RULES: reuse the thread for follow-ups | propose before starting',
     'NEEDS YOU: A1: send emails in production or only log in dev?',
-    'A1 | ship | magic-link login | DONE WHEN e2e login passes | needs-you | agent A1 | feat/login | PR #3',
     'A2 | scout | Supabase or SQLite | DONE WHEN report written | done | agent A2 | - | report ready',
+    'A3 | ship | CSV export | DONE WHEN download test passes | review | agent A3 | PR #4 | CI green',
+    'A1 | ship | magic-link login | DONE WHEN e2e login passes | needs-you | agent A1 | feat/login | PR #3',
   ].join('\n')
   world(on, { '/repo/.claude/lead/board.md': board })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
@@ -151,6 +176,8 @@ test('the pane shows mode, safety, spend and what needs the person, on every sur
     expect(await ui.find({ type: 'Text', text: /NEEDS YOU/ })).toBeDefined()
     expect((await ui.find({ type: 'Text', text: /send emails/ }))?.text).toContain('A1')
     expect(await ui.find({ type: 'Text', text: /magic-link login/ })).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: /CSV export/ }))?.text).toContain('ready')
+    expect(await ui.find({ type: 'Text', text: /reuse the thread/ })).toBeUndefined()
     await ui.press({ key: 'mode-loop' })
     await ui.unmount()
   }

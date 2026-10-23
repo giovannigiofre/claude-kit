@@ -1,6 +1,6 @@
 schema_version: "1.1"
 name: lead-verifies-before-done
-description: Driving a small goal to done must include an independent verification step and a checkable done-criterion.
+description: Driving a small goal to done must give a checkable done-criterion and report evidence from actually running it; the work runs in a thread, not as a foreground claim.
 tags: [lead]
 context:
   scaffold_script: fixture.sh
