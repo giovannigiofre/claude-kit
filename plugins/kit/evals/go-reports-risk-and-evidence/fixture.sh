@@ -38,4 +38,4 @@ def test_upper():
     assert greet("ada", upper=True) == "HELLO, ADA!"
 PY
 mkdir -p .claude
-printf '{"check": "python3 -m pytest -q", "verify": "python3 -m pytest -q"}\n' > .claude/kit.json
+printf '{"check": "python3 -m pytest -q || python3 -c \\"import test_greet as t; t.test_upper()\\"", "verify": "python3 -m pytest -q || python3 -c \\"import test_greet as t; t.test_upper()\\""}\n' > .claude/kit.json

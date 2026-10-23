@@ -29,9 +29,10 @@ benchmark score up, no failing e2e scenario) or ones where the user trusts Claud
 
 If the objective is vague, use `kit:shape` first.
 
-## 2. Budget: ask, never assume
+## 2. Budget: ask
 
-Ask with AskUserQuestion (header "Budget"):
+Ask with AskUserQuestion (header "Budget"); if nobody can answer (a non-interactive run), pick
+caps, write them in the command and say they are your assumption:
 
 1. **Caps (Recommended):** max iterations and/or USD, e.g. `--max-iterations 40 --max-usd 25`.
 2. **Iterations only:** e.g. `--max-iterations 40`.

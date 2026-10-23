@@ -40,7 +40,7 @@ REPORT_SCHEMA = {
     },
 }
 
-RATE_LIMIT = re.compile(r"rate.?limit|usage limit|overloaded|\b429\b", re.I)
+RATE_LIMIT = re.compile(r"rate.?limit|usage limit|hit your .{0,20}limit|session limit|weekly limit|overloaded|\b429\b", re.I)
 
 
 def git(root, *args, check=True):
@@ -54,8 +54,8 @@ def dirty(root):
     return bool(git(root, "status", "--porcelain", "--untracked-files=all"))
 
 
-def undo(root):
-    git(root, "reset", "-q", "--hard", "HEAD")
+def undo(root, to="HEAD"):
+    git(root, "reset", "-q", "--hard", to)
     git(root, "clean", "-q", "-fd")  # excluded/ignored files (the run directory) survive
 
 
@@ -65,10 +65,11 @@ def exclude_runs_dir(root):
     if not exclude.is_absolute():
         exclude = Path(root) / exclude
     exclude.parent.mkdir(parents=True, exist_ok=True)
-    line = f"/{RUNS_DIR.as_posix()}/"
     text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-    if line not in text.splitlines():
-        exclude.write_text(text + ("" if text.endswith("\n") or not text else "\n") + line + "\n", encoding="utf-8")
+    missing = [line for line in (f"/{RUNS_DIR.as_posix()}/", "/.claude/evidence/") if line not in text.splitlines()]
+    if missing:
+        exclude.write_text(text + ("" if text.endswith("\n") or not text else "\n") + "\n".join(missing) + "\n",
+                           encoding="utf-8")
 
 
 def slugify(text, limit=32):
@@ -199,6 +200,8 @@ def main(argv=None):
     p.add_argument("--gate-timeout", type=int, default=1800)
     p.add_argument("--iteration-timeout", type=int, default=3600)
     p.add_argument("--rate-limit-wait", type=int, default=900, help="seconds to wait on a rate limit before retrying (0 = count as failure)")
+    p.add_argument("--max-rate-limit-waits", type=int, default=24,
+                   help="waits in a row before a rate limit counts as a failure (default 24: 6 h at 900 s)")
     p.add_argument("--branch", help="branch for the run (default overnight/<slug>-<run id>)")
     p.add_argument("--worktree", help="run in a new git worktree at this path instead of the current checkout")
     p.add_argument("--permission-mode", help="passed to the agent, e.g. auto or acceptEdits (default: your settings)")
@@ -209,40 +212,37 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel"))
+    main_checkout = root
     state = None
     if args.resume:
         run_dir = Path(args.resume).resolve()
         state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
-        saved = state["args"]
-        for key, val in saved.items():  # flags given now win over the saved ones
-            if getattr(args, key, None) in (None, False):
+        for key, val in state["args"].items():  # a flag given now wins; an omitted one keeps the saved value
+            if key in ("resume", "dry_run"):
+                continue
+            if getattr(args, key, None) == p.get_default(key):
                 setattr(args, key, val)
+        state["failures"] = 0  # a resumed run gets a fresh failure streak
+        state["stop_reason"] = None
         root = Path(state["root"])
-        if dirty(root):
-            raise SystemExit("overnight: the run's checkout has uncommitted changes; commit or stash them first")
-        git(root, "checkout", "-q", state["branch"])
     else:
         if args.objective_file:
             args.objective = Path(args.objective_file).read_text(encoding="utf-8").strip()
         if not args.objective:
             p.error("give an objective (argument or --objective-file)")
-        if dirty(root):
+        if not args.worktree and dirty(root):
             raise SystemExit("overnight: working tree not clean; commit or stash first, or use --worktree")
         run_id = time.strftime("%Y%m%d-%H%M%S")
         branch = args.branch or f"overnight/{slugify(args.objective)}-{run_id}"
         if args.worktree:
-            wt = Path(args.worktree).resolve()
-            if not args.dry_run:
-                git(root, "worktree", "add", "-q", "-b", branch, str(wt))
-            root = wt
-        elif not args.dry_run:
-            git(root, "checkout", "-q", "-b", branch)
-        run_dir = root / RUNS_DIR / run_id
+            root = Path(args.worktree).resolve()
         state = {"root": str(root), "branch": branch, "run_id": run_id, "iteration": 0, "cost": 0.0,
                  "tokens": 0, "commits": [], "failures": 0, "stop_reason": None,
                  "args": {k: v for k, v in vars(args).items() if k not in ("resume", "dry_run")}}
+        run_dir = root / RUNS_DIR / run_id
 
-    gate = args.gate or kit_gate(root)
+    # the gate comes from the checkout the run starts from (a worktree may not exist yet)
+    gate = args.gate or kit_gate(root if root.exists() else main_checkout)
     notes_path = run_dir / "notes.md"
     caps = [c for c in (args.max_iterations and f"{args.max_iterations} iterations",
                         args.max_usd is not None and f"USD {args.max_usd:.2f}",
@@ -254,9 +254,18 @@ def main(argv=None):
     if not caps:
         print("overnight: WARNING no budget set - the run ends only on the stop condition, "
               f"{args.max_failures} consecutive failures, or Ctrl-C")
-    if args.dry_run:
+    if args.dry_run:  # nothing is created or checked out
         print("\n" + build_prompt(args, state["iteration"] + 1, notes_path, gate))
         return 0
+
+    if args.resume:
+        if dirty(root):
+            raise SystemExit("overnight: the run's checkout has uncommitted changes; commit or stash them first")
+        git(root, "checkout", "-q", state["branch"])
+    elif args.worktree:
+        git(main_checkout, "worktree", "add", "-q", "-b", state["branch"], str(root))
+    else:
+        git(root, "checkout", "-q", "-b", state["branch"])
 
     run_dir.mkdir(parents=True, exist_ok=True)
     exclude_runs_dir(root)
@@ -270,11 +279,14 @@ def main(argv=None):
         with notes_path.open("a", encoding="utf-8") as fh:
             fh.write(f"- [runner] #{state['iteration']}: {line}\n")
 
+    start = None  # HEAD at the start of the current iteration
+
     def failed(reason):
-        undo(root)
+        undo(root, start or "HEAD")
         state["failures"] += 1
         note(f"failed and undone - {reason}")
         print(f"overnight: #{state['iteration']} failed ({state['failures']} in a row): {reason}")
+        save()
 
     rate_waits = 0
     try:
@@ -287,35 +299,42 @@ def main(argv=None):
                 state["stop_reason"] = f"{args.max_failures} consecutive failed iterations"
                 break
             state["iteration"] += 1
+            start = git(root, "rev-parse", "HEAD")
             left = None if args.max_usd is None else args.max_usd - state["cost"]
             res = run_agent(args, build_prompt(args, state["iteration"], notes_path, gate), root, left)
             state["cost"] += res["cost"]
             state["tokens"] += res["tokens"]
-            log.write(json.dumps({"iteration": state["iteration"], **{k: v for k, v in res.items()}}) + "\n")
+            log.write(json.dumps({"iteration": state["iteration"], **res}) + "\n")
             log.flush()
 
             if not res["ok"]:
-                if res.get("rate_limited") and args.rate_limit_wait and rate_waits < 4:
+                if res.get("rate_limited") and args.rate_limit_wait and rate_waits < args.max_rate_limit_waits:
                     rate_waits += 1
                     state["iteration"] -= 1
-                    undo(root)
-                    print(f"overnight: rate limited, waiting {args.rate_limit_wait}s")
+                    undo(root, start)
+                    print(f"overnight: rate or usage limit, waiting {args.rate_limit_wait}s ({rate_waits})")
                     time.sleep(args.rate_limit_wait)
                     continue
-                if res.get("budget"):
-                    undo(root)
+                total_cap_binds = left is not None and (args.iteration_usd is None or left <= args.iteration_usd)
+                if res.get("budget") and total_cap_binds:
+                    undo(root, start)
                     state["stop_reason"] = "budget reached during an iteration"
                     break
                 failed(f"agent error: {res['error'][:200]}")
-                save()
                 continue
             rate_waits = 0
+
+            # The runner commits, not the agent: fold any commit the agent made back into the tree,
+            # so it goes through the gate like everything else.
+            if git(root, "rev-parse", "HEAD") != start:
+                git(root, "reset", "-q", "--soft", start)
+
             report = res["report"] or {"status": "progress", "summary": "", "stop_condition_met": False}
             status = report.get("status")
-            summary = (report.get("summary") or "").strip().splitlines()[0][:120] if report.get("summary") else ""
+            summary = " ".join((report.get("summary") or "").split())[:120]
 
             if status == "blocked":
-                undo(root)
+                undo(root, start)
                 note(f"blocked - {summary}")
                 state["stop_reason"] = f"blocked, needs a human: {summary}"
                 break
@@ -325,16 +344,19 @@ def main(argv=None):
                     state["stop_reason"] = f"stop condition met: {summary}"
                     break
                 failed(f"no change ({status}): {summary}")
-                save()
                 continue
             ok, out = run_gate(gate, root, args.gate_timeout)
             if not ok:
                 failed(f"gate failed: {out.splitlines()[-1] if out else ''}")
-                save()
                 continue
             git(root, "add", "-A")
-            git(root, "commit", "-q", "-m", f"overnight #{state['iteration']}: {summary or 'step'}",
-                "-m", f"Run {state['run_id']}, objective: {args.objective[:200]}")
+            done = subprocess.run(["git", "-C", str(root), "commit", "-q", "-m",
+                                   f"overnight #{state['iteration']}: {summary or 'step'}",
+                                   "-m", f"Run {state['run_id']}, objective: {args.objective[:200]}"],
+                                  capture_output=True, text=True)
+            if done.returncode != 0:
+                failed(f"commit refused: {(done.stderr or done.stdout).strip()[-200:]}")
+                continue
             sha = git(root, "rev-parse", "--short", "HEAD")
             state["commits"].append({"iteration": state["iteration"], "sha": sha, "summary": summary})
             state["failures"] = 0
@@ -345,8 +367,15 @@ def main(argv=None):
                 state["stop_reason"] = f"stop condition met: {summary}"
                 break
     except KeyboardInterrupt:
-        undo(root)
+        undo(root, start or "HEAD")
         state["stop_reason"] = "interrupted"
+    except BaseException as exc:  # never leave a half-done iteration without a record
+        state["stop_reason"] = f"runner error: {exc!r}"[:300]
+        try:
+            undo(root, start or "HEAD")
+        finally:
+            save()
+        raise
     finally:
         log.close()
 

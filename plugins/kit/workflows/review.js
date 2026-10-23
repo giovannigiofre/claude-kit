@@ -106,7 +106,7 @@ Claimed failure: ${f.why}
 Set refuted=true if the scenario cannot happen, is already handled, or is not a real problem. If unsure, refuted=true. (skeptic ${k + 1})`,
       { label: `verify:${f.file}:${f.line}#${k + 1}`, phase: 'Verify', schema: VOTE })))
       .then(votes => ({ ...f, lens: lens.split(':')[0], upheld: votes.filter(Boolean).filter(v => !v.refuted).length }))
-  )).then(checked => ({ lens: lens.split(':')[0], reviewed: found ? found.reviewed_paths : [], findings: checked })),
+  )).then(checked => ({ lens: lens.split(':')[0], failed: !found, reviewed: found ? found.reviewed_paths : [], findings: checked })),
 )
 
 const lensResults = results.filter(Boolean)
@@ -116,24 +116,29 @@ const disputed = all.filter(f => f.upheld === 1)
 const rank = { high: 0, medium: 1, low: 2 }
 confirmed.sort((a, b) => rank[a.severity] - rank[b.severity])
 
-// A changed file no lens read is not certified by a clean review.
-const reviewed = new Set(lensResults.flatMap(r => r.reviewed || []))
-const notCovered = CHANGED.filter(p => !reviewed.has(p))
+// A changed file no lens read is not certified by a clean review. Agents write paths in
+// different shapes (./x, a/x, /abs/repo/x): compare on the normalised tail.
+const norm = p => String(p).trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/^[ab]\//, '')
+const sameFile = (a, b) => { const x = norm(a), y = norm(b); return x === y || x.endsWith('/' + y) || y.endsWith('/' + x) }
+const reviewedPaths = lensResults.flatMap(r => r.reviewed || [])
+const failedLenses = lensResults.filter(r => r.failed).map(r => r.lens)
+const notCovered = scope ? CHANGED.filter(c => !reviewedPaths.some(r => sameFile(c, r))) : null
 
 const risk = await agent(`Rate the risk of merging the changes on the current branch versus ${BASE}.${CONTEXT}
 Confirmed findings still open: ${confirmed.length ? confirmed.map(f => `${f.severity} ${f.file}:${f.line} ${f.title}`).join('; ') : 'none'}.
-Files no reviewer read: ${notCovered.length ? notCovered.join(', ') : 'none'}.
+Files no reviewer read: ${notCovered === null ? 'unknown (the scope step failed)' : notCovered.length ? notCovered.join(', ') : 'none'}.${failedLenses.length ? `\nLenses that failed to run: ${failedLenses.join(', ')}.` : ''}
 Consider blast radius (shared modules, auth, money, migrations, data deletion, public API), how much the tests and any evidence under .claude/evidence/ actually exercise, and how hard a rollback is.
 Low means a reader can trust the summary; high means someone must read the diff.`,
   { label: 'risk', phase: 'Assess', schema: RISK })
 
-log(`${all.length} findings, ${confirmed.length} confirmed by both skeptics, ${disputed.length} disputed, ${notCovered.length} changed files not reviewed, risk ${risk ? risk.level : 'unknown'}`)
+log(`${all.length} findings, ${confirmed.length} confirmed by both skeptics, ${disputed.length} disputed, ${notCovered === null ? 'coverage unknown' : `${notCovered.length} changed files not reviewed`}, ${failedLenses.length} lenses failed, risk ${risk ? risk.level : 'unknown'}`)
 return {
   intent: scope ? scope.intent : null,
   risk,
   confirmed,
   disputed,
   notCovered,
+  failedLenses,
   byAction: {
     'auto-fix': confirmed.filter(f => f.action === 'auto-fix'),
     'ask-user': confirmed.filter(f => f.action === 'ask-user'),

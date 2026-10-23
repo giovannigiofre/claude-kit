@@ -36,19 +36,20 @@ the agent worse. So rules come from evidence, few at a time, and the user approv
    the file's tone and length. If a rule became wrong, delete it. If the repo has its own rule
    for where lessons go (a lessons-learned doc, a decision log), follow it. If the repo has both
    CLAUDE.md and AGENTS.md with diverging content, suggest one import or symlink the other.
-5. **At most 5 changes per run.** Show each as a diff with its evidence line and ask the user
-   to accept or reject each one (AskUserQuestion, multiSelect). Write only the accepted ones.
+5. **At most 4 changes per run** (one AskUserQuestion multiSelect holds 4 options). Show each
+   as a diff with its evidence line and ask the user which to accept. Write only the accepted ones.
    Do not commit unless asked.
 6. **Move conditional sections out.** If CLAUDE.md holds a long section that only some tasks
    need (an e2e testing guide, a release checklist), propose moving it into a project skill as
-   one of the 5 changes.
+   one of the 4 changes.
 
 ## Sweep
 
 `/kit:learn sweep [N]` reviews the last N sessions of this project (default 10), not just this
-one. Claude Code keeps transcripts as JSONL under `~/.claude/projects/<project path with "/"
-replaced by "-">/`. Read them with an Explore agent (they are large; ask it for user turns that
-correct, reject or redo Claude's work, with a short quote and the session date, and for checks
-that failed the same way more than once). Then apply steps 2-6: only patterns seen in at least
-two sessions, at most 5 proposed changes, each approved by the user. If the transcript folder
+one. Claude Code keeps transcripts as JSONL under `~/.claude/projects/<folder>/`, where the
+folder name is the project's absolute path with every non-alphanumeric character replaced by
+`-`; list `~/.claude/projects` to find it. Read them with an Explore agent (they are large;
+ask it for user turns that correct, reject or redo Claude's work, with a short quote and the
+session date, and for checks that failed the same way more than once). Then apply steps 2-6: only patterns seen in at least
+two sessions, at most 4 proposed changes, each approved by the user. If the transcript folder
 is not there, say so and fall back to this session.

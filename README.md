@@ -74,7 +74,7 @@ Sources are at the end.
 | Skill | `/kit:shape [idea]` | Turns a brain-dump into a precise brief with multiple-choice questions, then launches it. Starts on its own via the prompt hook |
 | Skill | `/kit:lead <goal>` | Makes the session the lead: plan, delegate, verify, loop, report |
 | Skill | `/kit:go` | Finishes the work: intent → sync with base → verify with live evidence → review (findings as auto-fix / ask-user / no-op) → simplify + docs → risk rating → commit → PR → watches CI until green. `/kit:go babysit <PR>` only watches |
-| Skill | `/kit:learn` | Writes a correction into CLAUDE.md, a skill or kit.json so it sticks: evidence for every rule, at most 5 changes per run, each approved by you, task-specific rules moved into skills. `/kit:learn sweep` mines the last sessions' transcripts |
+| Skill | `/kit:learn` | Writes a correction into CLAUDE.md, a skill or kit.json so it sticks: evidence for every rule, at most 4 changes per run, each approved by you, task-specific rules moved into skills. `/kit:learn sweep` mines the last sessions' transcripts |
 | Skill | `kit:overnight` | Sets up and launches `scripts/overnight.py`: a fresh `claude -p` per iteration, one commit per step that passes the gate, reset on failure, `notes.md` as memory, stop condition, optional caps on iterations / USD / tokens (or none) |
 | Skill | `/kit:techdebt` | End-of-session sweep for duplication, dead code and stale docs |
 | Skill | `/kit:init` | Sets up the harness in a project by writing `.claude/kit.json` |

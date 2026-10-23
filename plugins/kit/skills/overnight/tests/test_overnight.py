@@ -33,15 +33,24 @@ prompt = sys.argv[sys.argv.index("-p") + 1]
 (state / ".fake_last_prompt").write_text(prompt)
 if action == "error":
     print("boom", file=sys.stderr); sys.exit(1)
-if action in ("change", "done", "blocked"):
+if action == "limit":
+    print(json.dumps({"type": "result", "is_error": True, "result": "You've hit your session limit"})); sys.exit(1)
+if action == "commitbad":
+    import subprocess
+    Path("bad.txt").write_text("x")
+    subprocess.run(["git", "add", "-A"], check=True)
+    subprocess.run(["git", "commit", "-qm", "agent commit"], check=True)
+if action in ("change", "done", "blocked", "blank"):
     with open("work.txt", "a") as fh: fh.write(f"step {n}\n")
 if action == "bad":
     Path("bad.txt").write_text("x")
-status = {"change": "progress", "bad": "progress", "noop": "no-op", "done": "done", "blocked": "blocked"}[action]
+status = {"change": "progress", "bad": "progress", "noop": "no-op", "done": "done", "blocked": "blocked",
+          "blank": "progress", "commitbad": "progress"}[action]
+summary = "   " if action == "blank" else f"{action} {n}"
 print(json.dumps({"type": "result", "is_error": False, "total_cost_usd": 0.5,
                   "usage": {"input_tokens": 100, "cache_creation_input_tokens": 50, "output_tokens": 10,
                             "cache_read_input_tokens": 9999},
-                  "structured_output": {"status": status, "summary": f"{action} {n}",
+                  "structured_output": {"status": status, "summary": summary,
                                         "stop_condition_met": action == "done"}}))
 '''
 
@@ -175,6 +184,74 @@ def test_worktree_leaves_main_checkout_alone():
     assert len(commits(d)) == 1, "main checkout must not get commits"
     assert len(commits(wt)) == 3, commits(wt)
     assert (wt / "work.txt").read_text().count("step") == 2
+
+
+def test_blank_summary_still_commits():
+    d, fake = repo(["blank", "done"])
+    _, end, _ = run(d, fake)
+    assert len(end["commits"]) == 2 and end["commits"][0]["summary"] == "", end
+
+
+def test_agent_commit_goes_through_the_gate():
+    d, fake = repo(["commitbad", "noop", "noop"])
+    _, end, _ = run(d, fake)
+    assert end["commits"] == [] and not (d / "bad.txt").exists(), end
+    assert len(commits(d)) == 1 and clean(d), commits(d)
+
+
+def test_commit_hook_refusal_is_a_failure():
+    d, fake = repo(["change", "change", "change"])
+    hook = d / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\necho refused by hook >&2\nexit 1\n")
+    hook.chmod(0o755)
+    _, end, run_dir = run(d, fake)
+    assert end["commits"] == [] and "3 consecutive" in end["stop_reason"], end
+    assert "commit refused" in (run_dir / "notes.md").read_text() and clean(d)
+
+
+def test_session_limit_waits_instead_of_failing():
+    d, fake = repo(["limit", "change", "done"])
+    out = subprocess.run([sys.executable, str(SCRIPT), "x", "--agent-cmd", f"{sys.executable} {fake}",
+                          "--gate", "true", "--rate-limit-wait", "1"],
+                         cwd=d, capture_output=True, text=True, timeout=120, env=env(d))
+    assert out.returncode == 0 and "waiting 1s" in out.stdout, out.stdout + out.stderr
+    run_dir = sorted((d / ".claude" / "overnight").iterdir())[-1]
+    end = json.loads((run_dir / "end-state.json").read_text())
+    assert len(end["commits"]) == 2 and end["iteration"] == 2, end
+
+
+def test_worktree_allowed_with_dirty_main_checkout():
+    d, fake = repo(["change", "done"])
+    (d / "work.txt").write_text("my uncommitted edit\n")
+    wt = d.parent / f"{d.name}-wt2"
+    out = subprocess.run([sys.executable, str(SCRIPT), "improve", "--worktree", str(wt),
+                          "--agent-cmd", f"{sys.executable} {fake}", "--gate", "true"],
+                         cwd=d, capture_output=True, text=True, timeout=120, env=env(d))
+    assert out.returncode == 0, out.stderr
+    assert (d / "work.txt").read_text() == "my uncommitted edit\n"
+    assert len(commits(wt)) == 3
+
+
+def test_resume_resets_the_failure_streak():
+    d, fake = repo(["noop", "noop", "noop", "change", "done"])
+    _, end, run_dir = run(d, fake)
+    assert "3 consecutive" in end["stop_reason"]
+    out = subprocess.run([sys.executable, str(SCRIPT), "--resume", str(run_dir),
+                          "--agent-cmd", f"{sys.executable} {fake}"],
+                         cwd=d, capture_output=True, text=True, timeout=120, env=env(d))
+    assert out.returncode == 0, out.stderr
+    end2 = json.loads((run_dir / "end-state.json").read_text())
+    assert len(end2["commits"]) == 2 and end2["stop_reason"].startswith("stop condition met"), end2
+
+
+def test_dry_run_creates_nothing():
+    d, fake = repo(["change"])
+    out = subprocess.run([sys.executable, str(SCRIPT), "x", "--dry-run", "--agent-cmd", "false"],
+                         cwd=d, capture_output=True, text=True, env=env(d))
+    assert out.returncode == 0 and "iteration 1" in out.stdout, out.stderr
+    assert not (d / ".claude").exists() and len(commits(d)) == 1
+    branch = subprocess.run(["git", "-C", str(d), "branch", "--show-current"], capture_output=True, text=True).stdout.strip()
+    assert branch == "main", branch
 
 
 if __name__ == "__main__":

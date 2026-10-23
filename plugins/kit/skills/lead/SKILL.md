@@ -46,7 +46,7 @@ Create a task list (TaskCreate) with one task per independently checkable unit. 
 | Many similar items, or results that need cross-checking | the `kit:ship` workflow (tasks list in `args`) or `kit:review`; ask the user before the first workflow run if they have not opted in |
 | Pure research / reading | an Explore or general-purpose agent; keep only its conclusion |
 | Long, independent, can run unattended | tell the user it fits a background session (`claude agents`) and give the exact prompt |
-| Hours of small improvements toward one objective (overnight), with a metric or a judgement you trust | propose `kit:overnight`: fresh session per iteration, a commit per verified step, hard caps on iterations and cost |
+| Hours of small improvements toward one objective (overnight), with a metric or a judgement you trust | propose `kit:overnight`: fresh session per iteration, a commit per verified step, optional caps on iterations, cost and tokens |
 | The user wants to keep talking and adding work while things run | switch to captain mode (below): a board on disk, background workers, standing loops |
 | Must repeat on a schedule | propose `/loop <interval> /kit:lead next` or a routine |
 | One conversation must keep going until a condition holds | propose `/goal <condition>`; the kit Stop hook still runs the real check. `/goal` has no enforced token or turn cap: for a long unattended run use `kit:overnight` |

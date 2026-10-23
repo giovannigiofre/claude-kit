@@ -35,7 +35,9 @@ this repo, from `gh pr list --author @me`).
    **go**, **no-go**, **inconclusive**, or **no-surface** (nothing user-facing to exercise, so the
    gates are the evidence). Fix failures and repeat. Do not continue on no-go.
 5. **Review in a fresh context.** For a non-trivial change, have `kit:verifier` check it against
-   the intent; for a large or risky one, run the `kit:review` workflow. Treat the implementer's
+   the intent; for a large or risky one, run the `kit:review` workflow and pass the step-2 intent
+   as its `intent` argument. Its `notCovered` files and `failedLenses` mean that part is not
+   reviewed: review those files yourself or say so in the PR. Treat the implementer's
    claims (including your own) as claims, not evidence. Per finding:
    - **auto-fix**: mechanical, does not change what the user asked for (a missed null check,
      a lint error, a stale comment). Fix it, then re-verify.
