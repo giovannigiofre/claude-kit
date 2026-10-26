@@ -92,7 +92,7 @@ read again every 15 seconds. Mode per project (`/kit-mode`): **Light** (a normal
 | `kit:extras` | Offers `kit-ui` or `kit-llm` when a task needs one the project lacks |
 | `/kit:go` | Intent → sync → test like a user → `/code-review` → `/simplify` → risk → PR → CI green |
 | `/kit:init` | Sets up a project (kit.json, e2e skill, safety, permissions) |
-| `/kit:learn` | Tidies the lesson ledger (merge, retire, hardening proposals, undo); corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
+| `/kit:learn` | Tidies the lesson ledger (merge, retire, hardening proposals, undo); `promote` turns a lesson seen across repos into a kit PR; corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
 | `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
 | `kit:implementer` | A thread: one item from brief to PR in its own worktree, effort medium |
 | `kit:verifier` | A fresh-context review against the intent, with a per-project memory of pitfalls |

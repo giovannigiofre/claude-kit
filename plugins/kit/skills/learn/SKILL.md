@@ -2,7 +2,7 @@
 name: learn
 description: Tidies the kit's lesson ledger for this repo (merge, retire, propose hardening), shows or undoes what it learned, and turns a correction or a repeated mistake into a durable fix - a check, a hook entry, a project skill or a CLAUDE.md line. Use after the user corrects Claude, when the verifier caught the same defect twice, or with "undo", "news", "list" or "sweep".
 disable-model-invocation: true
-argument-hint: "[empty = distill + this session's corrections | undo <id> | news | list | stats | sweep [N] | the lesson to make stick]"
+argument-hint: "[empty = distill + this session's corrections | undo <id> | news | list | stats | promote [id] | sweep [N] | the lesson to make stick]"
 ---
 
 # /learn: the kit's lessons, kept small and true
@@ -23,6 +23,7 @@ expanded, the script is in the kit plugin's `hooks/scripts/`).
   `--no-model` skips the model. Then take this session's corrections and repeated failures, if
   any, through the section below.
 - **undo <id>**: `$L undo <id> .`, then say what came back.
+- **promote [id]**: follow `promote.md` in this folder. Without an id, list the kit candidates.
 - **news**, **list**, **stats**: `$L news .`, `$L list --all .`, `$L stats .`; show the output,
   shortened to what the user asked about.
 

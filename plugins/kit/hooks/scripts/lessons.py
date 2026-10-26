@@ -30,6 +30,9 @@ picks active lessons for that agent, most repeated and newest first, within the 
   python3 lessons.py stats [DIR]               counts for this repo's ledger and events
   python3 lessons.py news [DIR]                the last changes the kit made to the ledger
   python3 lessons.py distill [--no-model] [DIR]  merge, retire, propose hardening (distill.py)
+  python3 lessons.py promote [ID] [DIR]        kit candidates, or the brief to promote ID (promote.py)
+  python3 lessons.py promoted ID VERSION URL [DIR]  the PR is open; ID retires at kit VERSION
+  python3 lessons.py scrub [FILE|-]            check text bound for the kit for this machine's repos
 Standard library only.
 """
 
@@ -115,6 +118,11 @@ def kit_version():
         return json.loads(manifest.read_text(encoding="utf-8")).get("version")
     except Exception:
         return None
+
+
+def headless():
+    """Overnight (KIT_HEADLESS), or a `claude -p` / SDK session: no model calls, no promotion."""
+    return bool(os.environ.get("KIT_HEADLESS")) or os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk")
 
 
 def cc_slug(path):
@@ -258,7 +266,7 @@ def undo(slug, lesson_id):
             if op.get("before") is None:
                 rows.pop(op["id"], None)
             else:
-                rows[op["id"]] = op["before"]
+                rows[op["id"]] = dict(op["before"], kept=today())  # the distiller leaves it be
                 if op["id"] not in order:
                     order.append(op["id"])
             op["undone"] = True
@@ -303,7 +311,9 @@ def observe(slug, key, kind, text, src, ref="", agents=AGENTS, projects=(), acti
             if not found or found.get("status") != "merged":
                 break
             found = next((r for r in rows if r.get("id") == found.get("merged_into")), None)
-        if found:
+        if found and found.get("status") == "promoted":
+            promoted_to = found.get("promoted_to")  # counted on the machine lesson, below
+        elif found:
             found["evidence"] = (found.get("evidence") or [])[-(MAX_EVIDENCE - 1):] + [evidence]
             found["seen"] = int(found.get("seen", 1)) + 1
             found["last"] = today()
@@ -319,19 +329,24 @@ def observe(slug, key, kind, text, src, ref="", agents=AGENTS, projects=(), acti
                 state["news"].append(f"brought back {found['id']} (seen again): {brief(found['text'])} · "
                                      + UNDO.format(found["id"]))
             return found["id"]
-        active = activate_at <= 1 and room
-        record = {
-            "id": next_id(rows, "M" if slug == MACHINE else "L"), "key": key, "kind": kind, "text": text,
-            "applies": {"agents": [a for a in agents if a in AGENTS]}, "evidence": [evidence],
-            "projects": list(projects), "seen": 1, "helpful": 0, "harmful": 0, "misses": 0,
-            "home": "ledger", "status": "active" if active else "candidate",
-            "created": today(), "last": today(), "origin_src": src,
-        }
-        if active:
-            record["activated"] = today()
-        record.update(extra or {})
-        rows.append(record)
-        return record["id"]
+        else:
+            active = activate_at <= 1 and room
+            record = {
+                "id": next_id(rows, "M" if slug == MACHINE else "L"), "key": key, "kind": kind, "text": text,
+                "applies": {"agents": [a for a in agents if a in AGENTS]}, "evidence": [evidence],
+                "projects": list(projects), "seen": 1, "helpful": 0, "harmful": 0, "misses": 0,
+                "home": "ledger", "status": "active" if active else "candidate",
+                "created": today(), "last": today(), "origin_src": src,
+            }
+            if active:
+                record["activated"] = today()
+            record.update(extra or {})
+            rows.append(record)
+            return record["id"]
+    m = next((r for r in read_rows(file_of(MACHINE)) if r.get("id") == promoted_to), None)
+    if m and m.get("status") != "merged":  # a retired machine lesson comes back like any other
+        return observe(MACHINE, m.get("key"), kind, text, src, ref, agents, projects, activate_at)
+    return found["id"]
 
 
 def capture(cwd, src, key, text, kind="pitfall", agents=AGENTS, ref="", once_per=""):
@@ -594,6 +609,9 @@ def main(argv):
     if argv[0] == "distill":
         import distill
         return distill.main(argv[1:])
+    if argv[0] in ("promote", "promoted", "scrub"):
+        import promote
+        return promote.main(argv)
     cmd, rest = argv[0], argv[1:]
     show_all = "--all" in rest
     rest = [a for a in rest if a != "--all"]
@@ -630,6 +648,9 @@ def main(argv):
     elif cmd == "undo":
         slug = MACHINE if args[0].startswith("M") else info["slug"]
         touched = undo(slug, args[0])
+        if touched and slug == MACHINE:
+            import promote
+            promote.release(args[0])  # repo lessons a machine lesson no longer holds come back
         if touched:
             with locked(slug):
                 append_row(file_of(slug, ".news"), {"at": today(), "shown": True,

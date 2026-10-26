@@ -221,7 +221,8 @@ def test_model_pass():
         assert "headless" in distill.model_pass(lessons.repo(repo))[1], "never in a `claude -p` session"
         os.environ["CLAUDE_CODE_ENTRYPOINT"] = "cli"
         lines, status = distill.distill(repo)
-        assert "$0.0012" in status and len(lines) == 2, (lines, status)
+        model_lines = [line for line in lines if line.startswith(("reworded", "retired"))]
+        assert "2 change(s), $0.0012" in status and len(model_lines) == 2, (lines, status)
         args = (TMP / "fake-args").read_text()
         assert "--max-budget-usd 0.05" in args and "--tools" in args and "--safe-mode" in args, args
         by_id = {r["id"]: r for r in rows(repo)}
@@ -234,9 +235,60 @@ def test_model_pass():
         os.environ["KIT_LEARN_MODEL"] = "0"
 
 
+def test_promotion():
+    import promote
+    repos = [make_repo(f"p{i}", f"https://example.com/acme/p{i}.git") for i in range(3)]
+    slugs = []
+    for r in repos:
+        info = lessons.repo(r)
+        lessons.register(info)
+        slugs.append(info["slug"])
+
+    def teach(i, key, text):
+        return lessons.observe(slugs[i], key, "preference", text, "user", activate_at=1)
+
+    teach(0, "short-pr", "keep pull request descriptions to a short narrative")
+    teach(1, "short-pr", "keep pull request descriptions to a short narrative")
+    distill.distill(repos[0], model=False)
+    machine = lessons.read_rows(lessons.file_of(lessons.MACHINE))
+    m = next(r for r in machine if r.get("key") == "short-pr")
+    assert m["status"] == "active" and len(m["from"]) == 2 and "promote" not in m, m
+    assert "(all repos) keep pull request" in lessons.deliver(repos[2], "implementer", 2400), "every repo gets it"
+    assert all(r["status"] == "promoted" for r in rows(repos[0]) if r.get("key") == "short-pr")
+    assert lessons.main(["undo", m["id"], str(repos[0])]) == 0
+    distill.distill(repos[0], model=False)
+    assert [r["status"] for r in rows(repos[0]) if r.get("key") == "short-pr"] == ["active"], "undo sticks"
+
+    for i in range(3):
+        teach(i, "kit-worktree-bash", "the worktree guard blocks Bash cd into a sibling worktree")
+    lines, _ = distill.distill(repos[0], model=False)
+    assert any(line.startswith("kit candidate M") and "/kit:learn promote M" in line for line in lines), lines
+    cand = next(r for r in lessons.read_rows(lessons.file_of(lessons.MACHINE)) if r.get("key") == "kit-worktree-bash")
+    assert lessons.observe(slugs[0], "kit-worktree-bash", "preference", "seen again", "verifier-fail") == cand["id"], \
+        "a promoted repo lesson is counted on its machine lesson"
+    os.environ["CLAUDE_CODE_ENTRYPOINT"] = "sdk-cli"
+    assert promote.brief(cand["id"], lessons.repo(repos[0]))[0] is None, "no promotion from a headless run"
+    os.environ["CLAUDE_CODE_ENTRYPOINT"] = "cli"
+    text = promote.brief(cand["id"], lessons.repo(repos[0]))[0]
+    assert "Branch: learn/kit-worktree-bash" in text and "passes the scrub" in text, text
+    assert promote.promoted(cand["id"], "0.0.1", "https://example.com/pr/1", lessons.repo(repos[0]))
+    promote.merged = lambda url: False  # no network in tests: an open PR has not shipped anything
+    distill.distill(repos[0], model=False)
+    assert next(r for r in lessons.read_rows(lessons.file_of(lessons.MACHINE)) if r["id"] == cand["id"])["status"] == "active"
+    promote.merged = lambda url: url == "https://example.com/pr/1"
+    distill.distill(repos[0], model=False)
+    cand = next(r for r in lessons.read_rows(lessons.file_of(lessons.MACHINE)) if r["id"] == cand["id"])
+    assert cand["status"] == "retired" and "fixed in kit" in cand["retired"]["why"], "a shipped fix retires it"
+
+    found = promote.scrub(f"+ see {repos[1]}/README\n+ for acme/p1 set API_BASE_URL\n+ a generic guard step")
+    assert len(found) >= 2 and not any("line 3" in f for f in found), found
+    assert promote.scrub("@@ -1 +1 @@\n+ token ghp_" + "a1B2" * 9 + f"\n  context {repos[1]}") == \
+        ["line 2: secret-shaped text"], "a diff's context lines are already in the kit"
+
+
 def main():
     for test in (test_ledger, test_import, test_capture, test_delivery, test_fail_then_pass, test_distill,
-                 test_model_pass):
+                 test_model_pass, test_promotion):
         test()
     print("lessons: all checks passed")
 

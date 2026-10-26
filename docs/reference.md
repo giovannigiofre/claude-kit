@@ -188,8 +188,17 @@ tools, hooks or plugins, from an empty folder, capped at $0.05 (`--max-budget-us
 most once a day per repo. A typical call costs about $0.001. The model can only edit, merge
 or retire existing lessons, and its text passes the same secret filter. It never runs in a
 headless session: overnight (`KIT_HEADLESS`) or `claude -p` and the SDK (`CLAUDE_CODE_ENTRYPOINT`
-`sdk-*`); turn it off with `KIT_LEARN_MODEL=0` or
-`"learn": {"model": false}` in kit.json.
+`sdk-*`); turn it off with `KIT_LEARN_MODEL=0` or `"learn": {"model": false}` in kit.json.
+
+**Promotion** (`promote.py`, run by the distiller): a lesson active in 2 repos becomes one machine
+lesson (`M` ids) that every repo gets; the repo copies turn `promoted`, and undoing the machine
+lesson gives them back for good. A machine lesson seen in 3 or more repos or about the kit, and
+any `kit-defect` lesson, becomes a kit candidate, announced once. Only `/kit:learn promote <id>`,
+run in an interactive session, prepares a claude-kit branch: the smallest generic change, a
+regression test or eval that fails without it, the budget test, and `lessons.py scrub` on the
+diff (no repo names, orgs, paths, env var names from the ledgers, or secrets). It opens the PR in
+that session and never merges it. `lessons.py promoted <id> <version> <url>` then makes the lesson
+retire itself once the PR is merged (checked with `gh`) and that kit version is installed.
 
 ```bash
 python3 <kit>/hooks/scripts/lessons.py list [--all] [DIR]
@@ -200,6 +209,9 @@ python3 <kit>/hooks/scripts/lessons.py undo L4 [DIR]
 python3 <kit>/hooks/scripts/lessons.py stats [DIR]
 python3 <kit>/hooks/scripts/lessons.py news [DIR]
 python3 <kit>/hooks/scripts/lessons.py distill [--no-model] [DIR]
+python3 <kit>/hooks/scripts/lessons.py promote [ID] [DIR]
+python3 <kit>/hooks/scripts/lessons.py promoted ID VERSION PR_URL [DIR]
+git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
 ```
 
 ## Modes and the status line

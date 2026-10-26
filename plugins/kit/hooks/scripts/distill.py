@@ -3,20 +3,23 @@
 
 Runs after a kit:verifier PASS that follows a FAIL, at SessionEnd once EVENTS_TO_RUN new events
 are pending, and on /kit:learn. Every change is one undo group and one news line that the next
-session start passes on ("... · undo: /kit:learn undo L7").
+session start passes on ("... · undo: /kit:learn undo L7"); a lesson brought back by undo is
+`kept` and left alone after that.
 
 Deterministic, no tokens:
   - merge   two lessons of the same kind whose words mostly agree (the most seen, else the
             older, keeps its id);
-  - retire  automatic pitfalls and gate lessons not seen for STALE_DAYS, and candidates seen once
-            and not again within CANDIDATE_DAYS;
+  - retire  automatic pitfalls and gate lessons not seen for STALE_DAYS, candidates seen once and
+            not again within CANDIDATE_DAYS, lessons marked wrong twice (`harmful`), and lessons
+            whose fix shipped in the installed kit (`fixed_in`);
   - harden  a lesson that came back MISSES_TO_HARDEN times after threads were told gets a
             proposal for a mechanical home (a check, a test, a CLAUDE.md line). It is written to
-            the ledger and announced; nothing is applied.
+            the ledger and announced; nothing is applied;
+  - promote lessons active in 2 repos to the machine ledger and mark kit candidates (promote.py).
 Optional model pass (generalise wording, merges the word test missed, retire a contradicted
 lesson): `claude -p --model haiku` with no tools, no hooks, no plugins, MODEL_BUDGET_USD per run,
-at most MODEL_RUNS_PER_DAY per repo. Skipped in headless runs (KIT_HEADLESS, overnight), with
-KIT_LEARN_MODEL=0, or with kit.json {"learn": {"model": false}}. It can only edit, merge or
+at most MODEL_RUNS_PER_DAY per repo. Skipped in headless runs (lessons.headless: overnight,
+`claude -p`, the SDK), with KIT_LEARN_MODEL=0, or with kit.json {"learn": {"model": false}}. It can only edit, merge or
 retire lessons that exist; every text it returns goes through the same filters as any lesson.
 Standard library only.
 """
@@ -95,11 +98,16 @@ def live(rows):
     return [r for r in rows if r.get("status") in ("active", "candidate")]
 
 
+def tidy(rows):
+    """Lessons the distiller may change: live and not brought back by an undo."""
+    return [r for r in live(rows) if not r.get("kept")]
+
+
 def merge_pass(slug):
     out = []
     while True:
         with lessons.change(slug) as state:
-            pool = sorted(live(state["rows"]), key=keeper)
+            pool = sorted(tidy(state["rows"]), key=keeper)
             pair = next(((a, b) for i, a in enumerate(pool) for b in pool[i + 1:] if alike(a, b)), None)
             if not pair:
                 return out
@@ -110,8 +118,19 @@ def merge_pass(slug):
             out.append(line)
 
 
+def version(text):
+    return tuple(int(x) for x in re.findall(r"\d+", str(text or ""))[:3])
+
+
 def stale_why(r):
-    """Why an automatic retire applies to `r`, or None."""
+    """Why an automatic retire applies to `r`, or None (never for one the user brought back)."""
+    if r.get("kept"):
+        return None
+    if r.get("status") in ("active", "candidate") and version(r.get("fixed_in")) and lessons.kit_version() \
+            and version(lessons.kit_version()) >= version(r["fixed_in"]):
+        import promote
+        if promote.merged((r.get("promote") or {}).get("pr")):  # the fix shipped, not just a number
+            return f"fixed in kit {r['fixed_in']}"
     idle = lessons.days_between(r.get("last") or r.get("created"), lessons.today())
     if r.get("status") in ("active", "candidate") and int(r.get("harmful", 0)) >= 2:
         return f"marked wrong {r['harmful']} times"
@@ -188,8 +207,8 @@ def fixed_fail_keys(slug, agent):
 
 def model_allowed(info):
     """(allowed, reason)."""
-    if os.environ.get("KIT_HEADLESS") or os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
-        return False, "headless run"  # overnight, or a `claude -p` / SDK session
+    if lessons.headless():
+        return False, "headless run"
     if os.environ.get("KIT_LEARN_MODEL", "1") == "0":
         return False, "KIT_LEARN_MODEL=0"
     config, _ = kitlib.load_config(Path(info["main"]))
@@ -249,7 +268,7 @@ def apply_model_ops(slug, ops):
         if not isinstance(op, dict):
             continue
         with lessons.change(slug) as state:
-            by_id = {r.get("id"): r for r in live(state["rows"])}
+            by_id = {r.get("id"): r for r in tidy(state["rows"])}
             kind = op.get("op")
             if kind == "edit" and op.get("id") in by_id and usable(op.get("text")):
                 r = by_id[op["id"]]
@@ -312,6 +331,8 @@ def distill(cwd, model=True):
         return [], "not a git checkout the kit keys a ledger to"
     slug = info["slug"]
     lines = merge_pass(slug) + retire_pass(slug) + harden_pass(slug)
+    import promote  # lessons held by several repos move up a layer
+    lines += retire_pass(lessons.MACHINE) + harden_pass(lessons.MACHINE) + promote.scan()
     status = "model pass not asked for"
     if model:
         more, status = model_pass(info)
