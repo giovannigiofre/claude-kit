@@ -24,6 +24,7 @@ sys.path.insert(0, str(SCRIPTS))
 import distill  # noqa: E402
 import kitlib  # noqa: E402
 import lessons  # noqa: E402
+import subagent_stop  # noqa: E402
 
 GIT = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
 
@@ -167,30 +168,39 @@ def test_fail_then_pass():
     repo = make_repo("fixed", "https://example.com/acme/fixed.git")
 
     def verifier(agent, branch, verdict, *problems):
-        """A verifier run shaped like the real transcript: the report goes back through SubagentHandback
-        and the final text is small talk."""
-        listed = "".join(f"{i}. {p}\n   - where it shows\n" for i, p in enumerate(problems, 1)) or "none\n"
+        """A verifier run shaped like the real transcript: the report goes back through SubagentHandback,
+        its PROBLEMS heading has no colon, and the final text is small talk. The same agent again is
+        one resumed with SendMessage: its transcript grows."""
+        listed = "".join(f"{i}. **{p}** (src/app.ts:{i}0)\n   - where it shows\n" for i, p in enumerate(problems, 1))
         lines = [{"type": "user", "message": {"role": "user", "content":
                   f"Compared with branch `develop`, verify branch `{branch}` in its worktree."}},
                  {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "SubagentHandback",
-                  "input": {"message": f"VERDICT: {verdict}\n\nEVIDENCE:\n- gate ok\n\nPROBLEMS:\n{listed}"}}]}},
+                  "input": {"message": f"VERDICT: {verdict}\n\nEVIDENCE:\n- gate ok\n\n"
+                                       f"PROBLEMS (most severe first)\n\n{listed or 'none'}\n"}}]}},
                  {"type": "assistant", "message": {"content": [{"type": "text", "text": "Cleanup next."}]}}]
         path = TMP / f"{agent}.jsonl"
-        path.write_text("".join(json.dumps(r) + "\n" for r in lines))
+        with path.open("a") as f:
+            f.write("".join(json.dumps(r) + "\n" for r in lines))
         hook("subagent_stop.py", {"cwd": str(repo), "agent_type": "kit:verifier", "agent_id": agent,
                                   "agent_transcript_path": str(path), "last_assistant_message": "Cleanup next."})
 
+    assert subagent_stop.parse("VERDICT: FAIL\nPROBLEMS:\n1. the real one\n\nNOT CHECKED:\n1. load test\n") == \
+        ("FAIL", ["the real one"]), "a later section is not a problem"
     verifier("x1", "feat/x", "FAIL", "the export button ignores the date filter", "the totals row is off by one")
     verifier("y1", "feat/y", "FAIL", "the export button ignores the date filter", "the csv header is in German")
     verifier("z1", "feat/z", "FAIL", "the retry banner never clears")
 
     def status():
-        return {r["text"].split(": ", 1)[1]: r["status"] for r in rows(repo)}
+        return {r["text"].split(": ", 1)[1].split(" (")[0]: r["status"] for r in rows(repo)}
     assert list(status().values()) == ["active", "candidate", "candidate", "candidate"], status()
     verifier("x2", "feat/x", "PASS")
     assert status() == {"the export button ignores the date filter": "active", "the totals row is off by one": "active",
                         "the csv header is in German": "candidate", "the retry banner never clears": "candidate"}, \
         "a PASS confirms only its own branch's FAIL"
+    verifier("z1", "feat/z", "FAIL", "the toast hides the save button")
+    verifier("z1", "feat/z", "PASS")
+    assert status()["the toast hides the save button"] == "active", \
+        "a verifier resumed with SendMessage: its second FAIL is captured and its PASS confirms it"
 
 
 def test_distill():

@@ -161,8 +161,9 @@ and a kit:verifier FAIL (SubagentStop: each problem headline becomes a candidate
 is read from the verifier's report: its final message, else the SubagentHandback report in its
 transcript. Verifier verdicts and revert commits are counted as events, for stats and the
 distiller; a verdict is tied to the branch its brief names (else its report, else a PR number),
-and a PASS confirms only the last
-FAIL on the same branch (with no branch named, it confirms nothing). The same key seen again is counted, not added; a repeat after the lesson was delivered
+and a PASS confirms only the last FAIL on the same branch (with no branch named, it confirms
+nothing). Each report counts once, so a verifier resumed with SendMessage records its next round
+too. The same key seen again is counted, not added; a repeat after the lesson was delivered
 counts as a miss. A new automatic lesson starts as a candidate and turns active on its second
 sighting, at most 3 a day per repo. Text that looks like a key or token is refused.
 
@@ -194,7 +195,9 @@ tools, hooks or plugins, from an empty folder, capped at $0.05 (`--max-budget-us
 most once a day per repo. A typical call costs about $0.001. The model can only edit, merge
 or retire existing lessons, and its text passes the same secret filter. It never runs in a
 headless session: overnight (`KIT_HEADLESS`), or any `CLAUDE_CODE_ENTRYPOINT` other than an
-interactive one (`cli`, `claude-vscode`, `claude-desktop`), so `claude -p` and the SDK; turn it off with `KIT_LEARN_MODEL=0` or `"learn": {"model": false}` in kit.json.
+interactive one (`cli`, `claude-vscode`, `claude-desktop`, `claude-desktop-3p`), so not in
+`claude -p` or the SDK. Turn it off with `KIT_LEARN_MODEL=0` or `"learn": {"model": false}` in
+kit.json.
 
 **Promotion** (`promote.py`, run by the distiller): a lesson active in 2 repos becomes one machine
 lesson (`M` ids) that every repo gets; the repo copies turn `promoted`, and undoing the machine

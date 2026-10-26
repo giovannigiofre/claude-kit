@@ -218,11 +218,12 @@ def confirm(slug, keys):
     return each(slug, lambda r: r.get("key") in keys and r.get("status") == "candidate", act)
 
 
-def fixed_fail_keys(slug, agent, scope):
-    """Keys of the problems of the last FAIL on branch `scope` before this PASS (by `agent`),
-    within 3 days. Verdicts on other branches never count."""
+def fixed_fail_keys(slug, report, scope):
+    """Keys of the problems of the last FAIL on branch `scope` before this PASS (`report`, the
+    id its event was recorded under), within 3 days; that FAIL may come from the same verifier,
+    resumed. Verdicts on other branches never count."""
     events = lessons.read_rows(lessons.file_of(slug, ".events"))
-    verdicts = [e for e in events if str(e.get("src", "")).startswith("verdict-") and e.get("once") != agent
+    verdicts = [e for e in events if str(e.get("src", "")).startswith("verdict-") and e.get("once") != report
                 and scope and e.get("scope") == scope]
     if not verdicts or verdicts[-1].get("src") != "verdict-fail" \
             or lessons.days_between(verdicts[-1].get("date"), lessons.today()) > 3:

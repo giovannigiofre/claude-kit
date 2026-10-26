@@ -310,15 +310,25 @@ def check_find(argv, cwd, root):
         for i, a in enumerate(argv))
     if not deletes:
         return None
-    paths = []
-    for a in argv[1:]:
+    args, options, paths = argv[1:], [], []
+    while args and re.fullmatch(r"-[HLPEXdsxf]+", args[0]):  # options before the paths, maybe combined
+        options.append(args.pop(0))
+        if options[-1].endswith("f") and args:  # BSD: -f names a path
+            paths.append(args.pop(0))
+    options = "".join(options)
+    if "L" in options or "-follow" in args:
+        return ("ask", "rm-outside", "find following symlinks while deleting")
+    for a in args:
         if a.startswith("-") or a in ("(", "!", ")"):
             break
         paths.append(a)
+    roots = {Path(root), Path(os.path.realpath(str(root)))}
     for word in paths or ["."]:
-        target = expand(word, cwd)
-        if target is not UNKNOWN and (target == root or under(target, root)) and ".git" not in target.parts:
-            continue  # find deletes what matches below the path, not the path itself
+        raw = expand(word, cwd, raw=True)
+        if raw is not UNKNOWN:
+            real = Path(os.path.realpath(raw)) if "H" in options else resolved(raw)
+            if any(real == r or under(real, r) for r in roots) and ".git" not in real.parts:
+                continue  # find deletes what matches below the path, not the path itself
         found = delete_target(word, cwd, root)
         if found:
             return (found[0], "rm-outside", f"find deleting: {found[1]}")

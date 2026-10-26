@@ -160,7 +160,8 @@ project.
 
 - **Host** (your own machine): no OS sandbox. The guard still blocks recursive deletes outside
   the repo (a sibling linked worktree of the same repository counts as inside, outside its
-  `.git`; the main checkout does not; a path is judged by where its symlinks really lead), pushes or force pushes to main, `git reset --hard` or `clean` over uncommitted work,
+  `.git`; the main checkout does not; a path is judged by where its symlinks really lead),
+  pushes or force pushes to main, `git reset --hard` or `clean` over uncommitted work,
   `sudo`, `curl … | sh`, and reading `~/.ssh`, `~/.aws`, gh, docker or kube config and the
   keychain. It also keeps you the only author: it blocks a commit, PR, issue or comment that
   credits an AI (`Co-Authored-By: Claude`, "Generated with Claude Code", a session link), through

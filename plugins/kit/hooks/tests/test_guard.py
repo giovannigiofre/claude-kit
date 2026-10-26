@@ -113,6 +113,7 @@ MORE = [
     ("echo `rm -rf /`", "block"),
     ("find ~ -name '*.log' -delete", "block"),
     ("find / -exec rm -rf {} +", "block"),
+    ("find -x ~ -name '*.log' -delete", "block"),
     ("find . -name '*.pyc' -delete", "allow"),
     ("python3 -c 'import shutil, os; shutil.rmtree(os.path.expanduser(\"~\"))'", "block"),
     ("python3 -c 'print(1)'", "allow"),
@@ -209,7 +210,8 @@ def main():
                                (sibling, "rm -rf ../app-k3/to-other/a.txt", "block"),
                                (sibling, "rm -rf ../app-k3/to-main/", "block"),
                                (sibling, "rm -rf ../app-k3/to-main/../app/src", "block"),
-                               (sibling, "rm -rf to-other/a.txt", "block"), (sibling, "rm -rf ../app-k3/to-main", "allow")):
+                               (sibling, "rm -rf to-other/a.txt", "block"), (sibling, "rm -rf ../app-k3/to-main", "allow"),
+                               (sibling, "find to-other/ -delete", "block"), (sibling, "find -L . -delete", "ask")):
         got = verdict(home, cwd, command)
         if got != want:
             failed += 1
