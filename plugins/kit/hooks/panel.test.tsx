@@ -4,7 +4,7 @@ import type { On } from 'claude-code'
 // The world beneath the kit mod: a repo at /repo, a home at /home/u, files in memory.
 function world(on: On, files: Record<string, string> = {}) {
   mock.store(on)
-  mock.clock(on, { now: 1_000_000 })
+  const clock = mock.clock(on, { now: 1_000_000 })
   mock.env(on, { HOME: '/home/u' })
   const written: Record<string, string> = {}
   on('session.cwd', () => ({ value: '/repo' }))
@@ -27,7 +27,7 @@ function world(on: On, files: Record<string, string> = {}) {
   on('command.register', (_, e: any) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  return written
+  return { written, clock }
 }
 
 function promptCatcher(on: On) {
@@ -75,7 +75,7 @@ test('loop mode never reaches headless or scheduled prompts', async ($, on) => {
 })
 
 test('a settings file that does not parse is never rewritten', async ($, on) => {
-  const written = world(on, { '/repo/.claude/settings.local.json': '{ "permissions": { "allow": [ ' })
+  const { written } = world(on, { '/repo/.claude/settings.local.json': '{ "permissions": { "allow": [ ' })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   const answer = await $.command.run({ command: 'kit-safety', args: 'sandbox' } as any)
   expect(JSON.stringify(answer)).toContain('not valid JSON')
@@ -114,7 +114,7 @@ test('a personal default of light beats the kit.json default', async ($, on) => 
 })
 
 test('sandbox writes the kit block to settings.local.json and host removes only that', async ($, on) => {
-  const written = world(on, { '/repo/.claude/settings.local.json': JSON.stringify({ permissions: { allow: ['Bash(npm test)'] } }) })
+  const { written } = world(on, { '/repo/.claude/settings.local.json': JSON.stringify({ permissions: { allow: ['Bash(npm test)'] } }) })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
 
   const on1 = await $.command.run({ command: 'kit-safety', args: 'sandbox' } as any)
@@ -132,7 +132,7 @@ test('sandbox writes the kit block to settings.local.json and host removes only 
 
 test('the kit does not overwrite a sandbox the person configured', async ($, on) => {
   const own = { sandbox: { enabled: true, network: { allowedDomains: ['example.com'] } } }
-  const written = world(on, { '/repo/.claude/settings.local.json': JSON.stringify(own) })
+  const { written } = world(on, { '/repo/.claude/settings.local.json': JSON.stringify(own) })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   const answer = await $.command.run({ command: 'kit-safety', args: 'sandbox' } as any)
   expect(JSON.stringify(answer)).toContain('left them as they are')
@@ -181,4 +181,29 @@ test('the pane shows mode, safety, spend and what needs the person, on every sur
     await ui.press({ key: 'mode-loop' })
     await ui.unmount()
   }
+})
+
+test('the status line follows the board while the pane is closed', async ($, on) => {
+  const files: Record<string, string> = {
+    '/repo/.claude/lead/board.md': [
+      'NEEDS YOU: A1: which region?',
+      'A1 | ship | login | DONE WHEN e2e passes | review | agent A1 | PR #3 | CI green',
+    ].join('\n'),
+  }
+  const { clock } = world(on, files)
+  const lines: (string | undefined)[] = []
+  on('ui.status', (_, e) => {
+    lines.push(e.text)
+    return { value: undefined }
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  expect(lines.at(-1)).toContain('1 ready · 1 need you')
+
+  files['/repo/.claude/lead/board.md'] = [
+    'NEEDS YOU: none',
+    'A1 | ship | login | DONE WHEN e2e passes | done | agent A1 | PR #3 | merged',
+  ].join('\n')
+  await clock.advance(15000)
+  expect(lines.at(-1)).not.toContain('ready')
+  expect(lines.at(-1)).not.toContain('need you')
 })

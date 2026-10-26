@@ -223,13 +223,47 @@ async function overnightRuns($: $, root: string): Promise<KitOvernightRun[]> {
   return runs.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6)
 }
 
+// what was last written, so an unchanged snapshot or line is not sent again
 let lastKey = ''
+let lastStatus: string | undefined
 
 async function paneOpen($: $): Promise<boolean> {
   try {
     return (await $.ui.panes()).some(p => p.id === PANE)
   } catch {
     return false
+  }
+}
+
+// The coordinator's board, from kit.json `lead.board` or the default path: null when there is
+// none, undefined when it exists but could not be read this time.
+async function readBoard($: $, root: string): Promise<KitSnapshot['board'] | undefined> {
+  const kitJson = await readJson($, `${root}/.claude/kit.json`)
+  const boardPath = (kitJson && kitJson.lead && kitJson.lead.board) || '.claude/lead/board.md'
+  const path = boardPath.startsWith('/') ? boardPath : `${root}/${boardPath}`
+  try {
+    return parseBoard(await $.fs.read(path))
+  } catch {
+    try {
+      return (await $.fs.exists(path)) ? undefined : null
+    } catch {
+      return undefined
+    }
+  }
+}
+
+// Agent statuses from the engine: a thread that finished must stop counting as running.
+async function refreshAgents($: $): Promise<void> {
+  try {
+    const live = await $.agent.list()
+    await update($, agents, rows =>
+      rows.map(row => {
+        const info = live.find(a => a.id === row.id)
+        return info ? { ...row, status: info.status } : row
+      }),
+    )
+  } catch {
+    // agent list unavailable
   }
 }
 
@@ -248,33 +282,20 @@ export async function refresh($: $, full = true): Promise<void> {
   } catch {
     // figures unavailable: draw without them
   }
-  let board: KitSnapshot['board'] = null
+  // the board and agent statuses feed the status line, so every tick reads them; a board that
+  // could not be read keeps the last one, a board that is gone clears it
   const previous = await read($, snapshot)
+  const fresh = await readBoard($, root)
+  const board = fresh === undefined ? (previous ? previous.board : null) : fresh
+  await refreshAgents($)
   if (!full && previous) {
-    // the cheap tick: mode, safety and spend for the status line; the rest only while drawn
-    const cheap: KitSnapshot = { ...previous, mode, safety, sandboxFrom: from, costUsd, contextPercent, limits }
+    // the cheap tick: overnight runs (git worktree list plus a state file each) only while the
+    // pane is drawn, so the line's "N overnight" can lag until then
+    const cheap: KitSnapshot = { ...previous, mode, safety, sandboxFrom: from, costUsd, contextPercent, limits, board }
     await writeSnapshot($, cheap)
     return
   }
-  const kitJson = await readJson($, `${root}/.claude/kit.json`)
-  const boardPath = (kitJson && kitJson.lead && kitJson.lead.board) || '.claude/lead/board.md'
-  try {
-    board = parseBoard(await $.fs.read(boardPath.startsWith('/') ? boardPath : `${root}/${boardPath}`))
-  } catch {
-    board = null
-  }
   const overnight = await overnightRuns($, root)
-  try {
-    const live = await $.agent.list()
-    await update($, agents, rows =>
-      rows.map(row => {
-        const info = live.find(a => a.id === row.id)
-        return info ? { ...row, status: info.status } : row
-      }),
-    )
-  } catch {
-    // agent list unavailable
-  }
   const snap: KitSnapshot = {
     root, mode, safety, sandboxFrom: from, costUsd, contextPercent, limits, board, overnight, crons,
     updatedAt: await $.clock.now(),
@@ -285,9 +306,10 @@ export async function refresh($: $, full = true): Promise<void> {
 async function writeSnapshot($: $, snap: KitSnapshot): Promise<void> {
   const { updatedAt, ...content } = snap
   const key = JSON.stringify(content)
-  if (key === lastKey) return
-  lastKey = key
-  await update($, snapshot, () => snap)
+  if (key !== lastKey) {
+    lastKey = key
+    await update($, snapshot, () => snap)
+  }
   const { mode, safety, costUsd, overnight, board } = snap
   const rows = await read($, agents)
   const running = rows.filter(r => r.status === 'running' || r.status === 'pending').length
@@ -300,7 +322,11 @@ async function writeSnapshot($: $, snap: KitSnapshot): Promise<void> {
   if (live) parts.push(`${live} overnight`)
   if (ready) parts.push(`${ready} ready`)
   if (needs) parts.push(`${needs} need you`)
-  $.ui.status(parts.join(' · '))
+  const status = parts.join(' · ')
+  // agent rows are not in the snapshot, so the line is compared on its own
+  if (status === lastStatus) return
+  lastStatus = status
+  $.ui.status(status)
 }
 
 function fmtTokens(n: number): string {
@@ -349,6 +375,8 @@ export const register: Register = on => {
     try {
       // nothing to draw in a headless run (claude -p, an overnight iteration): no timer there
       if ((await $.session.surfaces()).length === 0) return result
+      lastKey = ''
+      lastStatus = undefined
       await refresh($)
     } catch {
       return result // the panel never blocks a session's start
