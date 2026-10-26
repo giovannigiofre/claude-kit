@@ -139,12 +139,12 @@ At session start in a kit project the hook only rebuilds from the stored blocks 
 lines back; it is silent when nothing changed. With no blocks it takes no lock and writes nothing
 unless settings.json still has `[kit auto-mode]` lines, which it then removes. Check the result with `claude auto-mode config`.
 
-## Modes and the panel
+## Modes and the status line
 
 - **Light**: a normal session. `/kit:lead <work>` starts the coordinator when you want it.
 - **Loop**: every message you type (terminal or Remote Control) gets one line of context sending
   it to the coordinator; headless runs, scheduled prompts and notifications never do. `/kit-mode
-  loop|light`, or the panel buttons. Without a choice for the project, the personal default in
+  loop|light`. Without a choice for the project, the personal default in
   `~/.claude/kit.json` (`{"mode": "light"}` or `"loop"`) applies, else loop in a project with
   `.claude/kit.json` and light elsewhere.
 - **Board** (`.claude/lead/board.md`):
@@ -156,9 +156,10 @@ unless settings.json still has `[kit auto-mode]` lines, which it then removes. C
   <id> | <ship|scout|overnight> | <goal> | DONE WHEN <check> | <status> | agent <name> | <branch/PR> | <last event>
   ```
 
-  Status: `queued`, `working`, `review`, `needs-you`, `landing`, `done`, `parked`. The panel lists
-  NEEDS YOU first, then ready for review, then working.
-- **Safety**: `/kit-safety host|sandbox` or the panel. Sandbox writes the kit's block into
+  Status: `queued`, `working`, `review`, `needs-you`, `landing`, `done`, `parked`. The status line
+  counts the `review` items (`N ready`) and the NEEDS YOU questions (`N need you`), re-reading
+  the board every 15 seconds.
+- **Safety**: `/kit-safety host|sandbox`. Sandbox writes the kit's block into
   `.claude/settings.local.json`; check it with `/sandbox`, add hosts under
   `sandbox.network.allowedDomains`. Where the sandbox can't start, commands run unsandboxed with
   a warning rather than all failing.
@@ -199,7 +200,7 @@ python3 plugins/kit/hooks/tests/test_auto_mode_sync.py
 python3 plugins/kit/skills/investigate/tests/test_compact_logs.py
 python3 plugins/kit/skills/overnight/tests/test_overnight.py
 python3 plugins/kit-llm/hooks/tests/test_llm_detect.py
-claude plugin test plugins/kit               # the mod (panel, modes, safety) against the engine
+claude plugin test plugins/kit               # the mod (modes, safety, status line) against the engine
 ```
 
 Test a hook by hand:

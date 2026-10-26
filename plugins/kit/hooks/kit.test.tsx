@@ -4,12 +4,11 @@ import type { On } from 'claude-code'
 // The world beneath the kit mod: a repo at /repo, a home at /home/u, files in memory.
 function world(on: On, files: Record<string, string> = {}) {
   mock.store(on)
-  mock.clock(on, { now: 1_000_000 })
+  const clock = mock.clock(on, { now: 1_000_000 })
   mock.env(on, { HOME: '/home/u' })
   const written: Record<string, string> = {}
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.surfaces', () => ({ value: ['terminal'] }))
-  on('ui.panes', () => ({ value: [] }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, percent: 12 }, rateLimits: [], cost: { usd: 1.5 } } }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: '/repo\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.read', (_, e: any) => {
@@ -25,9 +24,8 @@ function world(on: On, files: Record<string, string> = {}) {
   on('settings.read', () => ({ value: {} }))
   on('agent.list', () => ({ value: [] }))
   on('command.register', (_, e: any) => ({ value: { command: e.name } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  return written
+  return { written, clock }
 }
 
 function promptCatcher(on: On) {
@@ -75,7 +73,7 @@ test('loop mode never reaches headless or scheduled prompts', async ($, on) => {
 })
 
 test('a settings file that does not parse is never rewritten', async ($, on) => {
-  const written = world(on, { '/repo/.claude/settings.local.json': '{ "permissions": { "allow": [ ' })
+  const { written } = world(on, { '/repo/.claude/settings.local.json': '{ "permissions": { "allow": [ ' })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   const answer = await $.command.run({ command: 'kit-safety', args: 'sandbox' } as any)
   expect(JSON.stringify(answer)).toContain('not valid JSON')
@@ -114,7 +112,7 @@ test('a personal default of light beats the kit.json default', async ($, on) => 
 })
 
 test('sandbox writes the kit block to settings.local.json and host removes only that', async ($, on) => {
-  const written = world(on, { '/repo/.claude/settings.local.json': JSON.stringify({ permissions: { allow: ['Bash(npm test)'] } }) })
+  const { written } = world(on, { '/repo/.claude/settings.local.json': JSON.stringify({ permissions: { allow: ['Bash(npm test)'] } }) })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
 
   const on1 = await $.command.run({ command: 'kit-safety', args: 'sandbox' } as any)
@@ -132,7 +130,7 @@ test('sandbox writes the kit block to settings.local.json and host removes only 
 
 test('the kit does not overwrite a sandbox the person configured', async ($, on) => {
   const own = { sandbox: { enabled: true, network: { allowedDomains: ['example.com'] } } }
-  const written = world(on, { '/repo/.claude/settings.local.json': JSON.stringify(own) })
+  const { written } = world(on, { '/repo/.claude/settings.local.json': JSON.stringify(own) })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   const answer = await $.command.run({ command: 'kit-safety', args: 'sandbox' } as any)
   expect(JSON.stringify(answer)).toContain('left them as they are')
@@ -141,44 +139,27 @@ test('the kit does not overwrite a sandbox the person configured', async ($, on)
   expect(written['/repo/.claude/settings.local.json']).toBeUndefined()
 })
 
-const PANE = {
-  plugin: 'kit',
-  component: 'Pane',
-  requestId: 'kit',
-  props: {
-    title: 'Kit',
-    isFocused: false,
-    bodyColumns: 60,
-    placement: 'dock',
-    scroll: { offset: 0, bodyRows: 30 },
-    view: {},
-  },
-} as const
-
-test('the pane shows mode, safety, spend and what needs the person, on every surface', async ($, on) => {
-  const board = [
-    'SHIP: pr+fix | PARALLEL: 3 | BUDGET: none',
-    'RULES: reuse the thread for follow-ups | propose before starting',
-    'NEEDS YOU: A1: send emails in production or only log in dev?',
-    'A2 | scout | Supabase or SQLite | DONE WHEN report written | done | agent A2 | - | report ready',
-    'A3 | ship | CSV export | DONE WHEN download test passes | review | agent A3 | PR #4 | CI green',
-    'A1 | ship | magic-link login | DONE WHEN e2e login passes | needs-you | agent A1 | feat/login | PR #3',
-  ].join('\n')
-  world(on, { '/repo/.claude/lead/board.md': board })
-  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'kit-panel', args: '' } as any)
-
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ ...PANE, surface })
-    expect(await ui.find({ key: 'mode-light' })).toBeDefined()
-    expect(await ui.find({ key: 'safety-sandbox' })).toBeDefined()
-    expect((await ui.find({ type: 'Text', text: /session \$1\.50/ }))?.text).toContain('context 12%')
-    expect(await ui.find({ type: 'Text', text: /NEEDS YOU/ })).toBeDefined()
-    expect((await ui.find({ type: 'Text', text: /send emails/ }))?.text).toContain('A1')
-    expect(await ui.find({ type: 'Text', text: /magic-link login/ })).toBeDefined()
-    expect((await ui.find({ type: 'Text', text: /CSV export/ }))?.text).toContain('ready')
-    expect(await ui.find({ type: 'Text', text: /reuse the thread/ })).toBeUndefined()
-    await ui.press({ key: 'mode-loop' })
-    await ui.unmount()
+test('the status line follows the board on every tick', async ($, on) => {
+  const files: Record<string, string> = {
+    '/repo/.claude/lead/board.md': [
+      'NEEDS YOU: A1: which region?',
+      'A1 | ship | login | DONE WHEN e2e passes | review | agent A1 | PR #3 | CI green',
+    ].join('\n'),
   }
+  const { clock } = world(on, files)
+  const lines: (string | undefined)[] = []
+  on('ui.status', (_, e) => {
+    lines.push(e.text)
+    return { value: undefined }
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  expect(lines.at(-1)).toContain('1 ready · 1 need you')
+
+  files['/repo/.claude/lead/board.md'] = [
+    'NEEDS YOU: none',
+    'A1 | ship | login | DONE WHEN e2e passes | done | agent A1 | PR #3 | merged',
+  ].join('\n')
+  await clock.advance(15000)
+  expect(lines.at(-1)).not.toContain('ready')
+  expect(lines.at(-1)).not.toContain('need you')
 })

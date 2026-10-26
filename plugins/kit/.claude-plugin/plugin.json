@@ -1,9 +1,8 @@
 {
   "name": "kit",
-  "description": "A coordinator you talk to that runs each piece of work in a background thread (worktree, gate, evidence, PR), deterministic gates (check before stop, formatters, protected paths, guard), an overnight runner, debugging and learning, and a panel with light/loop mode and host/sandbox safety",
-  "version": "1.1.0",
+  "description": "A coordinator you talk to that runs each piece of work in a background thread (worktree, gate, evidence, PR), deterministic gates (check before stop, formatters, protected paths, guard), an overnight runner, debugging and learning, light/loop mode and host/sandbox safety, and a status line",
+  "version": "1.2.0",
   "author": {
     "name": "giovannigiofre"
-  },
-  "types": "./types/index.d.ts"
+  }
 }

@@ -43,12 +43,10 @@ reviewed, not-high-risk PRs. Medium- or high-risk work gets a review by
 `kit:verifier` in a fresh context before it reaches you. When a thread finishes while you're away,
 the coordinator sends a notification (desktop, or phone with Remote Control).
 
-**The panel.** `/kit-panel` opens a pane beside the chat; the status line shows the summary
-(`kit loop · host · $1.20 · 2 running · 1 ready · 1 need you`). Mode per project: **Light** (a
-normal session) or **Loop** (every typed message goes to the coordinator; the default in a
-project with `kit.json`). Safety per project:
-**Host** or **Sandbox**. Also session cost and context, limits, every agent's tokens, the board,
-overnight runs and scheduled loops.
+**The status line.** `kit loop · host · $1.20 · 2 running · 1 overnight · 1 ready · 1 need you`,
+read again every 15 seconds. Mode per project (`/kit-mode`): **Light** (a normal session) or
+**Loop** (every typed message goes to the coordinator; the default in a project with
+`kit.json`). Safety per project (`/kit-safety`): **Host** or **Sandbox**.
 
 ---
 
@@ -90,7 +88,7 @@ overnight runs and scheduled loops.
 | `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
 | `kit:implementer` | A thread: one item from brief to PR in its own worktree, effort medium |
 | `kit:verifier` | A fresh-context review against the intent, with a per-project memory of pitfalls |
-| Hooks + panel | `protect`, `guard`, `on_edit`, `stop_check`, `session_start`; the panel mod (`kit.tsx`) |
+| Hooks + mod | `protect`, `guard`, `on_edit`, `stop_check`, `session_start`; the mod (`kit.tsx`: modes, safety, status line) |
 
 **Domain plugins** (project scope, offered by `kit:extras` when a task needs them):
 
