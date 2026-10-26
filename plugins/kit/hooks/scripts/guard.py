@@ -35,8 +35,11 @@ Active when the project has .claude/kit.json (unless its "guard" is "off"), or e
 ~/.claude/kit.json says "guard": "on". Options, under "guard" in either file:
   {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40,
    "allowCommands": ["^rm -rf /opt/my-build$"], "attribution": "block"}
+
+Each denial is counted in the kit's lesson ledger (lessons.py) by its shape, once per session.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -611,6 +614,20 @@ def check_agents(data, opts):
     return None
 
 
+def record_denial(cwd, rule, why, session):
+    """Count the denial in the kit's lesson ledger by its shape (quoted words and paths dropped),
+    once per session: a second session hitting the same wall gets told up front."""
+    try:
+        import lessons
+        lessons.LOCK_WAIT = 0.5  # the deny must land well inside the hook's timeout
+        shape = re.sub(r"\s+", " ", re.sub(r"'[^']*'|\S*/\S*|\d+", "…", why)).strip()
+        key = f"guard-{rule}-" + hashlib.sha1(shape.encode()).hexdigest()[:8]
+        lessons.capture(cwd, "guard", key, f"The kit guard blocks this ({rule}): {shape}. Plan another way "
+                        "instead of retrying it.", kind="pitfall", once_per=session)
+    except Exception:
+        pass
+
+
 def main():
     data = kitlib.read_input()
     tool = data.get("tool_name") or ""
@@ -644,6 +661,7 @@ def main():
             "hookEventName": "PreToolUse", "permissionDecision": "ask",
             "permissionDecisionReason": f"kit guard ({rule}): {why}"}}))
         return 0
+    record_denial(cwd, rule, why, data.get("session_id") or "")
     print(f"kit guard ({rule}): {why}. Blocked by the kit's guardrails whatever the permission mode. "
           "Find a safer way (work inside the repo, on a branch, through a PR), or ask the user; they "
           "can allow a specific command with guard.allowCommands in .claude/kit.json.", file=sys.stderr)

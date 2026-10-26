@@ -6,9 +6,12 @@
 - On failure exits 2: Claude gets the output and keeps working.
 - After `maxStopRetries` consecutive failures (default 3) it lets Claude stop, so a check
   Claude cannot fix never traps the session; Claude must then report the failure.
+- Each failure is counted in the kit's lesson ledger (lessons.py) by its first error line, once
+  per session; the same failure in a second session becomes a lesson.
 """
 
 import hashlib
+import re
 import sys
 from pathlib import Path
 
@@ -22,6 +25,23 @@ def tree_fingerprint(root):
         return None
     _, diff = kitlib.run_shell("git diff HEAD", root, timeout=30)
     return hashlib.sha256((status + "\0" + diff).encode()).hexdigest()
+
+
+def first_error(out):
+    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    return next((ln for ln in lines if re.search(r"error|fail|✖|✗|×", ln, re.I)), lines[0] if lines else "")
+
+
+def record_failure(root, check, out, session):
+    try:
+        import lessons
+        line = first_error(out)
+        shape = re.sub(r"\d+", "N", line)
+        key = "gate-" + hashlib.sha1(f"{check}\0{shape}".encode()).hexdigest()[:10]
+        lessons.capture(root, "gate", key, f"The fast check `{check[:80]}` has failed before with: {line[:160]}",
+                        kind="gate", agents=("lead", "implementer"), once_per=session)
+    except Exception:
+        pass
 
 
 def main():
@@ -42,6 +62,7 @@ def main():
     if code == 0:
         kitlib.save_state(session, "stop", {"passed_fp": fp, "fails": 0})
         return 0
+    record_failure(root, config["check"], out, session)
     fails = int(state.get("fails", 0)) + 1
     limit = int(config.get("maxStopRetries", 3))
     kitlib.save_state(session, "stop", {"passed_fp": state.get("passed_fp"), "fails": fails})

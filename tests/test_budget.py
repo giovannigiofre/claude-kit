@@ -9,7 +9,8 @@ Checks, over every plugin in plugins/:
   - SKILL.md files stay short (details go to files next to them, loaded on demand);
   - no shouted rules (MUST, NEVER, CRITICAL, IMPORTANT, ALWAYS) outside code blocks;
   - the core plugin has no hook that runs on every prompt or every tool call;
-  - the lessons the SubagentStart hook hands a thread stay within SUBAGENT_LESSONS chars;
+  - the lessons the SubagentStart hook hands a thread stay within SUBAGENT_LESSONS chars, and the
+    ones SessionStart adds within SESSION_LESSONS;
   - every `kit:x`, `kit-ui:x`, `kit-llm:x` reference names a skill or agent that exists.
 
 Run: python3 tests/test_budget.py   (exit 0 = all good; standard library only)
@@ -26,7 +27,8 @@ PLUGINS = ROOT / "plugins"
 # characters of always-on description text per plugin (about 4 characters per token)
 ALWAYS_ON_BUDGET = {"kit": 2600, "kit-ui": 1200, "kit-llm": 1200}
 MAX_DESCRIPTION = 1024
-SUBAGENT_LESSONS = 2400  # about 600 tokens, injected into every kit:implementer
+SUBAGENT_LESSONS = 2400  # about 600 tokens, injected into every kit:implementer and kit:verifier
+SESSION_LESSONS = 1600  # about 400 tokens, added to the session start text
 MAX_SKILL_LINES = 150
 MAX_AGENT_LINES = 80
 MAX_REFERENCE_LINES = 200
@@ -96,6 +98,10 @@ def main():
                         .read_text(encoding="utf-8"), re.M)
     if not lessons or int(lessons.group(1)) > SUBAGENT_LESSONS:
         problems.append(f"plugins/kit/hooks/scripts/subagent_start.py: MAX_CHARS over {SUBAGENT_LESSONS}")
+    session = re.search(r"^SESSION_LESSONS = (\d+)", (PLUGINS / "kit" / "hooks" / "scripts" / "session_start.py")
+                        .read_text(encoding="utf-8"), re.M)
+    if not session or int(session.group(1)) > SESSION_LESSONS:
+        problems.append(f"plugins/kit/hooks/scripts/session_start.py: SESSION_LESSONS over {SESSION_LESSONS}")
 
     docs = [p for p in PLUGINS.rglob("*.md") if "evals" not in p.parts]
     docs += [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md"))

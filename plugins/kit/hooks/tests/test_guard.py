@@ -39,7 +39,7 @@ def setup(project_kit=True, user_kit=None):
 
 
 def call(home, repo, tool, tool_input, session="s1"):
-    env = dict(os.environ, HOME=str(home), TMPDIR=str(home / "tmp"))
+    env = dict(os.environ, HOME=str(home), TMPDIR=str(home / "tmp"), CLAUDE_CONFIG_DIR=str(home / ".claude"))
     (home / "tmp").mkdir(exist_ok=True)
     payload = {"tool_name": tool, "tool_input": tool_input, "cwd": str(repo), "session_id": session}
     out = subprocess.run([sys.executable, str(SCRIPT)], input=json.dumps(payload), capture_output=True,

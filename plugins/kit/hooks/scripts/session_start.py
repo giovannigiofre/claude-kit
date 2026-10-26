@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """SessionStart: tell Claude which kit gates this project has, make the user the git author when
 kit.json names them, offer the kit's machine settings once, re-apply the user's approved
-per-repo auto mode lines to user settings, and after a compaction put the coordinator's board back
+per-repo auto mode lines to user settings, import new memories into the kit's lesson ledger and
+hand the main session its lessons (lessons.py), and after a compaction put the coordinator's board back
 into context (stdout is added to context)."""
 
 import json
@@ -15,6 +16,7 @@ import kitlib  # noqa: E402
 import machine_setup  # noqa: E402
 
 BOARD = ".claude/lead/board.md"
+SESSION_LESSONS = 1600  # about 400 tokens of the ledger's lessons for the main session
 MAX_BOARD_CHARS = 6000
 
 
@@ -142,7 +144,22 @@ def main():
         lines.append(f"- lead notes: {lead['notes']}")
     if len(lines) > 1:
         print("\n".join(lines))
+    sys.stdout.flush()  # the gate lines stand even if the lessons run out of time
+    for line in learned(root):
+        print(line)
     return 0
+
+
+def learned(root):
+    """Import new memories into the ledger, then this repo's lessons for the main session."""
+    try:
+        import lessons
+        lessons.LOCK_WAIT = 1.0  # within the hook's timeout, with the gate lines already printed
+        lessons.harvest(root)
+        text = lessons.deliver(root, "lead", SESSION_LESSONS)
+    except Exception:
+        return []  # lessons are a help, never a reason for a session not to start
+    return [text] if text else []
 
 
 if __name__ == "__main__":

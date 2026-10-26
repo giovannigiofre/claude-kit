@@ -139,6 +139,48 @@ At session start in a kit project the hook only rebuilds from the stored blocks 
 lines back; it is silent when nothing changed. With no blocks it takes no lock and writes nothing
 unless settings.json still has `[kit auto-mode]` lines, which it then removes. Check the result with `claude auto-mode config`.
 
+## Lessons
+
+The kit keeps what each repo has taught it in a ledger outside every repo, under the Claude
+config dir (`~/.claude` unless `CLAUDE_CONFIG_DIR` says otherwise):
+
+```
+~/.claude/kit-lessons/<slug>.jsonl        one lesson per line (id, kind, text, status, seen, misses, evidence)
+~/.claude/kit-lessons/<slug>.events.jsonl raw captured events, capped
+~/.claude/kit-lessons/<slug>.ops.jsonl    before-images of every change, for undo
+~/.claude/kit-lessons/_machine.jsonl      lessons that hold on this machine across repos
+```
+
+A repo is its normalized git origin, so every checkout and worktree of it shares one ledger (the
+slug is the auto mode one). Only kit code writes there; nothing in a repo can plant a lesson.
+
+**Capture** is deterministic and costs no tokens: a failed fast `check` (Stop), a guard denial,
+and a kit:verifier FAIL (SubagentStop: each problem headline becomes a candidate). Verifier
+verdicts and revert commits are counted as events, for stats and the distiller. The same key seen again is counted, not added; a repeat after the lesson was delivered
+counts as a miss. A new automatic lesson starts as a candidate and turns active on its second
+sighting, at most 3 a day per repo. Text that looks like a key or token is refused.
+
+**Import**: at session start the kit imports, once and without touching the files, the
+kit:verifier memory index (`.claude/agent-memory/kit-verifier/MEMORY.md`) and your auto-memory
+`feedback_*` entries. A verifier pitfall about claude-kit itself (naming the kit's repo and one of its files) goes
+to claude-kit's ledger. Each imported lesson lists its source, so an entry is imported once; nothing is written
+inside the repo. Threads also run the import at start, so a memory written mid-session reaches the
+next thread.
+
+**Delivery**: kit:implementer and kit:verifier get this repo's active lessons at start (the
+verifier minus its own memory, which it already reads), the main session gets gate and guard
+lessons after the gate lines. Most repeated and newest first; about 600 tokens for a thread,
+400 for the session. With an empty ledger the thread gets the memory index lines directly.
+
+```bash
+python3 <kit>/hooks/scripts/lessons.py list [--all] [DIR]
+python3 <kit>/hooks/scripts/lessons.py render implementer|verifier|lead [DIR]
+python3 <kit>/hooks/scripts/lessons.py add pitfall KEY "one line" [DIR]
+python3 <kit>/hooks/scripts/lessons.py retire L4 [DIR]
+python3 <kit>/hooks/scripts/lessons.py undo L4 [DIR]
+python3 <kit>/hooks/scripts/lessons.py stats [DIR]
+```
+
 ## Modes and the status line
 
 - **Light**: a normal session. `/kit:lead <work>` starts the coordinator when you want it.
@@ -196,6 +238,7 @@ python3 tests/test_budget.py
 python3 plugins/kit/hooks/tests/test_guard.py
 python3 plugins/kit/hooks/tests/test_session_start.py
 python3 plugins/kit/hooks/tests/test_subagent_start.py
+python3 plugins/kit/hooks/tests/test_lessons.py
 python3 plugins/kit/hooks/tests/test_machine_setup.py
 python3 plugins/kit/hooks/tests/test_auto_mode_sync.py
 python3 plugins/kit/skills/investigate/tests/test_compact_logs.py

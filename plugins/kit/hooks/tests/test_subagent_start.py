@@ -36,7 +36,7 @@ def main():
         subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "t1", str(tree)], check=True)
         assert run(tree, config) == "", "no kit.json: nothing"
         (repo / ".claude").mkdir()
-        (repo / ".claude" / "kit.json").write_text("{}")
+        (repo / ".claude" / "kit.json").write_text('{"check": "true"}')
         assert run(tree, config) == "", "no memory files: nothing, and no error"
 
         pitfalls = repo / ".claude" / "agent-memory" / "kit-verifier" / "MEMORY.md"
@@ -48,7 +48,8 @@ def main():
         memory.write_text("- [Lean tests](feedback_lean-tests.md) — one test per behaviour\n"
                           "- [Deploy notes](project_deploy.md) — not a preference\n")
 
-        text = run(tree, config)  # from a worktree: the main checkout's lessons
+        assert "one test per behaviour" in run(tree, config), "the hook imports the memories and delivers them"
+        text = subagent_start.lessons(tree, config)  # the fallback reading, from a worktree: the main checkout's
         assert len(text) <= subagent_start.MAX_CHARS, len(text)
         assert "- feedback_lean-tests.md: one test per behaviour" in text and "pitfall_39.md" in text, text
         assert "pitfall_0.md" not in text, "the oldest pitfalls are the ones cut"

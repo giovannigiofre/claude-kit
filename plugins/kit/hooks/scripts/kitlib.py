@@ -79,6 +79,31 @@ def config_dir():
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
 
+SECRET = re.compile(
+    r"-----BEGIN [A-Z ]*PRIVATE KEY"
+    r"|\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}"
+    r"|\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}"
+    r"|\bglpat-[A-Za-z0-9_-]{16,}|\bxox[abprs]-[A-Za-z0-9-]{10,}"
+    r"|\bA(?:KIA|SIA)[A-Z0-9]{16}\b|\bAIza[A-Za-z0-9_-]{30,}"
+    r"|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
+    r"|://[^/\s:@]+:[^/\s@]+@"
+    r"|\b(?:password|passwd|secret|token|api[_-]?key|bearer)\s*[:=]\s*\S{6,}",
+    re.I,
+)
+OPAQUE = re.compile(r"[A-Za-z0-9+/_=-]{32,}")
+COMMIT_SHA = re.compile(r"(?<![A-Za-z0-9])[0-9a-fA-F]{40}(?![A-Za-z0-9])")
+
+
+def looks_secret(text):
+    """True when text holds something shaped like a key, token or password. A long opaque run of
+    letters and digits counts, except a plain 40-hex commit SHA and a slug of words."""
+    if SECRET.search(text):
+        return True
+    text = COMMIT_SHA.sub(" ", text)  # a commit SHA, bare or in a URL or `sha=`, is not a secret
+    return any(re.search(r"\d", m) and re.search(r"[A-Za-z]", m)
+               and not re.search(r"[a-z]{3,}-[a-z]{3,}", m) for m in OPAQUE.findall(text))
+
+
 def glob_to_regex(glob):
     """`**` spans directories, `*` and `?` stay inside one path segment."""
     out, i = "", 0
