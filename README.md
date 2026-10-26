@@ -68,7 +68,10 @@ read again every 15 seconds. Mode per project (`/kit-mode`): **Light** (a normal
                 guard    blocks irreversible or credential-leaking commands, in any permission mode
    PostToolUse  on_edit  runs the formatter/validator for the edited file, feeds errors back
    Stop         check    runs the fast `check`; on failure Claude keeps fixing (max 3 tries)
-   SessionStart          lists the project's gates; after a compaction, re-injects the board
+   SessionStart          lists the project's gates; after a compaction, re-injects the board;
+                         says once when a newer kit is installed than the one loaded (restart)
+   SubagentStart         gives each kit:implementer this repo's lesson indexes: the verifier's
+                         pitfalls and your feedback memories (index lines, about 600 tokens max)
 ```
 
 ## What's in it
@@ -88,7 +91,7 @@ read again every 15 seconds. Mode per project (`/kit-mode`): **Light** (a normal
 | `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
 | `kit:implementer` | A thread: one item from brief to PR in its own worktree, effort medium |
 | `kit:verifier` | A fresh-context review against the intent, with a per-project memory of pitfalls |
-| Hooks + mod | `protect`, `guard`, `on_edit`, `stop_check`, `session_start`; the mod (`kit.tsx`: modes, safety, status line) |
+| Hooks + mod | `protect`, `guard`, `on_edit`, `stop_check`, `session_start`, `subagent_start`; the mod (`kit.tsx`: modes, safety, status line) |
 
 **Domain plugins** (project scope, offered by `kit:extras` when a task needs them):
 

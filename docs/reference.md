@@ -195,6 +195,7 @@ Self-checks (no tokens):
 python3 tests/test_budget.py
 python3 plugins/kit/hooks/tests/test_guard.py
 python3 plugins/kit/hooks/tests/test_session_start.py
+python3 plugins/kit/hooks/tests/test_subagent_start.py
 python3 plugins/kit/hooks/tests/test_machine_setup.py
 python3 plugins/kit/hooks/tests/test_auto_mode_sync.py
 python3 plugins/kit/skills/investigate/tests/test_compact_logs.py

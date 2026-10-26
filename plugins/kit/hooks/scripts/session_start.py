@@ -4,6 +4,7 @@ kit.json names them, offer the kit's machine settings once, re-apply the user's 
 per-repo auto mode lines to user settings, and after a compaction put the coordinator's board back
 into context (stdout is added to context)."""
 
+import json
 import os
 import re
 import sys
@@ -75,6 +76,26 @@ def offer_machine_setup():
           "AskUserQuestion (a headless run), ignore this.")
 
 
+def update_notice(session_id):
+    """When a newer kit is installed than the one this session runs (an update while Claude Code
+    was open keeps the old hooks and skills loaded), say so once per session and version."""
+    plugin = Path(__file__).resolve().parents[2]
+    try:
+        loaded = json.loads((plugin / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
+        config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+        registry = json.loads((config_dir / "plugins" / "installed_plugins.json").read_text(encoding="utf-8"))
+        installed = [entry.get("version") for entries in registry.get("plugins", {}).values()
+                     for entry in entries if isinstance(entry, dict) and entry.get("installPath")
+                     and Path(entry["installPath"]).resolve().parent == plugin.parent]
+    except Exception:
+        return None  # a dev checkout (--plugin-dir) or an unknown registry format: nothing to say
+    newer = next((v for v in installed if isinstance(v, str) and v != loaded), None)
+    if not newer or kitlib.load_state(session_id, "kit-version").get("announced") == newer:
+        return None
+    kitlib.save_state(session_id, "kit-version", {"announced": newer})
+    return f"kit updated to {newer}: restart Claude Code (or /reload-plugins) to load it. Tell the user this line."
+
+
 def main():
     data = kitlib.read_input()
     root = kitlib.project_root(data)
@@ -83,6 +104,9 @@ def main():
         print_board(root, config)
     elif not os.environ.get("KIT_HEADLESS"):
         offer_machine_setup()
+    notice = update_notice(data.get("session_id"))
+    if notice:
+        print(notice)
     if err:
         print(err)
         return 0

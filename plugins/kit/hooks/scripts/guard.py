@@ -9,7 +9,8 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
 
   rm-outside       recursive delete (rm -r, find -delete/-exec rm, rmtree in python -c ...) of
                    /, the home folder, the repo root, .git, or anything outside the repo, the
-                   temp folders and the cache folders; a target known only at run time ($VAR,
+                   repo's other registered worktrees (a linked one may go whole), the temp
+                   folders and the cache folders; a target known only at run time ($VAR,
                    $(...), xargs) is asked about
   push-protected   a push to a protected branch (main, master, the remote's default), a force
                    push to one, a mirror push, or deleting one
@@ -258,7 +259,26 @@ def delete_target(word, cwd, root):
         return ("deny", f"delete of the repository root ('{word}')")
     if under(target, root) or any(under(target, t) for t in temp_roots()):
         return None
+    if in_sibling_worktree(target, root):
+        return None
     return ("deny", f"delete outside the repository ('{word}' -> {target})")
+
+
+def in_sibling_worktree(target, root):
+    """True when target is in another worktree registered to this repository (a thread's checkout
+    next to this one): anything inside one, or a linked one as a whole; never the main
+    checkout's root, nor anything in a .git."""
+    listing = git(root, "worktree", "list", "--porcelain")
+    trees = [Path(os.path.normpath(line[len("worktree "):])) for line in listing.splitlines()
+             if line.startswith("worktree ")]
+    for i, tree in enumerate(trees):
+        for t in {target, Path(os.path.realpath(str(target)))}:
+            if t == tree:
+                if i > 0:  # the first entry is the main checkout
+                    return True
+            elif under(t, tree) and ".git" not in t.relative_to(tree).parts:
+                return True
+    return False
 
 
 def check_rm(argv, cwd, root):

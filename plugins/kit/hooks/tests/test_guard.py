@@ -190,6 +190,18 @@ def main():
         failed += 1
         print("FAIL bare push from a feature branch should pass")
 
+    # rm-outside: a sibling worktree of the same repository is not outside it; its main checkout is
+    sibling = repo.parent / "app-k2"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "feat/k2", str(sibling)], check=True)
+    (sibling / ".claude").mkdir()
+    (sibling / ".claude" / "kit.json").write_text("{}")
+    for cwd, command, want in ((repo, "rm -rf ../app-k2/build", "allow"), (repo, "rm -rf ../app-k2", "allow"),
+                               (sibling, "rm -rf ../app/node_modules", "allow"), (sibling, "rm -rf ../app", "block")):
+        got = verdict(home, cwd, command)
+        if got != want:
+            failed += 1
+            print(f"FAIL sibling worktree {want} expected, got {got}: {command!r} from {cwd.name}")
+
     # Read/Grep/Glob of credential stores
     for tool, inp in (("Read", {"file_path": str(home / ".ssh" / "id_rsa")}),
                       ("Read", {"file_path": "~/.aws/credentials"}),
