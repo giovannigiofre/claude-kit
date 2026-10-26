@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """SessionStart: tell Claude which kit gates this project has, make the user the git author when
-kit.json names them, offer the kit's machine settings once, and after a compaction put the
-coordinator's board back into context (stdout is added to context)."""
+kit.json names them, offer the kit's machine settings once, re-apply the user's approved
+per-repo auto mode lines to user settings, and after a compaction put the coordinator's board back
+into context (stdout is added to context)."""
 
 import os
 import re
@@ -87,6 +88,12 @@ def main():
         return 0
     if not config:
         return 0  # project has not opted in: stay silent
+    try:  # silent unless something changed or is wrong; never breaks session start
+        import auto_mode_sync
+        for line in auto_mode_sync.sync():
+            print(line)
+    except Exception as exc:
+        print(f"kit: auto mode sync skipped: {exc}")
     lines = ["kit harness active for this project (.claude/kit.json):"]
     author_line = ensure_author(root, config)
     if author_line:

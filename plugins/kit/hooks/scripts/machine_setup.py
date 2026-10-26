@@ -22,6 +22,9 @@ import shutil
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from kitlib import read_json  # noqa: E402
+
 ATTRIBUTION = {"commit": "", "pr": "", "sessionUrl": False}
 OWN_BRANCHES = ("On a branch an agent created for its own task (not the default branch, not one "
                 "someone else pushed to), rewriting its commits (amend, rebase, setting the user's "
@@ -34,21 +37,6 @@ def settings_path():
 
 def kit_path():
     return Path.home() / ".claude" / "kit.json"
-
-
-def read_json(path):
-    """(value, ok): missing is ({}, True); unreadable or not a JSON object is (None, False)."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return {}, True
-    except Exception:
-        return None, False
-    try:
-        value = json.loads(text)
-    except ValueError:
-        return None, False
-    return (value, True) if isinstance(value, dict) else (None, False)
 
 
 def missing(settings):

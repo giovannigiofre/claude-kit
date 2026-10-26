@@ -63,9 +63,19 @@ and its CI actually run, not guesses.
     machine-level settings (no attribution, and an auto mode rule that lets agents rewrite the
     branches they created) are offered by the kit at session start; if the user declined them
     before and wants them now, run `python3 <kit>/hooks/scripts/machine_setup.py --apply`.
-11. **Domain plugins**: if the repo has a frontend, or code that calls an LLM, offer `kit-ui` or
+11. **Auto mode environment**: auto mode reads its environment from user settings only, so the
+    kit keeps each repo's approved lines in the user's Claude config and adds them there, scoped
+    to this repo's origin. Draft `{"environment": ["**Organization**: ...", ...]}` from what the
+    repo shows: the remote's org, cloud manifests (project, region, registry), secret and `.env`
+    files, protected branches (if `gh` works:
+    `gh api repos/{owner}/{repo}/branches --jq '.[] | select(.protected) | .name'`), trusted
+    domains. With `S=<kit>/hooks/scripts/auto_mode_sync.py`: `--show` prints lines stored
+    earlier; pipe the draft to `python3 $S --preview -` and show the user its full output (the
+    exact lines, origin and paths included). Only on approval pipe the same draft to
+    `python3 $S --set -`; `--remove` forgets the repo.
+12. **Domain plugins**: if the repo has a frontend, or code that calls an LLM, offer `kit-ui` or
     `kit-llm` for this project now (`kit:extras` explains the install).
-12. Write `.claude/kit.json`, show it, and explain that it is committed so every clone and session
+13. Write `.claude/kit.json`, show it, and explain that it is committed so every clone and session
     gets the same gates. Confirm the hooks fire: make a trivial edit to a file matching an
     `onEdit` glob, revert it, and report what ran.
 

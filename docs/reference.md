@@ -79,6 +79,66 @@ Also per project, committed: `CLAUDE.md` (the project's rules, which win over th
 you declined, so reviews don't raise them again). Gitignored: `.claude/evidence/`,
 `.claude/overnight/`, `.claude/lead/`.
 
+### Auto mode environment, per repo
+
+Auto mode reads `autoMode` (allow, soft_deny, environment) from user settings only; an `autoMode`
+block in a project's settings is ignored. So the environment lines that describe one repo
+(organization, cloud, trusted domains, secret files, protected branches) are stored in your
+Claude config dir (`$CLAUDE_CONFIG_DIR`, else `~/.claude`), one block per repo, and the kit adds
+them to `autoMode.environment` scoped to that repo. Only environment lines are per repo; `allow`
+and `soft_deny` stay in your user settings.
+
+```bash
+S=<kit>/hooks/scripts/auto_mode_sync.py
+D='{"environment": ["**Organization**: acme", "**Cloud provider(s)**: GCP project shop-dev"]}'
+echo "$D" | python3 $S --preview -    # the exact lines --set would add; changes nothing
+echo "$D" | python3 $S --set -        # store them for the repo you are in, then rebuild
+python3 $S --show             # what is stored for this repo
+python3 $S --remove           # forget this repo
+python3 $S                    # rebuild only (what SessionStart runs)
+```
+
+`/kit:init` drafts the lines from what the repo shows, shows you the `--preview` output and runs
+`--set` once you approve it.
+
+**Security model:** nothing inside a repository can add auto mode lines. No file in the repo is
+read for them; only your `--set` command writes a block, so a cloned repo cannot declare itself
+trusted, whatever it commits.
+
+- A repo is its origin URL, normalized (`git@github.com:Acme/shop.git` and
+  `https://github.com/acme/shop` are the same `github.com/acme/shop`, credentials dropped), so
+  every checkout and worktree matches; without an `origin` remote, its main checkout path. Both
+  end up in the line the classifier reads, so `--set` refuses an origin that is not plain ASCII,
+  contains `#`, `?`, `\`, `%`, whitespace or control characters (URL parsers disagree on the host
+  there), or does not normalize to one plain `host/path` token of at most 200 characters (letters,
+  digits, `._~-`, no `..`), and a checkout path over 300 characters or with anything but letters,
+  digits, space and `._~+@/-`. A stored block that fails the same check is skipped at rebuild.
+  An ssh URL with a port (`ssh://git@host:2222/o/r`) is a different repo from the scp form
+  (`git@host:o/r`); that fails closed, the lines simply do not apply to the other form.
+- Blocks: `kit-auto-mode/<slug>.json` = `{"repo": {"origin", "name", "paths"}, "environment": [...]}`.
+  At most 20 lines of 400 characters per repo.
+- Each line is written as ``**Organization (shop repo only)**: In the repository whose git origin
+  is `github.com/acme/shop`, in any checkout or worktree of it (known checkouts: `/path/shop`),
+  and nowhere else: acme [kit auto-mode]``. Labels lose `**` and newlines; the `(repo only)` suffix and
+  the trailing tag are always the kit's. A rebuild replaces only lines in exactly this form (the scoped
+  prefix and the tag), so your own lines stay, in order, even one that happens to end in the tag.
+  A line is capped at 1000 characters; known checkouts are dropped first to keep room for the text.
+- A new list starts with `"$defaults"` (`environment` supports it, as `allow` does), so the
+  built-in entries stay current; a list without it is left that way, and a non-list
+  `environment` is left alone with a one-line warning.
+- Writes happen under a lock (`kit-auto-mode.lock`, waited on for at most 2 seconds: a busy lock skips the sync at session start with one line, and `--set`/`--remove` store the block, exit 1 and leave it for the next session start), atomically, only when the result changes,
+  after a backup to `settings.json.kit-auto-mode-backup`; the first backup ever is also kept as
+  `settings.json.kit-auto-mode-backup.orig`. If another program writes settings.json during a
+  rebuild, the rebuild starts again from that version. A settings file that is not valid JSON,
+  a read-only one, or one whose `autoMode` is not an object is never rewritten (one-line warning).
+- If `--set` stored the block but could not update settings.json, it says so and exits non-zero;
+  the next session start applies it.
+
+At session start in a kit project the hook only rebuilds from the stored blocks (no git, no
+`claude` command, nothing read from the repo), so a reset or hand-edited settings file gets the
+lines back; it is silent when nothing changed. With no blocks it takes no lock and writes nothing
+unless settings.json still has `[kit auto-mode]` lines, which it then removes. Check the result with `claude auto-mode config`.
+
 ## Modes and the panel
 
 - **Light**: a normal session. `/kit:lead <work>` starts the coordinator when you want it.
@@ -135,6 +195,7 @@ python3 tests/test_budget.py
 python3 plugins/kit/hooks/tests/test_guard.py
 python3 plugins/kit/hooks/tests/test_session_start.py
 python3 plugins/kit/hooks/tests/test_machine_setup.py
+python3 plugins/kit/hooks/tests/test_auto_mode_sync.py
 python3 plugins/kit/skills/investigate/tests/test_compact_logs.py
 python3 plugins/kit/skills/overnight/tests/test_overnight.py
 python3 plugins/kit-llm/hooks/tests/test_llm_detect.py
