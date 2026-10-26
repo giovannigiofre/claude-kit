@@ -2,8 +2,8 @@
 """SessionStart: tell Claude which kit gates this project has, make the user the git author when
 kit.json names them, offer the kit's machine settings once, re-apply the user's approved
 per-repo auto mode lines to user settings, import new memories into the kit's lesson ledger and
-hand the main session its lessons (lessons.py), and after a compaction put the coordinator's board back
-into context (stdout is added to context)."""
+hand the main session its lessons and the news of what the kit changed in them (lessons.py), and
+after a compaction put the coordinator's board back into context (stdout is added to context)."""
 
 import json
 import os
@@ -151,15 +151,32 @@ def main():
 
 
 def learned(root):
-    """Import new memories into the ledger, then this repo's lessons for the main session."""
+    """Import new memories into the ledger; then what the kit changed and this repo's lessons for
+    the main session, together within SESSION_LESSONS."""
     try:
         import lessons
         lessons.LOCK_WAIT = 1.0  # within the hook's timeout, with the gate lines already printed
         lessons.harvest(root)
-        text = lessons.deliver(root, "lead", SESSION_LESSONS)
+        news = lessons.take_news(root)
+        block = news_block(news)
+        text = lessons.deliver(root, "lead", SESSION_LESSONS - len(block))
     except Exception:
         return []  # lessons are a help, never a reason for a session not to start
-    return [text] if text else []
+    return [t for t in (text, block) if t]
+
+
+def news_block(news):
+    """What the kit changed, within half the session budget (the rest: /kit:learn news)."""
+    if not news:
+        return ""
+    lines = ["kit changed its lessons for this repo (tell the user these lines once, briefly):"]
+    for i, line in enumerate(news):
+        more = f"- ... and {len(news) - i} more: /kit:learn news"
+        if len("\n".join(lines + [f"- {line}", more])) > SESSION_LESSONS // 2:
+            lines.append(more)
+            break
+        lines.append(f"- {line}")
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

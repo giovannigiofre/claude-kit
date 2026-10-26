@@ -10,7 +10,7 @@ Checks, over every plugin in plugins/:
   - no shouted rules (MUST, NEVER, CRITICAL, IMPORTANT, ALWAYS) outside code blocks;
   - the core plugin has no hook that runs on every prompt or every tool call;
   - the lessons the SubagentStart hook hands a thread stay within SUBAGENT_LESSONS chars, and the
-    ones SessionStart adds within SESSION_LESSONS;
+    ones SessionStart adds (with the kit's news lines) within SESSION_LESSONS;
   - every `kit:x`, `kit-ui:x`, `kit-llm:x` reference names a skill or agent that exists.
 
 Run: python3 tests/test_budget.py   (exit 0 = all good; standard library only)

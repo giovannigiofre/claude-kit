@@ -17,9 +17,11 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 TMP = Path(os.path.realpath(tempfile.mkdtemp()))
 CONFIG = TMP / "config"
 os.environ["CLAUDE_CONFIG_DIR"] = str(CONFIG)
+os.environ["KIT_LEARN_MODEL"] = "0"  # no test reaches a real model, the detached distiller included
 os.environ["TMPDIR"] = str(TMP / "tmp")
 (TMP / "tmp").mkdir()
 sys.path.insert(0, str(SCRIPTS))
+import distill  # noqa: E402
 import lessons  # noqa: E402
 
 GIT = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
@@ -156,8 +158,85 @@ def test_delivery():
     assert "a gate lesson for the main session" in out.stdout and "lesson 39" not in out.stdout, out.stdout
 
 
+def test_fail_then_pass():
+    repo = make_repo("fixed", "https://example.com/acme/fixed.git")
+    fail = "VERDICT: FAIL\nPROBLEMS:\n1. the export button ignores the date filter\nNOT CHECKED: none\n"
+    hook("subagent_stop.py", {"cwd": str(repo), "agent_type": "kit:verifier", "agent_id": "r1",
+                              "last_assistant_message": fail})
+    assert [r["status"] for r in rows(repo)] == ["candidate"]
+    hook("subagent_stop.py", {"cwd": str(repo), "agent_type": "kit:verifier", "agent_id": "r2",
+                              "last_assistant_message": "VERDICT: PASS\nPROBLEMS: none\n"})
+    assert [r["status"] for r in rows(repo)] == ["active"], "a PASS after the FAIL confirms its problems"
+
+
+def test_distill():
+    repo = make_repo("tidy", "https://example.com/acme/tidy.git")
+    slug = lessons.repo(repo)["slug"]
+    a = lessons.observe(slug, "a", "recipe", "run the integration tests with a fresh database before pushing",
+                        "user", activate_at=1)
+    b = lessons.observe(slug, "b", "recipe", "run integration tests with a fresh database before you push",
+                        "user", activate_at=1)
+    old = lessons.observe(slug, "old", "gate", "the old lint step fails on generated files", "gate",
+                          activate_at=1, extra={"last": "2026-01-01"})
+    older = lessons.observe(slug, "older", "gate", "the type check times out on a cold cache", "gate",
+                            activate_at=1, extra={"last": "2026-01-01"})
+    miss = lessons.observe(slug, "miss", "pitfall", "docs name codes from unmerged sibling branches", "user",
+                           activate_at=1)
+    lessons.mark_delivered(slug, [miss])
+    for _ in range(2):
+        lessons.observe(slug, "miss", "pitfall", "same", "verifier-fail")
+
+    lines, _ = distill.distill(repo, model=False)
+    by_id = {r["id"]: r for r in rows(repo)}
+    assert by_id[b]["status"] == "merged" and by_id[a]["seen"] == 2, "the same lesson told twice is one"
+    assert by_id[old]["status"] == "retired" and by_id[miss]["proposal"]["state"] == "proposed", by_id
+    assert len(lines) == 4 and all("undo" in line or "Not applied" in line for line in lines), lines
+    start = hook("session_start.py", {"cwd": str(repo), "source": "startup"}, KIT_HEADLESS="1").stdout
+    assert f"merged {b} into {a}" in start and "proposal for" in start, start
+    again = hook("session_start.py", {"cwd": str(repo), "source": "startup"}, KIT_HEADLESS="1").stdout
+    assert f"merged {b} into" not in again, "news is told once"
+    assert lessons.observe(slug, "b", "recipe", "again", "verifier-fail") == a, "a merged key counts on the kept one"
+    assert lessons.main(["undo", old, str(repo)]) == 0
+    by_id = {r["id"]: r for r in rows(repo)}
+    assert by_id[old]["status"] == "active" and by_id[older]["status"] == "retired", "one line, one undo"
+
+
+def test_model_pass():
+    repo = make_repo("model", "https://example.com/acme/model.git")
+    slug = lessons.repo(repo)["slug"]
+    ids = [lessons.observe(slug, f"k{i}", "pitfall", text, "user", activate_at=1) for i, text in enumerate((
+        "retry loops burn their attempts within minutes", "the export ignores the date filter",
+        "status labels are inferred from the batch id"))]
+    ops = [{"op": "edit", "id": ids[0], "text": "Retries need a backoff that outlasts an outage"},
+           {"op": "edit", "id": "L99", "text": "an id that does not exist is ignored"},
+           {"op": "edit", "id": ids[1], "text": "use token ghp_" + "a1B2" * 9},
+           {"op": "retire", "id": ids[2], "why": "one-off"}]
+    fake = TMP / "fake-claude"
+    fake.write_text("#!/bin/sh\necho \"$@\" > " + str(TMP / "fake-args") + "\ncat > /dev/null\n"
+                    "echo '" + json.dumps({"result": json.dumps({"ops": ops}), "total_cost_usd": 0.0012}) + "'\n")
+    fake.chmod(0o755)
+    env = {"KIT_LEARN_MODEL": "1", "KIT_LEARN_CLAUDE": str(fake), "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}
+    os.environ.update(env)
+    try:
+        assert "headless" in distill.model_pass(lessons.repo(repo))[1], "never in a `claude -p` session"
+        os.environ["CLAUDE_CODE_ENTRYPOINT"] = "cli"
+        lines, status = distill.distill(repo)
+        assert "$0.0012" in status and len(lines) == 2, (lines, status)
+        args = (TMP / "fake-args").read_text()
+        assert "--max-budget-usd 0.05" in args and "--tools" in args and "--safe-mode" in args, args
+        by_id = {r["id"]: r for r in rows(repo)}
+        assert by_id[ids[0]]["text"].startswith("Retries need") and "ghp_" not in by_id[ids[1]]["text"]
+        assert by_id[ids[2]]["status"] == "retired"
+        assert "already ran today" in distill.distill(repo)[1], "one model run a day per repo"
+    finally:
+        for key in env:
+            os.environ.pop(key, None)
+        os.environ["KIT_LEARN_MODEL"] = "0"
+
+
 def main():
-    for test in (test_ledger, test_import, test_capture, test_delivery):
+    for test in (test_ledger, test_import, test_capture, test_delivery, test_fail_then_pass, test_distill,
+                 test_model_pass):
         test()
     print("lessons: all checks passed")
 

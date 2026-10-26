@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """SubagentStop (kit:verifier): count the verifier's verdict, and turn each FAIL problem into a
 candidate lesson in the kit's ledger (lessons.py). The same problem in a later round or review
-makes it active; one seen again after it was delivered to a thread counts as a miss.
+makes it active, and so does a PASS after that FAIL (the problem was real and is fixed now; the
+distiller then runs in the background). One seen again after it was delivered to a thread
+counts as a miss.
 
 The verdict is parsed from the verifier's final message (`VERDICT:` and the numbered `PROBLEMS:`
 items). Only the problem's headline is kept, never the evidence. Silent, and never blocks the
@@ -49,6 +51,11 @@ def main():
         import lessons
         agent = data.get("agent_id") or data.get("session_id") or ""
         lessons.capture(root, f"verdict-{verdict.lower()}", f"verdict-{agent}", "", ref=agent, once_per=agent)
+        if verdict == "PASS":  # the fix for the last FAIL is known: its problems were real
+            import distill
+            info = lessons.repo(root)
+            if info and distill.confirm(info["slug"], distill.fixed_fail_keys(info["slug"], agent)):
+                distill.spawn(root)
         if verdict == "FAIL":
             for problem in problems:
                 lessons.capture(root, "verifier-fail", lessons.key_of(problem, "verifier"),

@@ -17,6 +17,7 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   ],
   "guard": {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40, "allowCommands": []},
   "llm": "on",
+  "learn": {"model": true},
   "author": "Giovanni Giofré <99892523+giovannigiofre@users.noreply.github.com>",
   "lead": {
     "read": ["docs/backlog.md"],
@@ -49,6 +50,7 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   `"attribution": {"commit": "", "pr": "", "sessionUrl": false}` in `settings.json`, so Claude
   doesn't write the credits in the first place. `{"guard": "on"}` in `~/.claude/kit.json` guards projects without a
   `kit.json` too.
+- `learn`: `{"model": false}` keeps the lesson distiller to its no-token passes (see Lessons).
 - `llm` (read by the `kit-llm` plugin's hook): `"off"` silences the LLM-code hint in this project.
 - `author`: who commits in this project, as `"Name <email>"`. When git's identity in the checkout
   is missing or an AI's (a cloud container's default), the SessionStart hook sets the repo's own
@@ -172,6 +174,23 @@ verifier minus its own memory, which it already reads), the main session gets ga
 lessons after the gate lines. Most repeated and newest first; about 600 tokens for a thread,
 400 for the session. With an empty ledger the thread gets the memory index lines directly.
 
+**Distiller** (`distill.py`): runs after a kit:verifier PASS that follows a FAIL (the FAIL's
+problems become active lessons), at SessionEnd once 5 new events are pending (in the background),
+and on `/kit:learn`. Without tokens it merges lessons that say the same thing, retires automatic
+pitfall and gate lessons not seen for 60 days, candidates seen once in 30 and any lesson marked
+wrong twice (`harmful`), and writes a hardening proposal
+for a lesson that came back twice after threads were told (a check, a test or a CLAUDE.md line;
+announced, never applied). Every change is one line at the next session start, with
+`undo: /kit:learn undo <id>`.
+
+It may also make one model call to reword and merge lessons: `claude -p --model haiku` with no
+tools, hooks or plugins, from an empty folder, capped at $0.05 (`--max-budget-usd`) and run at
+most once a day per repo. A typical call costs about $0.001. The model can only edit, merge
+or retire existing lessons, and its text passes the same secret filter. It never runs in a
+headless session: overnight (`KIT_HEADLESS`) or `claude -p` and the SDK (`CLAUDE_CODE_ENTRYPOINT`
+`sdk-*`); turn it off with `KIT_LEARN_MODEL=0` or
+`"learn": {"model": false}` in kit.json.
+
 ```bash
 python3 <kit>/hooks/scripts/lessons.py list [--all] [DIR]
 python3 <kit>/hooks/scripts/lessons.py render implementer|verifier|lead [DIR]
@@ -179,6 +198,8 @@ python3 <kit>/hooks/scripts/lessons.py add pitfall KEY "one line" [DIR]
 python3 <kit>/hooks/scripts/lessons.py retire L4 [DIR]
 python3 <kit>/hooks/scripts/lessons.py undo L4 [DIR]
 python3 <kit>/hooks/scripts/lessons.py stats [DIR]
+python3 <kit>/hooks/scripts/lessons.py news [DIR]
+python3 <kit>/hooks/scripts/lessons.py distill [--no-model] [DIR]
 ```
 
 ## Modes and the status line
