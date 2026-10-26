@@ -186,6 +186,12 @@ def test_fail_then_pass():
 
     assert subagent_stop.parse("VERDICT: FAIL\nPROBLEMS:\n1. the real one\n\nNOT CHECKED:\n1. load test\n") == \
         ("FAIL", ["the real one"]), "a later section is not a problem"
+    assert subagent_stop.parse("VERDICT: FAIL\nEVIDENCE:\nPROBLEMS\n- gate ok\n## Problems\n"
+                               "- alpha breaks (see e.g. the log) in prod. More.\n  1. open the page\n  2. click export\n"
+                               "- Docs nits:\n- the totals row is off\nTODO: on empty lists\nNot checked:\n- load test\n"
+                               "PROBLEMS: see above\n") == \
+        ("FAIL", ["alpha breaks (see e.g. the log) in prod.", "the totals row is off TODO: on empty lists"]), \
+        "the heading after EVIDENCE in any case, bullet problems over their steps, no sub-heading, any-case end"
     verifier("x1", "feat/x", "FAIL", "the export button ignores the date filter", "the totals row is off by one")
     verifier("y1", "feat/y", "FAIL", "the export button ignores the date filter", "the csv header is in German")
     verifier("z1", "feat/z", "FAIL", "the retry banner never clears")

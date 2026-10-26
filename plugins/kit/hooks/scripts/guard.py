@@ -40,6 +40,7 @@ Each denial is counted in the kit's lesson ledger (lessons.py) by its shape, onc
 """
 
 import hashlib
+import glob
 import json
 import os
 import re
@@ -318,15 +319,24 @@ def check_find(argv, cwd, root):
     options = "".join(options)
     if "L" in options or "-follow" in args:
         return ("ask", "rm-outside", "find following symlinks while deleting")
+    if args[:1] == ["--"]:
+        args = args[1:]
     for a in args:
         if a.startswith("-") or a in ("(", "!", ")"):
             break
         paths.append(a)
     roots = {Path(root), Path(os.path.realpath(str(root)))}
-    for word in paths or ["."]:
+    words = []
+    for word in paths or ["."]:  # a glob is judged by what the shell will match
+        raw = expand(word, cwd, raw=True)
+        found = glob.glob(raw) if raw is not UNKNOWN and glob.has_magic(word) else []
+        words += [m + ("/" if word.endswith("/") else "") for m in found] or [word]
+    for word in words:
+        if "H" in options:  # -H follows each path given: judge it as the folder it leads to
+            word = word.rstrip("/") + "/"
         raw = expand(word, cwd, raw=True)
         if raw is not UNKNOWN:
-            real = Path(os.path.realpath(raw)) if "H" in options else resolved(raw)
+            real = resolved(raw)
             if any(real == r or under(real, r) for r in roots) and ".git" not in real.parts:
                 continue  # find deletes what matches below the path, not the path itself
         found = delete_target(word, cwd, root)

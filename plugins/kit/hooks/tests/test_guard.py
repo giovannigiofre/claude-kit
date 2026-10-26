@@ -203,6 +203,7 @@ def main():
     for name, to in (("to-main", repo), ("to-gitdir", repo / ".git"), ("to-other", home / "other")):
         (third / name).symlink_to(to)
     (sibling / "to-other").symlink_to(home / "other")
+    (sibling / "to-home").symlink_to(home)
     for cwd, command, want in ((repo, "rm -rf ../app-k2/build", "allow"), (repo, "rm -rf ../app-k2", "allow"),
                                (sibling, "rm -rf ../app/node_modules", "block"), (sibling, "rm -rf ../app", "block"),
                                (sibling, "rm -rf ../app-k3/to-main/node_modules", "block"),
@@ -211,7 +212,12 @@ def main():
                                (sibling, "rm -rf ../app-k3/to-main/", "block"),
                                (sibling, "rm -rf ../app-k3/to-main/../app/src", "block"),
                                (sibling, "rm -rf to-other/a.txt", "block"), (sibling, "rm -rf ../app-k3/to-main", "allow"),
-                               (sibling, "find to-other/ -delete", "block"), (sibling, "find -L . -delete", "ask")):
+                               (sibling, "find to-other/ -delete", "block"), (sibling, "find -L . -delete", "ask"),
+                               (sibling, "find -H to-home -delete", "block"),
+                               (sibling, "find -s -H to-home -delete", "block"),
+                               (sibling, "find -xH to-home -name b -delete", "block"),
+                               (sibling, "find -- to-home/ -delete", "block"),
+                               (sibling, "find -H to-h?me -delete", "block")):
         got = verdict(home, cwd, command)
         if got != want:
             failed += 1

@@ -5,7 +5,7 @@ makes it active, and so does a PASS after that FAIL (the problem was real and is
 distiller then runs in the background). One seen again after it was delivered to a thread
 counts as a miss.
 
-The verdict is parsed from the verifier's report (`VERDICT:` and the numbered items under PROBLEMS):
+The verdict is parsed from the verifier's report (`VERDICT:` and the items under PROBLEMS):
 its final message, else, since a worker hands its report back through the SubagentHandback tool,
 the last such call in its transcript, else the last text there that holds a verdict. Only the
 problem's headline is kept, never the evidence. A verdict is tied to the branch its brief names
@@ -23,11 +23,40 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kitlib  # noqa: E402
 
-SECTIONS = ("VERDICT", "EVIDENCE", "PROBLEMS", "NOT CHECKED")
+SECTIONS = ("VERDICT", "EVIDENCE", "PROBLEMS", "NOT CHECKED", "SUMMARY", "OPEN", "RISK")
+NOTE = r"[ \t]*(?:\([^)\n]*\))?[ \t]*"  # an optional "(most severe first)" after a heading word
+# "PROBLEMS:", "PROBLEMS", "## Problems", "PROBLEMS (most severe first):"; in another case than
+# PROBLEMS only alone on its line, so a sentence starting "Problems: ..." is not one
+PROBLEMS_HEAD = re.compile(r"^(?:#+[ \t]*)?(?:PROBLEMS\b" + NOTE + r"(?::([^\n]*))?|(?i:problems)\b" + NOTE + r":?[ \t]*)$",
+                           re.M)
+# what ends the PROBLEMS block: a known section in any case, or a WORDS IN CAPS: label alone on its
+# line or after a blank line (an unindented "TODO: ..." wrapped inside a problem goes on)
+BLOCK_END = re.compile(r"^(?:#+[ \t]*)?(?:(?i:" + "|".join(SECTIONS) + r")\b" + NOTE + r"(?::|$)"
+                       r"|[A-Z][A-Z _/-]{2,}" + NOTE + r":[ \t]*$)|(?<=\n\n)[A-Z][A-Z _/-]{2,}" + NOTE + ":", re.M)
+ITEM = re.compile(r"^(\s*)(?:(\d+[.)])|[-*])\s+(.*)")
+NOT_DEFECTS = re.compile(r"\binformational\b|\bnot (?:a )?defects?\b|\bnits?\b", re.I)
 HAS_VERDICT = re.compile(r"^\W*VERDICT:", re.M)
 BRANCH = re.compile(r"\bbranch:?\s+(?:`([^`\s]+)`|\*\*([^*\s]+)\*\*|([A-Za-z0-9][\w.-]*/[\w./-]*\w))", re.I)
 BASES = ("main", "master", "develop", "trunk")
 PULL = re.compile(r"(?:\bPR\s*#|/pull/)(\d+)")
+
+
+def headline(problem):
+    """The first sentence of a problem, a parenthesis kept whole (an "e.g." in it ends nothing)."""
+    depth = 0
+    for i, ch in enumerate(problem):
+        depth += {"(": 1, ")": -1}.get(ch, 0)
+        if depth <= 0 and ch in ".;" and problem[i + 1:i + 2].isspace():
+            return problem[:i + 1]
+    return re.sub(r"\s*\([^)]*$", "", problem) or problem  # no parenthesis cut open
+
+
+def block_items(text, head):
+    """The item lines of the PROBLEMS block that starts at `head`."""
+    body = text[head.end():]
+    end = BLOCK_END.search(body)
+    lines = ((head.group(1) or "") + "\n" + body[:end.start() if end else None]).splitlines()
+    return lines if any(map(ITEM.match, lines)) else []
 
 
 def parse(message):
@@ -35,29 +64,33 @@ def parse(message):
     text = re.sub(r"[*`]{2,}", "", message or "")
     m = re.search(r"^\W*VERDICT:\s*(PASS|FAIL|CANNOT_VERIFY)\b", text, re.M)
     verdict = m.group(1) if m else None
-    # the heading comes as "PROBLEMS:", "PROBLEMS", "## PROBLEMS" or "PROBLEMS (most severe first):"
-    block = re.search(r"^[#\s]*PROBLEMS\b[ \t]*(?:\([^)\n]*\))?[ \t]*(?::([^\n]*))?$(.*?)"
-                      r"(?=^[#\s]*(?:" + "|".join(SECTIONS) + r")\b|\Z)", text, re.M | re.S)
+    # the last PROBLEMS heading with items under it: one quoted in EVIDENCE, or a later "PROBLEMS: see
+    # above", does not count
+    blocks = [lines for lines in (block_items(text, h) for h in PROBLEMS_HEAD.finditer(text)) if lines]
+    lines = blocks[-1] if blocks else []
+    first = next((m for m in map(ITEM.match, lines) if m), None)
+    if not first:
+        return verdict, []
+    numbered, indent = bool(first.group(2)), len(first.group(1))  # the first item sets the style
     problems, current = [], None
-    lines = ((block.group(1) or "") + "\n" + block.group(2)).splitlines() if block else []
-    # numbered problems with bullet details under them: only the numbers start a problem
-    starts = r"\d+[.)]" if any(re.match(r"^\s*\d+[.)]\s", line) for line in lines) else r"[-*]"
-    indent = None  # items indented deeper than the first one are details of it
     for line in lines:
-        item = re.match(r"^(\s*)" + starts + r"\s+(.*)", line)
-        if item and indent is None:
-            indent = len(item.group(1))
-        if item and len(item.group(1)) <= indent:
-            current = item.group(2).strip()
+        item = ITEM.match(line)
+        if item and bool(item.group(2)) == numbered and len(item.group(1)) <= indent:
+            current = item.group(3).strip()
             problems.append(current)
-        elif current is not None and line.strip() and len(problems[-1]) < 300 \
-                and not re.match(r"^\s*(?:[-*]|\d+[.)])\s", line):  # a wrapped headline, not a detail bullet
-            problems[-1] += " " + line.strip()
-        elif not line.strip():
-            current = None  # a blank line ends the headline
-    headlines = [re.split(r"(?<=[.;])\s", p, maxsplit=1)[0] for p in problems if p and p.lower() not in ("none", "-")]
-    headlines = [re.sub(r"\s*\([^)]*$", "", h) or h for h in headlines]  # no parenthesis cut open
-    return verdict, headlines[:10]
+        elif current is not None and line.strip() and not item and not line.rstrip().endswith(":") \
+                and len(problems[-1]) < 300:
+            problems[-1] += " " + line.strip()  # a wrapped headline
+        elif not line.strip() or line.rstrip().endswith(":"):
+            current = None  # a blank line or a sub-heading ends the headline
+    headlines = [headline(p) for p in problems if p.lower() not in ("none", "-")]
+    # a sub-heading ("Docs nits:", "Remaining notes (informational)") is not a problem; a problem
+    # that introduces its list with a colon is, so only short ones go
+    return verdict, [h.rstrip(":") for h in headlines if not sub_heading(h)][:10]
+
+
+def sub_heading(h):
+    return h.endswith((":", ")")) and (NOT_DEFECTS.search(h) or (h.endswith(":") and len(h.split()) <= 4))
 
 
 def text_of(content):
