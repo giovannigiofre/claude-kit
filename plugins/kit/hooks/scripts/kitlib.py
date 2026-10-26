@@ -13,6 +13,21 @@ import tempfile
 from pathlib import Path
 
 
+def read_json(path):
+    """(value, ok): missing is ({}, True); unreadable or not a JSON object is (None, False)."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}, True
+    except Exception:
+        return None, False
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return None, False
+    return (value, True) if isinstance(value, dict) else (None, False)
+
+
 def read_input():
     try:
         return json.load(sys.stdin)

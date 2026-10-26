@@ -37,11 +37,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import urlsplit
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from machine_setup import read_json  # noqa: E402
+from kitlib import read_json  # noqa: E402
 
 MARKER = "[kit auto-mode]"
 MAX_LINES = 20       # per repo
@@ -50,6 +51,7 @@ MAX_LINE = 1000      # characters of one line in settings, scope included
 MAX_PATHS = 3
 MAX_ORIGIN = 200     # characters of a normalized origin
 MAX_PATH = 300       # characters of one checkout path
+LOCK_WAIT = 2.0      # seconds to wait for the lock before giving up
 RETRIES = 5          # rebuilds when another writer changes settings.json meanwhile
 BACKUP = "settings.json.kit-auto-mode-backup"
 # what may reach the classifier as a repo's identity: one token, no prose, no markup
@@ -66,6 +68,10 @@ KIT_LINE = re.compile(r"\*\*[^*\n]+ \([\w.-]* repo only\)\*\*: In the repository
 
 class Refused(Exception):
     pass
+
+
+class Busy(OSError):
+    """Another process holds the lock for longer than LOCK_WAIT."""
 
 
 def config_dir():
@@ -85,7 +91,15 @@ def locked():
     import fcntl  # here, so a platform without it cannot break importing this module
     config_dir().mkdir(parents=True, exist_ok=True)
     with open(config_dir() / "kit-auto-mode.lock", "w") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
+        deadline = time.monotonic() + LOCK_WAIT
+        while True:  # never wait forever: a stuck holder must not stall session start
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    raise Busy("settings busy") from None
+                time.sleep(0.05)
         yield
 
 
@@ -350,13 +364,13 @@ def main(argv):
         return 1
     stored = False
     try:
+        if cmd == "--remove":  # one file per repo, written atomically: no lock needed for the block
+            with contextlib.suppress(FileNotFoundError):
+                bpath.unlink()
+        else:
+            write_atomic(bpath, dumps(block))
+        stored = True
         with locked():
-            if cmd == "--remove":
-                with contextlib.suppress(FileNotFoundError):
-                    bpath.unlink()
-            else:
-                write_atomic(bpath, dumps(block))
-            stored = True
             out = rebuild()
     except OSError as exc:
         if not stored:

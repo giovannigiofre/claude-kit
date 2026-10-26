@@ -126,7 +126,7 @@ trusted, whatever it commits.
 - A new list starts with `"$defaults"` (`environment` supports it, as `allow` does), so the
   built-in entries stay current; a list without it is left that way, and a non-list
   `environment` is left alone with a one-line warning.
-- Writes happen under a lock (`kit-auto-mode.lock`), atomically, only when the result changes,
+- Writes happen under a lock (`kit-auto-mode.lock`, waited on for at most 2 seconds: a busy lock skips the sync at session start with one line, and `--set`/`--remove` store the block, exit 1 and leave it for the next session start), atomically, only when the result changes,
   after a backup to `settings.json.kit-auto-mode-backup`; the first backup ever is also kept as
   `settings.json.kit-auto-mode-backup.orig`. If another program writes settings.json during a
   rebuild, the rebuild starts again from that version. A settings file that is not valid JSON,
