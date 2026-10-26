@@ -107,18 +107,22 @@ trusted, whatever it commits.
 
 - A repo is its origin URL, normalized (`git@github.com:Acme/shop.git` and
   `https://github.com/acme/shop` are the same `github.com/acme/shop`, credentials dropped), so
-  every checkout and worktree matches; without a remote, its main checkout path. Both end up in
-  the line the classifier reads, so `--set` refuses an origin that does not normalize to one
-  plain `host/path` token (letters, digits, `._~-`, no spaces, no `..`) and a checkout path with
-  anything but letters, digits, space and `._~+@/-` (no newlines, no `*`). A stored block that
-  fails the same check is skipped at rebuild.
+  every checkout and worktree matches; without an `origin` remote, its main checkout path. Both
+  end up in the line the classifier reads, so `--set` refuses an origin that is not plain ASCII,
+  contains `#`, `?`, `\`, `%`, whitespace or control characters (URL parsers disagree on the host
+  there), or does not normalize to one plain `host/path` token of at most 200 characters (letters,
+  digits, `._~-`, no `..`), and a checkout path over 300 characters or with anything but letters,
+  digits, space and `._~+@/-`. A stored block that fails the same check is skipped at rebuild.
+  An ssh URL with a port (`ssh://git@host:2222/o/r`) is a different repo from the scp form
+  (`git@host:o/r`); that fails closed, the lines simply do not apply to the other form.
 - Blocks: `kit-auto-mode/<slug>.json` = `{"repo": {"origin", "name", "paths"}, "environment": [...]}`.
   At most 20 lines of 400 characters per repo.
 - Each line is written as ``**Organization (shop repo only)**: In the repository whose git origin
   is `github.com/acme/shop`, in any checkout or worktree of it (known checkouts: `/path/shop`),
   and nowhere else: acme [kit auto-mode]``. Labels lose `**` and newlines; the `(repo only)` suffix and
-  the trailing tag are always the kit's. The tag marks the kit's lines: a rebuild replaces exactly
-  those and keeps your own lines and their order.
+  the trailing tag are always the kit's. A rebuild replaces only lines in exactly this form (the scoped
+  prefix and the tag), so your own lines stay, in order, even one that happens to end in the tag.
+  A line is capped at 1000 characters; known checkouts are dropped first to keep room for the text.
 - A new list starts with `"$defaults"` (`environment` supports it, as `allow` does), so the
   built-in entries stay current; a list without it is left that way, and a non-list
   `environment` is left alone with a one-line warning.

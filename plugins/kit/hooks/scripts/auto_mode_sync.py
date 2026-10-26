@@ -15,7 +15,7 @@ An origin or path that is not a plain `host/path` or a plain directory path is r
 it is written into the line the classifier reads.
 
 Every run rebuilds `autoMode.environment` in settings.json: the user's own lines stay as they are,
-the kit's lines (ending in MARKER) are replaced, each scoped to its repo by origin and paths. A new
+the kit's lines (its exact scoped form, ending in MARKER) are replaced, each scoped to its repo by origin and paths. A new
 list starts with "$defaults" so the built-in entries stay current; a non-list is left alone.
 Writes happen under a lock, atomically, only when something changed, after a backup
 (settings.json.kit-auto-mode-backup; the first one ever is also kept as .orig). A read-only
@@ -37,6 +37,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlsplit
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -47,11 +48,20 @@ MAX_LINES = 20       # per repo
 MAX_TEXT = 400       # characters of one line as the user approved it
 MAX_LINE = 1000      # characters of one line in settings, scope included
 MAX_PATHS = 3
+MAX_ORIGIN = 200     # characters of a normalized origin
+MAX_PATH = 300       # characters of one checkout path
 RETRIES = 5          # rebuilds when another writer changes settings.json meanwhile
 BACKUP = "settings.json.kit-auto-mode-backup"
 # what may reach the classifier as a repo's identity: one token, no prose, no markup
-ORIGIN_OK = re.compile(r"^[a-z0-9.-]+(?::[0-9]+)?(?:/[a-z0-9._~-]+)+$")
-PATH_OK = re.compile(r"^/[A-Za-z0-9._~+@/ -]+$")
+ORIGIN_OK = re.compile(r"[a-z0-9.-]+(?::[0-9]+)?(?:/[a-z0-9._~-]+)+")
+PATH_OK = re.compile(r"/[A-Za-z0-9._~+@/ -]+")
+# characters that make URL parsers disagree on the host (git connects to evil.example for
+# https://evil.example#@github.com/o/r), refused before any parsing
+URL_BAD = re.compile(r"[#?\\%\s\x00-\x1f\x7f]")
+HOST_OK = re.compile(r"[A-Za-z0-9.-]+(?::[0-9]+)?")
+# a kit line, as scoped() writes it; only these are replaced, a user line merely ending in MARKER stays
+KIT_LINE = re.compile(r"\*\*[^*\n]+ \([\w.-]* repo only\)\*\*: In the repository (?:whose git origin is "
+                      r"`[^`\n]+`, in any checkout or worktree of it|checked out at `)[^\n]*" + re.escape(" " + MARKER))
 
 
 class Refused(Exception):
@@ -110,23 +120,37 @@ def git(start, *args):
 
 def clean_origin(url):
     """git@host:o/r.git, ssh://git@host/o/r, https://user:tok@host/o/r.git -> host/o/r (lowercase),
-    or None when the result is not one plain `host/path` token."""
-    url = (url or "").strip().lower()
-    m = re.match(r"^[a-z][a-z0-9+.-]*://(?:[^@/\s]*@)?([^/\s]+)/(.+)$", url) or \
-        re.match(r"^(?:[^@/\s]+@)?([^/:\s]+):(?!/)(.+)$", url)
-    if not m:
+    or None when the URL is ambiguous or the result is not one plain `host/path` token."""
+    url = url or ""
+    if not url.isascii() or URL_BAD.search(url):  # ASCII before lower(): no Kelvin sign -> k
         return None
-    origin = f"{m.group(1)}/{re.sub(r'[.]git$', '', m.group(2).strip('/'))}"
+    if "://" in url:
+        try:
+            parts = urlsplit(url)
+        except ValueError:
+            return None
+        userinfo, _, host = parts.netloc.rpartition("@")
+        if parts.scheme.lower() == "file" or parts.query or parts.fragment or "@" in userinfo \
+                or not HOST_OK.fullmatch(host):
+            return None
+        path = parts.path
+    else:  # scp form [user@]host:path
+        m = re.fullmatch(r"(?:[A-Za-z0-9._-]+@)?([A-Za-z0-9.-]+):(?!/)(.+)", url)
+        if not m:
+            return None
+        host, path = m.groups()
+    origin = f"{host}/{re.sub(r'[.]git$', '', path.strip('/'), flags=re.I)}".lower()
     return origin if plain_origin(origin) else None
 
 
 def plain_origin(origin):
-    return bool(ORIGIN_OK.match(origin)) and not any(seg in (".", "..") for seg in origin.split("/"))
+    return len(origin) <= MAX_ORIGIN and bool(ORIGIN_OK.fullmatch(origin)) \
+        and not any(seg in (".", "..") for seg in origin.split("/"))
 
 
 def clean_path(path):
     path = str(path)
-    if not PATH_OK.match(path) or "/../" in path + "/" or "/./" in path + "/":
+    if len(path) > MAX_PATH or not PATH_OK.fullmatch(path) or "/../" in path + "/" or "/./" in path + "/":
         return None
     return path
 
@@ -172,8 +196,10 @@ def scoped(line, repo):
         raise Refused(f"origin {origin!r} is not a plain host/path")
     paths = [str(p) for p in repo.get("paths", [])][:MAX_PATHS]
     if any(clean_path(p) is None for p in paths):
-        raise Refused("a checkout path has characters the kit does not allow")
+        raise Refused("a checkout path is too long or has characters the kit does not allow")
     label, text = clean(line)
+    while paths and len(", ".join(paths)) > MAX_LINE // 2:  # leave room for the text
+        paths.pop()
     shown = ", ".join(f"`{p}`" for p in paths)
     if origin:
         where = f"In the repository whose git origin is `{origin}`, in any checkout or worktree of it"
@@ -185,8 +211,14 @@ def scoped(line, repo):
     name = re.sub(r"[^\w.-]", "", str(repo.get("name") or "repo"))[:60]
     head = f"**{label} ({name} repo only)**: {where}, and nowhere else: "
     room = MAX_LINE - len(head) - len(MARKER) - 1
+    if room < 40:
+        raise Refused("the scope leaves no room for the line")
     text = text if len(text) <= room else text[:room - 1] + "…"
     return f"{head}{text} {MARKER}"
+
+
+def is_kit(line):
+    return isinstance(line, str) and bool(KIT_LINE.fullmatch(line))
 
 
 def load_blocks():
@@ -231,7 +263,7 @@ def rebuild():
             return out + [f"kit: autoMode.environment in {path} is not a list; left as is, auto mode "
                           "lines not synced."]
         if isinstance(current, list):
-            env = [x for x in current if not (isinstance(x, str) and x.endswith(MARKER))] + kit_lines
+            env = [x for x in current if not is_kit(x)] + kit_lines
         else:
             env = ["$defaults"] + kit_lines if kit_lines else None
         if env is None or env == current:

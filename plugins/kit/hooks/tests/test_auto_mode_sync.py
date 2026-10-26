@@ -99,6 +99,14 @@ def main():
     assert SETTINGS.read_text() == before
     subprocess.run(["git", "-C", str(shop), "config", "remote.origin.url", "git@github.com:acme/shop.git"], check=True)
 
+    # URLs where parsers disagree on the host (git connects to evil.example), a Kelvin sign that
+    # lower() would turn into k, and a trailing newline are all refused
+    for url in ("https://evil.example#@github.com/acme/shop", "https://evil.example?@github.com/acme/shop",
+                "https://evil.example\\@github.com/acme/shop", "https://github.com/acme/\u212aey"):
+        assert auto_mode_sync.clean_origin(url) is None, url
+    assert not auto_mode_sync.plain_origin("github.com/acme/shop\n")
+    assert auto_mode_sync.clean_path("/tmp/x\n") is None
+
     # blocks deleted by hand: the next rebuild still removes the kit's stale lines
     sync("--set", "-", str(shop), stdin=lines)
     for block in (CONFIG / "kit-auto-mode").glob("*.json"):
