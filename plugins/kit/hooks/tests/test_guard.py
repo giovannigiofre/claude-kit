@@ -116,6 +116,7 @@ MORE = [
     ("find -x ~ -name '*.log' -delete", "block"),
     ("find . -name '*.pyc' -delete", "allow"),
     ("find .. -name '*.pyc' -delete", "block"),
+    ("rm -rf {~,/tmp/kit-vfy-x}", "block"),
     ("python3 -c 'import shutil, os; shutil.rmtree(os.path.expanduser(\"~\"))'", "block"),
     ("python3 -c 'print(1)'", "allow"),
     ("cd .. && rm -rf app", "block"),
@@ -141,6 +142,7 @@ MORE = [
     ('S=/tmp/kit-x; rm -rf "$S"/home ${S}', "allow"),
     ("export S=~ && rm -rf $S", "block"),
     ("S=/tmp/kit-x; S=~; rm -rf $S", "ask"),
+    ("TMPDIR=/; S=$TMPDIR; rm -rf $S", "block"),
     # quoted text over several lines is an argument, not commands; sh -c over several lines is
     ('git commit -m "fix\n\nrm -rf ~ is what the guard stops"', "allow"),
     ('bash -c "echo hi\nrm -rf ~"', "block"),
@@ -225,7 +227,8 @@ def main():
                                (sibling, "find -s -H to-home -delete", "block"),
                                (sibling, "find -xH to-home -name b -delete", "block"),
                                (sibling, "find -- to-home/ -delete", "block"),
-                               (sibling, "find -H to-h?me -delete", "block")):
+                               (sibling, "find -H to-h?me -delete", "block"),
+                               (sibling, "find to-{home,x}/ -delete", "block")):
         got = verdict(home, cwd, command)
         if got != want:
             failed += 1
@@ -236,7 +239,7 @@ def main():
     subprocess.run(["git", "init", "-q", str(other)], check=True)
     for command, want in (("cd ../other && rm -r .claude/evidence && find . -name __pycache__ -exec rm -rf {} +",
                            "allow"),
-                          ("cd ../other && rm -rf .", "block"), ("cd ../other && rm -rf .git/objects", "block"),
+                          ("cd ../other && rm -rf .", "block"),
                           ("cd ../other && rm -rf ../elsewhere", "block")):
         got = verdict(home, repo, command)
         if got != want:

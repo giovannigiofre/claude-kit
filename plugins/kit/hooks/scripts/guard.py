@@ -130,9 +130,7 @@ def assigned_value(command, name, known):
             return None
         if not quote and k == 0 and (text == "~" or text.startswith("~/")):
             text = str(home()) + text[1:]
-        known = dict(known, HOME=str(home()), TMPDIR=tempfile.gettempdir())
-        text = re.sub(r"\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)",
-                      lambda m: known.get(m.group(1) or m.group(2), m.group(0)), text)
+        text = with_vars(text, {"HOME": str(home()), "TMPDIR": tempfile.gettempdir(), **known})
         if "$" in text:
             return None
         value += text
@@ -143,6 +141,51 @@ def with_vars(word, env):
     """A word with the variables of `env` put in ($NAME and ${NAME}); an unknown one stays."""
     return re.sub(r"\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)(?!\w)",
                   lambda m: env.get(m.group(1) or m.group(2), m.group(0)), word)
+
+
+def braces(word, limit=256):
+    """The words the shell makes of `word` by brace expansion, before rm or find sees them:
+    {a,b}, nested ones, {1..9..2} and {a..e}; ${...} and a brace with no comma or range stay as
+    written. None when there would be more than `limit` words to judge."""
+    i = 0
+    while (i := word.find("{", i)) != -1:
+        depth, commas = 0, []
+        for j in range(i, len(word)):
+            depth += {"{": 1, "}": -1}.get(word[j], 0)
+            if depth == 1 and word[j] == ",":
+                commas.append(j)
+            if depth == 0:
+                break
+        else:
+            return [word]  # never closed: no expansion
+        if i and word[i - 1] == "$":
+            i = j + 1
+            continue
+        body, alts = word[i + 1:j], None
+        if commas:
+            alts = [word[a + 1:b] for a, b in zip([i] + commas, commas + [j])]
+        elif m := re.fullmatch(r"(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?|([A-Za-z])\.\.([A-Za-z])(?:\.\.(-?\d+))?", body):
+            a, b = (int(m[1]), int(m[2])) if m[1] else (ord(m[4]), ord(m[5]))
+            step = max(abs(int(m[3] or m[6] or 1)), 1)
+            if abs(b - a) // step >= limit:
+                return None
+            seq = range(a, b + 1, step) if a <= b else range(a, b - 1, -step)
+            alts = [str(n) if m[1] else chr(n) for n in seq]
+        if alts is None:
+            i += 1
+            continue
+        out = []
+        for alt in alts:
+            more = braces(word[:i] + alt + word[j + 1:], limit)
+            if more is None or len(out) + len(more) > limit:
+                return None
+            out += more
+        return out
+    return [word]
+
+
+def repo_roots(repos):
+    return {p for r in repos for p in (Path(r), Path(os.path.realpath(str(r))))}
 
 
 def tilde(paths):
@@ -292,7 +335,7 @@ def logical_lines(text):
     return [line for line in lines if line.strip()]
 
 
-OPENERS, CLOSERS = {"if", "for", "while", "until", "case", "select", "{", "function"}, {"fi", "done", "esac", "}"}
+OPENERS, CLOSERS = {"if", "for", "while", "until", "case", "select", "{"}, {"fi", "done", "esac", "}"}
 ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\+?=")
 
 
@@ -381,7 +424,7 @@ def delete_target(word, cwd, repos):
     if target is UNKNOWN:
         return ("ask", f"delete target '{word}' is only known when the command runs")
     real, hm = resolved(expand(word, cwd, raw=True)), home()
-    roots = {p for r in repos for p in (Path(r), Path(os.path.realpath(str(r))))}
+    roots = repo_roots(repos)
     for t in {target, real}:
         if t == Path("/") or t == hm or under(hm, t):
             return ("deny", f"delete of '{word}' ({t})")
@@ -416,7 +459,10 @@ def check_rm(argv, cwd, repos):
     targets = [a for a in argv[1:] if not a.startswith("-")]
     if not targets:
         return ("ask", "rm-outside", "recursive delete whose targets come from input (xargs or similar)")
-    for word in targets:
+    words = [braces(word) for word in targets]
+    if None in words:
+        return ("ask", "rm-outside", "recursive delete of too many brace expansions to judge")
+    for word in sum(words, []):
         found = delete_target(word, cwd, repos)
         if found:
             return (found[0], "rm-outside", f"recursive {found[1]}")
@@ -443,9 +489,12 @@ def check_find(argv, cwd, repos):
         if a.startswith("-") or a in ("(", "!", ")"):
             break
         paths.append(a)
-    roots = {p for r in repos for p in (Path(r), Path(os.path.realpath(str(r))))}
+    roots = repo_roots(repos)
+    expanded = [braces(word) for word in paths or ["."]]
+    if None in expanded:
+        return ("ask", "rm-outside", "find deleting in too many brace expansions to judge")
     words = []
-    for word in paths or ["."]:  # a glob is judged by what the shell will match
+    for word in sum(expanded, []):  # a brace or a glob is judged by what the shell will match
         raw = expand(word, cwd, raw=True)
         found = glob.glob(raw) if raw is not UNKNOWN and glob.has_magic(word) else []
         words += [m + ("/" if word.endswith("/") else "") for m in found] or [word]
