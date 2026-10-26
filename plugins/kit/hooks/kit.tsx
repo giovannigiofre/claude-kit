@@ -9,12 +9,12 @@
 //   .claude/settings.local.json, which the overnight runner passes to its iterations too).
 // - The status line: mode, safety, session cost, threads running, live overnight runs, board
 //   items ready for review and questions for the person, re-read every 15 seconds.
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, Timer } from 'claude-code'
 
 type KitMode = 'light' | 'loop'
 type KitSafety = 'host' | 'sandbox'
 
-export const SANDBOX = {
+const SANDBOX = {
   enabled: true,
   // where the sandbox cannot start, commands run unsandboxed (with a warning) rather than all
   // failing; /sandbox shows whether it is really on
@@ -47,7 +47,9 @@ const OFF_CONTEXT =
 type $ = EngineInterface
 
 let rootCache: string | undefined
+// the status line: what was last shown, the last board that could be read, the 15 s tick
 let lastStatus: string | undefined
+let tick: Timer | undefined
 
 async function projectRoot($: $): Promise<string> {
   if (rootCache) return rootCache
@@ -157,9 +159,7 @@ async function setSafety($: $, root: string, safety: KitSafety): Promise<string>
     : 'Host mode: no OS sandbox. The kit guard still blocks irreversible actions (deletes outside the repo, pushes to main, reading credentials).'
 }
 
-// The coordinator's board, from kit.json `lead.board` or the default path: what is ready for
-// review and what needs the person. null when there is no board, undefined when it exists but
-// could not be read this time.
+// What the coordinator's board says is ready for review and what needs the person.
 type BoardCounts = { ready: number; needs: number }
 
 function countBoard(text: string): BoardCounts {
@@ -177,9 +177,13 @@ function countBoard(text: string): BoardCounts {
   return { ready, needs }
 }
 
+// The board from kit.json `lead.board` or the default path: null when there is no board,
+// undefined when it (or kit.json) exists but could not be read this time.
 async function readBoard($: $, root: string): Promise<BoardCounts | null | undefined> {
-  const kitJson = await readJson($, `${root}/.claude/kit.json`)
-  const boardPath = (kitJson && kitJson.lead && kitJson.lead.board) || '.claude/lead/board.md'
+  const kitJson = await readJsonForWrite($, `${root}/.claude/kit.json`)
+  if (kitJson.isBroken) return undefined
+  const lead = kitJson.value.lead
+  const boardPath = (lead && lead.board) || '.claude/lead/board.md'
   const path = boardPath.startsWith('/') ? boardPath : `${root}/${boardPath}`
   try {
     return countBoard(await $.fs.read(path))
@@ -271,7 +275,9 @@ export const register: Register = on => {
     } catch {
       return result // the status line never blocks a session's start
     }
-    $.clock.every(15000, () => {
+    // one tick per module, even when session.start runs again (resume, /clear)
+    if (tick) tick.cancel()
+    tick = $.clock.every(15000, () => {
       void refreshStatus($).catch(() => undefined)
     })
     return result
