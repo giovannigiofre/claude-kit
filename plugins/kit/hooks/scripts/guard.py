@@ -8,8 +8,9 @@ system. It reads shell text, so it is a guardrail, not a boundary: an obfuscated
 slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety profile).
 
   rm-outside       recursive delete (rm -r, find -delete/-exec rm, rmtree in python -c ...) of
-                   /, the home folder, the repo root, .git, or anything outside the repo, the
-                   temp folders and the cache folders; a target known only at run time ($VAR,
+                   /, the home folder, the repo root, .git, or anything outside the repo except
+                   its other linked worktrees, the temp folders and the cache folders; a
+                   target known only at run time ($VAR,
                    $(...), xargs) is asked about
   push-protected   a push to a protected branch (main, master, the remote's default), a force
                    push to one, a mirror push, or deleting one
@@ -34,8 +35,12 @@ Active when the project has .claude/kit.json (unless its "guard" is "off"), or e
 ~/.claude/kit.json says "guard": "on". Options, under "guard" in either file:
   {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40,
    "allowCommands": ["^rm -rf /opt/my-build$"], "attribution": "block"}
+
+Each denial is counted in the kit's lesson ledger (lessons.py) by its shape, once per session.
 """
 
+import hashlib
+import glob
 import json
 import os
 import re
@@ -65,8 +70,9 @@ def home():
     return Path(os.path.normpath(os.environ.get("HOME") or str(Path.home())))
 
 
-def expand(word, cwd):
-    """A path for a shell word, or UNKNOWN when it depends on run-time values."""
+def expand(word, cwd, raw=False):
+    """A path for a shell word, or UNKNOWN when it depends on run-time values. With raw, the path
+    is joined but not normalised as text, so `link/..` and a trailing `/` survive for resolved()."""
     w = word
     for var in ("${HOME}", "$HOME"):
         w = w.replace(var, str(home()))
@@ -78,10 +84,8 @@ def expand(word, cwd):
         return UNKNOWN
     if w == "~" or w.startswith("~/"):
         w = str(home()) + w[1:]
-    p = Path(w)
-    if not p.is_absolute():
-        p = Path(cwd) / p
-    return Path(os.path.normpath(str(p)))
+    joined = os.path.join(str(cwd), w)
+    return joined if raw else Path(os.path.normpath(joined))
 
 
 def tilde(paths):
@@ -239,6 +243,17 @@ def protected_branches(cwd, opts):
 # ---------------------------------------------------------------- the checks
 # Each returns None, or (decision, rule, why) with decision "deny" or "ask".
 
+def resolved(raw):
+    """What rm really acts on, walked on the filesystem (symlinks followed, `..` taken after them),
+    not as text. The last name is followed too when the word ends in `/` (rm then removes the
+    link's target); a glob is matched inside the real folder; otherwise rm -rf on a link removes
+    only the link."""
+    head, name = os.path.split(raw)
+    if not name or name == ".":
+        return Path(os.path.realpath(raw))
+    return Path(os.path.realpath(head)) / name
+
+
 def delete_target(word, cwd, root):
     if word in (".", "..", ".*", "/*", "~/*", "*") and Path(cwd) in (Path("/"), home()):
         return ("deny", f"delete of '{word}' in {cwd}")
@@ -247,18 +262,31 @@ def delete_target(word, cwd, root):
     target = expand(word, cwd)
     if target is UNKNOWN:
         return ("ask", f"delete target '{word}' is only known when the command runs")
-    hm = home()
-    if any(under(target, c) for c in tilde(CACHE_PATHS)):
+    real, hm = resolved(expand(word, cwd, raw=True)), home()
+    roots = {Path(root), Path(os.path.realpath(str(root)))}
+    for t in {target, real}:
+        if t == Path("/") or t == hm or under(hm, t):
+            return ("deny", f"delete of '{word}' ({t})")
+        if t.name == ".git" or (any(under(t, r) for r in roots) and "/.git/" in str(t) + "/"):
+            return ("deny", f"delete inside .git ('{word}')")
+        if any(t == r or under(r, t) for r in roots):
+            return ("deny", f"delete of the repository root ('{word}')")
+    # what is allowed is decided on the real path, so a symlink cannot lead the delete elsewhere
+    if any(under(real, c) for c in tilde(CACHE_PATHS)) or any(under(real, r) for r in roots) \
+            or any(under(real, t) for t in temp_roots()) or in_sibling_worktree(real, root):
         return None
-    if target == Path("/") or target == hm or under(hm, target):
-        return ("deny", f"delete of '{word}' ({target})")
-    if target.name == ".git" or (under(target, root) and "/.git/" in str(target) + "/"):
-        return ("deny", f"delete inside .git ('{word}')")
-    if target == root or under(root, target):
-        return ("deny", f"delete of the repository root ('{word}')")
-    if under(target, root) or any(under(target, t) for t in temp_roots()):
-        return None
-    return ("deny", f"delete outside the repository ('{word}' -> {target})")
+    return ("deny", f"delete outside the repository ('{word}' -> {real})")
+
+
+def in_sibling_worktree(real, root):
+    """True when the real path `real` is in, or is, another linked worktree registered to this
+    repository (a thread's checkout next to this one), outside its .git. The main checkout stays
+    outside: it can hold uncommitted work, and a bare repository's folder is all history."""
+    listing = git(root, "worktree", "list", "--porcelain")
+    entries = [block.splitlines() for block in listing.split("\n\n") if block.startswith("worktree ")]
+    linked = [Path(os.path.realpath(lines[0][len("worktree "):])) for lines in entries[1:]]  # [0]: main or bare
+    return any(real == tree or (under(real, tree) and ".git" not in real.relative_to(tree).parts)
+               for tree in linked)
 
 
 def check_rm(argv, cwd, root):
@@ -283,15 +311,34 @@ def check_find(argv, cwd, root):
         for i, a in enumerate(argv))
     if not deletes:
         return None
-    paths = []
-    for a in argv[1:]:
+    args, options, paths = argv[1:], [], []
+    while args and re.fullmatch(r"-[HLPEXdsxf]+", args[0]):  # options before the paths, maybe combined
+        options.append(args.pop(0))
+        if options[-1].endswith("f") and args:  # BSD: -f names a path
+            paths.append(args.pop(0))
+    options = "".join(options)
+    if "L" in options or "-follow" in args:
+        return ("ask", "rm-outside", "find following symlinks while deleting")
+    if args[:1] == ["--"]:
+        args = args[1:]
+    for a in args:
         if a.startswith("-") or a in ("(", "!", ")"):
             break
         paths.append(a)
-    for word in paths or ["."]:
-        target = expand(word, cwd)
-        if target is not UNKNOWN and (target == root or under(target, root)) and ".git" not in target.parts:
-            continue  # find deletes what matches below the path, not the path itself
+    roots = {Path(root), Path(os.path.realpath(str(root)))}
+    words = []
+    for word in paths or ["."]:  # a glob is judged by what the shell will match
+        raw = expand(word, cwd, raw=True)
+        found = glob.glob(raw) if raw is not UNKNOWN and glob.has_magic(word) else []
+        words += [m + ("/" if word.endswith("/") else "") for m in found] or [word]
+    for word in words:
+        if "H" in options:  # -H follows each path given: judge it as the folder it leads to
+            word = word.rstrip("/") + "/"
+        raw = expand(word, cwd, raw=True)
+        if raw is not UNKNOWN:
+            real = resolved(raw)
+            if any(real == r or under(real, r) for r in roots) and ".git" not in real.parts:
+                continue  # find deletes what matches below the path, not the path itself
         found = delete_target(word, cwd, root)
         if found:
             return (found[0], "rm-outside", f"find deleting: {found[1]}")
@@ -594,6 +641,20 @@ def check_agents(data, opts):
     return None
 
 
+def record_denial(cwd, rule, why, session):
+    """Count the denial in the kit's lesson ledger by its shape (quoted words and paths dropped),
+    once per session: a second session hitting the same wall gets told up front."""
+    try:
+        import lessons
+        lessons.LOCK_WAIT = 0.5  # the deny must land well inside the hook's timeout
+        shape = re.sub(r"\s+", " ", re.sub(r"'[^']*'|\S*/\S*|\d+", "…", why)).strip()
+        key = f"guard-{rule}-" + hashlib.sha1(shape.encode()).hexdigest()[:8]
+        lessons.capture(cwd, "guard", key, f"The kit guard blocks this ({rule}): {shape}. Plan another way "
+                        "instead of retrying it.", kind="pitfall", once_per=session)
+    except Exception:
+        pass
+
+
 def main():
     data = kitlib.read_input()
     tool = data.get("tool_name") or ""
@@ -627,6 +688,7 @@ def main():
             "hookEventName": "PreToolUse", "permissionDecision": "ask",
             "permissionDecisionReason": f"kit guard ({rule}): {why}"}}))
         return 0
+    record_denial(cwd, rule, why, data.get("session_id") or "")
     print(f"kit guard ({rule}): {why}. Blocked by the kit's guardrails whatever the permission mode. "
           "Find a safer way (work inside the repo, on a branch, through a PR), or ask the user; they "
           "can allow a specific command with guard.allowCommands in .claude/kit.json.", file=sys.stderr)

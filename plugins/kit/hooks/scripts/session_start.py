@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """SessionStart: tell Claude which kit gates this project has, make the user the git author when
 kit.json names them, offer the kit's machine settings once, re-apply the user's approved
-per-repo auto mode lines to user settings, and after a compaction put the coordinator's board back
-into context (stdout is added to context)."""
+per-repo auto mode lines to user settings, import new memories into the kit's lesson ledger and
+hand the main session its lessons and the news of what the kit changed in them (lessons.py), and
+after a compaction put the coordinator's board back into context (stdout is added to context)."""
 
+import json
 import os
 import re
 import sys
@@ -14,6 +16,7 @@ import kitlib  # noqa: E402
 import machine_setup  # noqa: E402
 
 BOARD = ".claude/lead/board.md"
+SESSION_LESSONS = 1600  # about 400 tokens of the ledger's lessons for the main session
 MAX_BOARD_CHARS = 6000
 
 
@@ -75,6 +78,33 @@ def offer_machine_setup():
           "AskUserQuestion (a headless run), ignore this.")
 
 
+def version_key(version):
+    """'1.10.0' sorts after '1.9.2'; anything unparsable sorts first."""
+    try:
+        return tuple(int(part) for part in str(version).split("."))
+    except ValueError:
+        return ()
+
+
+def update_notice(session_id):
+    """When a newer kit is installed than the one this session runs (an update while Claude Code
+    was open keeps the old hooks and skills loaded), say so once per session and version."""
+    plugin = Path(__file__).resolve().parents[2]
+    try:
+        loaded = json.loads((plugin / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
+        registry = json.loads((kitlib.config_dir() / "plugins" / "installed_plugins.json").read_text(encoding="utf-8"))
+        installed = [entry.get("version") for entries in registry.get("plugins", {}).values()
+                     for entry in entries if isinstance(entry, dict) and entry.get("installPath")
+                     and Path(entry["installPath"]).resolve().parent == plugin.parent]
+    except Exception:
+        return None  # a dev checkout (--plugin-dir) or an unknown registry format: nothing to say
+    newer = max((v for v in installed if version_key(v) > version_key(loaded)), key=version_key, default=None)
+    if not newer or kitlib.load_state(session_id, "kit-version").get("announced") == newer:
+        return None
+    kitlib.save_state(session_id, "kit-version", {"announced": newer})
+    return f"kit updated to {newer}: restart Claude Code (or /reload-plugins) to load it. Tell the user this line."
+
+
 def main():
     data = kitlib.read_input()
     root = kitlib.project_root(data)
@@ -88,6 +118,9 @@ def main():
         return 0
     if not config:
         return 0  # project has not opted in: stay silent
+    notice = update_notice(data.get("session_id"))
+    if notice:
+        print(notice)
     try:  # silent unless something changed or is wrong; never breaks session start
         import auto_mode_sync
         for line in auto_mode_sync.sync():
@@ -111,7 +144,39 @@ def main():
         lines.append(f"- lead notes: {lead['notes']}")
     if len(lines) > 1:
         print("\n".join(lines))
+    sys.stdout.flush()  # the gate lines stand even if the lessons run out of time
+    for line in learned(root):
+        print(line)
     return 0
+
+
+def learned(root):
+    """Import new memories into the ledger; then what the kit changed and this repo's lessons for
+    the main session, together within SESSION_LESSONS."""
+    try:
+        import lessons
+        lessons.LOCK_WAIT = 1.0  # within the hook's timeout, with the gate lines already printed
+        lessons.harvest(root)
+        news = lessons.take_news(root)
+        block = news_block(news)
+        text = lessons.deliver(root, "lead", SESSION_LESSONS - len(block))
+    except Exception:
+        return []  # lessons are a help, never a reason for a session not to start
+    return [t for t in (text, block) if t]
+
+
+def news_block(news):
+    """What the kit changed, within half the session budget (the rest: /kit:learn news)."""
+    if not news:
+        return ""
+    lines = ["kit changed its lessons for this repo (tell the user these lines once, briefly):"]
+    for i, line in enumerate(news):
+        more = f"- ... and {len(news) - i} more: /kit:learn news"
+        if len("\n".join(lines + [f"- {line}", more])) > SESSION_LESSONS // 2:
+            lines.append(more)
+            break
+        lines.append(f"- {line}")
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

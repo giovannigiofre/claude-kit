@@ -188,9 +188,14 @@ def identify(start):
     return origin or main, origin, name, main
 
 
-def block_path(key):
+def slug_for(key):
+    """A repo's file name stem: readable, and unique through a hash of the key."""
     slug = re.sub(r"[^a-z0-9]+", "-", key.lower()).strip("-")[-60:]
-    return blocks_dir() / f"{slug}-{hashlib.sha1(key.encode()).hexdigest()[:8]}.json"
+    return f"{slug}-{hashlib.sha1(key.encode()).hexdigest()[:8]}"
+
+
+def block_path(key):
+    return blocks_dir() / f"{slug_for(key)}.json"
 
 
 def clean(line):

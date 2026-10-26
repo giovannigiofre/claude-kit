@@ -17,6 +17,7 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   ],
   "guard": {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40, "allowCommands": []},
   "llm": "on",
+  "learn": {"model": true},
   "author": "Giovanni Giofré <99892523+giovannigiofre@users.noreply.github.com>",
   "lead": {
     "read": ["docs/backlog.md"],
@@ -49,6 +50,7 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   `"attribution": {"commit": "", "pr": "", "sessionUrl": false}` in `settings.json`, so Claude
   doesn't write the credits in the first place. `{"guard": "on"}` in `~/.claude/kit.json` guards projects without a
   `kit.json` too.
+- `learn`: `{"model": false}` keeps the lesson distiller to its no-token passes (see Lessons).
 - `llm` (read by the `kit-llm` plugin's hook): `"off"` silences the LLM-code hint in this project.
 - `author`: who commits in this project, as `"Name <email>"`. When git's identity in the checkout
   is missing or an AI's (a cloud container's default), the SessionStart hook sets the repo's own
@@ -139,6 +141,88 @@ At session start in a kit project the hook only rebuilds from the stored blocks 
 lines back; it is silent when nothing changed. With no blocks it takes no lock and writes nothing
 unless settings.json still has `[kit auto-mode]` lines, which it then removes. Check the result with `claude auto-mode config`.
 
+## Lessons
+
+The kit keeps what each repo has taught it in a ledger outside every repo, under the Claude
+config dir (`~/.claude` unless `CLAUDE_CONFIG_DIR` says otherwise):
+
+```
+~/.claude/kit-lessons/<slug>.jsonl        one lesson per line (id, kind, text, status, seen, misses, evidence)
+~/.claude/kit-lessons/<slug>.events.jsonl raw captured events, capped
+~/.claude/kit-lessons/<slug>.ops.jsonl    before-images of every change, for undo
+~/.claude/kit-lessons/_machine.jsonl      lessons that hold on this machine across repos
+```
+
+A repo is its normalized git origin, so every checkout and worktree of it shares one ledger (the
+slug is the auto mode one). Only kit code writes there; nothing in a repo can plant a lesson.
+
+**Capture** is deterministic and costs no tokens: a failed fast `check` (Stop), a guard denial,
+and a kit:verifier FAIL (SubagentStop: each problem headline becomes a candidate). The verdict
+is read from the verifier's report: its final message, else the SubagentHandback report in its
+transcript. Verifier verdicts and revert commits are counted as events, for stats and the
+distiller; a verdict is tied to the branch its brief names (else its report, else a PR number),
+and a PASS confirms only the last FAIL on the same branch (with no branch named, it confirms
+nothing). Each report counts once, so a verifier resumed with SendMessage records its next round
+too. The same key seen again is counted, not added; a repeat after the lesson was delivered
+counts as a miss. A new automatic lesson starts as a candidate and turns active on its second
+sighting, at most 3 a day per repo. Text that looks like a key or token is refused.
+
+**Import**: at session start the kit imports, once and without touching the files, the
+kit:verifier memory index (`.claude/agent-memory/kit-verifier/MEMORY.md`) and your auto-memory
+`feedback_*` entries. A verifier pitfall about claude-kit itself (naming the kit's repo and one of its files) goes
+to claude-kit's ledger. Each imported lesson lists its source, so an entry is imported once; nothing is written
+inside the repo. Threads also run the import at start, so a memory written mid-session reaches the
+next thread.
+
+**Delivery**: kit:implementer and kit:verifier get this repo's active lessons at start (the
+verifier minus its own memory, which it already reads), the main session gets gate and guard
+lessons after the gate lines. Most repeated and newest first; about 600 tokens for a thread,
+400 for the session. With an empty ledger the thread gets the memory index lines directly.
+
+**Distiller** (`distill.py`): runs after a kit:verifier PASS that follows a FAIL on the same branch (the FAIL's
+problems become active lessons), at SessionEnd once 5 new events are pending (in the background),
+and on `/kit:learn`. Without tokens it merges lessons that say the same thing, retires a lesson
+marked wrong twice (`harmful`), and proposes retiring stale ones: automatic pitfall and gate
+lessons not seen for 60 days, candidates seen once in 30. A proposal changes nothing; accept it
+with `/kit:learn retire <id>`, or keep the lesson with `/kit:learn undo <id>` (it is not asked
+again). Unanswered, it is asked again after 30 days; a new sighting withdraws it. It also writes a hardening proposal
+for a lesson that came back twice after threads were told (a check, a test or a CLAUDE.md line;
+announced, never applied). Every change is one line at the next session start, with
+`undo: /kit:learn undo <id>`.
+
+It may also make one model call to reword and merge lessons: `claude -p --model haiku` with no
+tools, hooks or plugins, from an empty folder, capped at $0.05 (`--max-budget-usd`) and run at
+most once a day per repo. A typical call costs about $0.001. The model can only edit, merge
+or retire existing lessons, and its text passes the same secret filter. It never runs in a
+headless session: overnight (`KIT_HEADLESS`), or any `CLAUDE_CODE_ENTRYPOINT` other than an
+interactive one (`cli`, `claude-vscode`, `claude-desktop`, `claude-desktop-3p`), so not in
+`claude -p` or the SDK. Turn it off with `KIT_LEARN_MODEL=0` or `"learn": {"model": false}` in
+kit.json.
+
+**Promotion** (`promote.py`, run by the distiller): a lesson active in 2 repos becomes one machine
+lesson (`M` ids) that every repo gets; the repo copies turn `promoted`, and undoing the machine
+lesson gives them back for good. A machine lesson seen in 3 or more repos or about the kit, and
+any `kit-defect` lesson, becomes a kit candidate, announced once. Only `/kit:learn promote <id>`,
+run in an interactive session, prepares a claude-kit branch: the smallest generic change, a
+regression test or eval that fails without it, the budget test, and `lessons.py scrub` on the
+diff (no repo names, orgs, paths, env var names from the ledgers, or secrets). It opens the PR in
+that session and never merges it. `lessons.py promoted <id> <version> <url>` then makes the lesson
+retire itself once the PR is merged (checked with `gh`) and that kit version is installed.
+
+```bash
+python3 <kit>/hooks/scripts/lessons.py list [--all] [DIR]
+python3 <kit>/hooks/scripts/lessons.py render implementer|verifier|lead [DIR]
+python3 <kit>/hooks/scripts/lessons.py add pitfall KEY "one line" [DIR]
+python3 <kit>/hooks/scripts/lessons.py retire L4 [DIR]
+python3 <kit>/hooks/scripts/lessons.py undo L4 [DIR]
+python3 <kit>/hooks/scripts/lessons.py stats [DIR]
+python3 <kit>/hooks/scripts/lessons.py news [DIR]
+python3 <kit>/hooks/scripts/lessons.py distill [--no-model] [DIR]
+python3 <kit>/hooks/scripts/lessons.py promote [ID] [DIR]
+python3 <kit>/hooks/scripts/lessons.py promoted ID VERSION PR_URL [DIR]
+git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
+```
+
 ## Modes and the status line
 
 - **Light**: a normal session. `/kit:lead <work>` starts the coordinator when you want it.
@@ -195,6 +279,8 @@ Self-checks (no tokens):
 python3 tests/test_budget.py
 python3 plugins/kit/hooks/tests/test_guard.py
 python3 plugins/kit/hooks/tests/test_session_start.py
+python3 plugins/kit/hooks/tests/test_subagent_start.py
+python3 plugins/kit/hooks/tests/test_lessons.py
 python3 plugins/kit/hooks/tests/test_machine_setup.py
 python3 plugins/kit/hooks/tests/test_auto_mode_sync.py
 python3 plugins/kit/skills/investigate/tests/test_compact_logs.py

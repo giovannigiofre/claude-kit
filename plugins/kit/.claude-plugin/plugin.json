@@ -1,8 +1,9 @@
 {
   "name": "kit",
   "description": "A coordinator you talk to that runs each piece of work in a background thread (worktree, gate, evidence, PR), deterministic gates (check before stop, formatters, protected paths, guard), an overnight runner, debugging and learning, light/loop mode and host/sandbox safety, and a status line",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "author": {
     "name": "giovannigiofre"
-  }
+  },
+  "repository": "https://github.com/giovannigiofre/claude-kit"
 }

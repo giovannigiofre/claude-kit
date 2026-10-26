@@ -68,7 +68,16 @@ read again every 15 seconds. Mode per project (`/kit-mode`): **Light** (a normal
                 guard    blocks irreversible or credential-leaking commands, in any permission mode
    PostToolUse  on_edit  runs the formatter/validator for the edited file, feeds errors back
    Stop         check    runs the fast `check`; on failure Claude keeps fixing (max 3 tries)
-   SessionStart          lists the project's gates; after a compaction, re-injects the board
+   SessionStart          lists the project's gates; after a compaction, re-injects the board;
+                         says once when a newer kit is installed than the one loaded (restart)
+   SubagentStart         gives each kit:implementer and kit:verifier this repo's lessons from the
+                         ledger, most repeated and newest first (about 600 tokens max)
+   SubagentStop          turns a kit:verifier FAIL into candidate lessons; gate failures, guard
+                         denials are captured too (no tokens), all into
+                         ~/.claude/kit-lessons/, outside every repo (see docs/reference.md)
+   SessionEnd            runs the distiller in the background once 5 new events are pending
+                         (merge, retire shipped fixes, propose retiring stale lessons and
+                         hardening; each told once, with undo)
 ```
 
 ## What's in it
@@ -84,11 +93,11 @@ read again every 15 seconds. Mode per project (`/kit-mode`): **Light** (a normal
 | `kit:extras` | Offers `kit-ui` or `kit-llm` when a task needs one the project lacks |
 | `/kit:go` | Intent → sync → test like a user → `/code-review` → `/simplify` → risk → PR → CI green |
 | `/kit:init` | Sets up a project (kit.json, e2e skill, safety, permissions) |
-| `/kit:learn` | Corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
+| `/kit:learn` | Tidies the lesson ledger (merge, retire shipped fixes, proposals to retire or harden, undo); `promote` turns a lesson seen across repos into a kit PR; corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
 | `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
 | `kit:implementer` | A thread: one item from brief to PR in its own worktree, effort medium |
 | `kit:verifier` | A fresh-context review against the intent, with a per-project memory of pitfalls |
-| Hooks + mod | `protect`, `guard`, `on_edit`, `stop_check`, `session_start`; the mod (`kit.tsx`: modes, safety, status line) |
+| Hooks + mod | `protect`, `guard`, `on_edit`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop`, the lesson ledger `lessons.py`; the mod (`kit.tsx`: modes, safety, status line) |
 
 **Domain plugins** (project scope, offered by `kit:extras` when a task needs them):
 
@@ -150,7 +159,9 @@ project.
 ## Safety
 
 - **Host** (your own machine): no OS sandbox. The guard still blocks recursive deletes outside
-  the repo, pushes or force pushes to main, `git reset --hard` or `clean` over uncommitted work,
+  the repo (a sibling linked worktree of the same repository counts as inside, outside its
+  `.git`; the main checkout does not; a path is judged by where its symlinks really lead),
+  pushes or force pushes to main, `git reset --hard` or `clean` over uncommitted work,
   `sudo`, `curl … | sh`, and reading `~/.ssh`, `~/.aws`, gh, docker or kube config and the
   keychain. It also keeps you the only author: it blocks a commit, PR, issue or comment that
   credits an AI (`Co-Authored-By: Claude`, "Generated with Claude Code", a session link), through

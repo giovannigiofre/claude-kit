@@ -85,6 +85,16 @@ def main():
                        capture_output=True, check=True)
         assert "Kit setup" not in run({"cwd": str(repo), "source": "startup"}, home=fresh), "applied: silent"
 
+        # a newer kit installed than the one this session runs: one restart line per session
+        plugin = SCRIPT.resolve().parents[2]
+        (HOME / ".claude" / "plugins").mkdir(exist_ok=True)
+        (HOME / ".claude" / "plugins" / "installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {
+            "kit@claude-kit": [{"scope": "user", "installPath": str(plugin.parent / "9.9.9"), "version": "9.9.9"}]}}))
+        notice = "kit updated to 9.9.9: restart Claude Code (or /reload-plugins)"
+        assert notice in run({"cwd": str(repo), "source": "startup", "session_id": "upd"}, TMPDIR=tmp)
+        assert notice not in run({"cwd": str(repo), "source": "compact", "session_id": "upd"}, TMPDIR=tmp), "said once"
+        (HOME / ".claude" / "plugins" / "installed_plugins.json").unlink()
+
         (repo / ".claude" / "kit.json").write_text("{broken")
         out = run({"cwd": str(repo), "source": "startup"})
         assert "cannot read" in out, "a broken kit.json is reported, not ignored"

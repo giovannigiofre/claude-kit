@@ -39,7 +39,7 @@ def setup(project_kit=True, user_kit=None):
 
 
 def call(home, repo, tool, tool_input, session="s1"):
-    env = dict(os.environ, HOME=str(home), TMPDIR=str(home / "tmp"))
+    env = dict(os.environ, HOME=str(home), TMPDIR=str(home / "tmp"), CLAUDE_CONFIG_DIR=str(home / ".claude"))
     (home / "tmp").mkdir(exist_ok=True)
     payload = {"tool_name": tool, "tool_input": tool_input, "cwd": str(repo), "session_id": session}
     out = subprocess.run([sys.executable, str(SCRIPT)], input=json.dumps(payload), capture_output=True,
@@ -113,6 +113,7 @@ MORE = [
     ("echo `rm -rf /`", "block"),
     ("find ~ -name '*.log' -delete", "block"),
     ("find / -exec rm -rf {} +", "block"),
+    ("find -x ~ -name '*.log' -delete", "block"),
     ("find . -name '*.pyc' -delete", "allow"),
     ("python3 -c 'import shutil, os; shutil.rmtree(os.path.expanduser(\"~\"))'", "block"),
     ("python3 -c 'print(1)'", "allow"),
@@ -189,6 +190,38 @@ def main():
     if bash(home, repo, "git push")[0] != 0:
         failed += 1
         print("FAIL bare push from a feature branch should pass")
+
+    # rm-outside: a linked sibling worktree of the same repository is not outside it; the main checkout is
+    sibling = repo.parent / "app-k2"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "feat/k2", str(sibling)], check=True)
+    (sibling / ".claude").mkdir()
+    (sibling / ".claude" / "kit.json").write_text("{}")
+    # ... judged by where a path really leads: a symlink in a worktree cannot carry a delete elsewhere
+    third = repo.parent / "app-k3"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "feat/k3", str(third)], check=True)
+    (home / "other").mkdir()
+    for name, to in (("to-main", repo), ("to-gitdir", repo / ".git"), ("to-other", home / "other")):
+        (third / name).symlink_to(to)
+    (sibling / "to-other").symlink_to(home / "other")
+    (sibling / "to-home").symlink_to(home)
+    for cwd, command, want in ((repo, "rm -rf ../app-k2/build", "allow"), (repo, "rm -rf ../app-k2", "allow"),
+                               (sibling, "rm -rf ../app/node_modules", "block"), (sibling, "rm -rf ../app", "block"),
+                               (sibling, "rm -rf ../app-k3/to-main/node_modules", "block"),
+                               (sibling, "rm -rf ../app-k3/to-gitdir/objects", "block"),
+                               (sibling, "rm -rf ../app-k3/to-other/a.txt", "block"),
+                               (sibling, "rm -rf ../app-k3/to-main/", "block"),
+                               (sibling, "rm -rf ../app-k3/to-main/../app/src", "block"),
+                               (sibling, "rm -rf to-other/a.txt", "block"), (sibling, "rm -rf ../app-k3/to-main", "allow"),
+                               (sibling, "find to-other/ -delete", "block"), (sibling, "find -L . -delete", "ask"),
+                               (sibling, "find -H to-home -delete", "block"),
+                               (sibling, "find -s -H to-home -delete", "block"),
+                               (sibling, "find -xH to-home -name b -delete", "block"),
+                               (sibling, "find -- to-home/ -delete", "block"),
+                               (sibling, "find -H to-h?me -delete", "block")):
+        got = verdict(home, cwd, command)
+        if got != want:
+            failed += 1
+            print(f"FAIL sibling worktree {want} expected, got {got}: {command!r} from {cwd.name}")
 
     # Read/Grep/Glob of credential stores
     for tool, inp in (("Read", {"file_path": str(home / ".ssh" / "id_rsa")}),
