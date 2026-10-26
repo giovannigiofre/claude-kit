@@ -8,9 +8,9 @@ system. It reads shell text, so it is a guardrail, not a boundary: an obfuscated
 slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety profile).
 
   rm-outside       recursive delete (rm -r, find -delete/-exec rm, rmtree in python -c ...) of
-                   /, the home folder, the repo root, .git, or anything outside the repo, the
-                   repo's other linked worktrees (whole or in part), the temp
-                   folders and the cache folders; a target known only at run time ($VAR,
+                   /, the home folder, the repo root, .git, or anything outside the repo except
+                   its other linked worktrees, the temp folders and the cache folders; a
+                   target known only at run time ($VAR,
                    $(...), xargs) is asked about
   push-protected   a push to a protected branch (main, master, the remote's default), a force
                    push to one, a mirror push, or deleting one

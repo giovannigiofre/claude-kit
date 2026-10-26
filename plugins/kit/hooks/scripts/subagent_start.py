@@ -11,8 +11,8 @@ one line per lesson, within a hard budget (MAX_CHARS, about 600 tokens):
 
 Both are keyed by the main checkout, so a thread in a worktree gets the same lessons. Index lines
 only (the thread opens a file when a line applies), lines that look like a key or token are
-skipped, and lines past the budget are cut with a note saying how many. A missing file or a
-project without .claude/kit.json adds nothing. Standard library only.
+skipped, and lines past the budget are cut (the oldest pitfalls first) with a note saying how
+many. A missing file or a project without .claude/kit.json adds nothing. Standard library only.
 """
 
 import json
