@@ -10,7 +10,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import auto_mode_sync  # noqa: E402
 import kitlib  # noqa: E402
 import machine_setup  # noqa: E402
 
@@ -89,11 +88,12 @@ def main():
         return 0
     if not config:
         return 0  # project has not opted in: stay silent
-    try:  # silent unless something changed or is wrong
+    try:  # silent unless something changed or is wrong; never breaks session start
+        import auto_mode_sync
         for line in auto_mode_sync.sync():
             print(line)
     except Exception as exc:
-        print(f"kit: auto mode sync failed: {exc}")
+        print(f"kit: auto mode sync skipped: {exc}")
     lines = ["kit harness active for this project (.claude/kit.json):"]
     author_line = ensure_author(root, config)
     if author_line:

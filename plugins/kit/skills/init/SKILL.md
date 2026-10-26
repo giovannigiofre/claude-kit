@@ -69,8 +69,10 @@ and its CI actually run, not guesses.
     repo shows: the remote's org, cloud manifests (project, region, registry), secret and `.env`
     files, protected branches (if `gh` works:
     `gh api repos/{owner}/{repo}/branches --jq '.[] | select(.protected) | .name'`), trusted
-    domains. `--show` prints lines stored earlier. Show the draft; only on approval pipe it to
-    `python3 <kit>/hooks/scripts/auto_mode_sync.py --set -` (`--remove` forgets the repo).
+    domains. With `S=<kit>/hooks/scripts/auto_mode_sync.py`: `--show` prints lines stored
+    earlier; pipe the draft to `python3 $S --preview -` and show the user its full output (the
+    exact lines, origin and paths included). Only on approval pipe the same draft to
+    `python3 $S --set -`; `--remove` forgets the repo.
 12. **Domain plugins**: if the repo has a frontend, or code that calls an LLM, offer `kit-ui` or
     `kit-llm` for this project now (`kit:extras` explains the install).
 13. Write `.claude/kit.json`, show it, and explain that it is committed so every clone and session

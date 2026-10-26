@@ -90,14 +90,16 @@ and `soft_deny` stay in your user settings.
 
 ```bash
 S=<kit>/hooks/scripts/auto_mode_sync.py
-echo '{"environment": ["**Organization**: acme", "**Cloud provider(s)**: GCP project shop-dev"]}' \
-  | python3 $S --set -        # store the approved lines for the repo you are in, then rebuild
+D='{"environment": ["**Organization**: acme", "**Cloud provider(s)**: GCP project shop-dev"]}'
+echo "$D" | python3 $S --preview -    # the exact lines --set would add; changes nothing
+echo "$D" | python3 $S --set -        # store them for the repo you are in, then rebuild
 python3 $S --show             # what is stored for this repo
 python3 $S --remove           # forget this repo
 python3 $S                    # rebuild only (what SessionStart runs)
 ```
 
-`/kit:init` drafts the lines from what the repo shows and runs `--set` once you approve them.
+`/kit:init` drafts the lines from what the repo shows, shows you the `--preview` output and runs
+`--set` once you approve it.
 
 **Security model:** nothing inside a repository can add auto mode lines. No file in the repo is
 read for them; only your `--set` command writes a block, so a cloned repo cannot declare itself
@@ -105,12 +107,16 @@ trusted, whatever it commits.
 
 - A repo is its origin URL, normalized (`git@github.com:Acme/shop.git` and
   `https://github.com/acme/shop` are the same `github.com/acme/shop`, credentials dropped), so
-  every checkout and worktree matches; without a remote, its main checkout path.
+  every checkout and worktree matches; without a remote, its main checkout path. Both end up in
+  the line the classifier reads, so `--set` refuses an origin that does not normalize to one
+  plain `host/path` token (letters, digits, `._~-`, no spaces, no `..`) and a checkout path with
+  anything but letters, digits, space and `._~+@/-` (no newlines, no `*`). A stored block that
+  fails the same check is skipped at rebuild.
 - Blocks: `kit-auto-mode/<slug>.json` = `{"repo": {"origin", "name", "paths"}, "environment": [...]}`.
   At most 20 lines of 400 characters per repo.
-- Each line is written as `**Organization (shop repo only)**: In the repository whose git origin
-  is github.com/acme/shop, in any checkout or worktree of it (known checkouts: /path/shop), and
-  nowhere else: acme [kit auto-mode]`. Labels lose `**` and newlines; the `(repo only)` suffix and
+- Each line is written as ``**Organization (shop repo only)**: In the repository whose git origin
+  is `github.com/acme/shop`, in any checkout or worktree of it (known checkouts: `/path/shop`),
+  and nowhere else: acme [kit auto-mode]``. Labels lose `**` and newlines; the `(repo only)` suffix and
   the trailing tag are always the kit's. The tag marks the kit's lines: a rebuild replaces exactly
   those and keeps your own lines and their order.
 - A new list starts with `"$defaults"` (`environment` supports it, as `allow` does), so the
@@ -118,12 +124,16 @@ trusted, whatever it commits.
   `environment` is left alone with a one-line warning.
 - Writes happen under a lock (`kit-auto-mode.lock`), atomically, only when the result changes,
   after a backup to `settings.json.kit-auto-mode-backup`; the first backup ever is also kept as
-  `settings.json.kit-auto-mode-backup.orig`. A settings file that is not valid JSON is never
-  rewritten.
+  `settings.json.kit-auto-mode-backup.orig`. If another program writes settings.json during a
+  rebuild, the rebuild starts again from that version. A settings file that is not valid JSON,
+  a read-only one, or one whose `autoMode` is not an object is never rewritten (one-line warning).
+- If `--set` stored the block but could not update settings.json, it says so and exits non-zero;
+  the next session start applies it.
 
 At session start in a kit project the hook only rebuilds from the stored blocks (no git, no
 `claude` command, nothing read from the repo), so a reset or hand-edited settings file gets the
-lines back; it is silent when nothing changed. Check the result with `claude auto-mode config`.
+lines back; it is silent when nothing changed. With no blocks it takes no lock and writes nothing
+unless settings.json still has `[kit auto-mode]` lines, which it then removes. Check the result with `claude auto-mode config`.
 
 ## Modes and the panel
 

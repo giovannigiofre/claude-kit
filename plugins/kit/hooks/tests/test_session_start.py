@@ -22,7 +22,7 @@ HOME = Path(tempfile.mkdtemp())  # a machine that already has the kit's settings
 def run(payload, home=HOME, **env):
     out = subprocess.run([sys.executable, str(SCRIPT)], input=json.dumps(payload),
                          capture_output=True, text=True, timeout=30,
-                         env={**os.environ, "HOME": str(home), **env})
+                         env={**os.environ, "HOME": str(home), "CLAUDE_CONFIG_DIR": str(Path(home) / ".claude"), **env})
     assert out.returncode == 0, out.stderr
     return out.stdout
 
