@@ -76,20 +76,27 @@ def offer_machine_setup():
           "AskUserQuestion (a headless run), ignore this.")
 
 
+def version_key(version):
+    """'1.10.0' sorts after '1.9.2'; anything unparsable sorts first."""
+    try:
+        return tuple(int(part) for part in str(version).split("."))
+    except ValueError:
+        return ()
+
+
 def update_notice(session_id):
     """When a newer kit is installed than the one this session runs (an update while Claude Code
     was open keeps the old hooks and skills loaded), say so once per session and version."""
     plugin = Path(__file__).resolve().parents[2]
     try:
         loaded = json.loads((plugin / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
-        config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-        registry = json.loads((config_dir / "plugins" / "installed_plugins.json").read_text(encoding="utf-8"))
+        registry = json.loads((kitlib.config_dir() / "plugins" / "installed_plugins.json").read_text(encoding="utf-8"))
         installed = [entry.get("version") for entries in registry.get("plugins", {}).values()
                      for entry in entries if isinstance(entry, dict) and entry.get("installPath")
                      and Path(entry["installPath"]).resolve().parent == plugin.parent]
     except Exception:
         return None  # a dev checkout (--plugin-dir) or an unknown registry format: nothing to say
-    newer = next((v for v in installed if isinstance(v, str) and v != loaded), None)
+    newer = max((v for v in installed if version_key(v) > version_key(loaded)), key=version_key, default=None)
     if not newer or kitlib.load_state(session_id, "kit-version").get("announced") == newer:
         return None
     kitlib.save_state(session_id, "kit-version", {"announced": newer})
@@ -104,14 +111,14 @@ def main():
         print_board(root, config)
     elif not os.environ.get("KIT_HEADLESS"):
         offer_machine_setup()
-    notice = update_notice(data.get("session_id"))
-    if notice:
-        print(notice)
     if err:
         print(err)
         return 0
     if not config:
         return 0  # project has not opted in: stay silent
+    notice = update_notice(data.get("session_id"))
+    if notice:
+        print(notice)
     try:  # silent unless something changed or is wrong; never breaks session start
         import auto_mode_sync
         for line in auto_mode_sync.sync():

@@ -74,6 +74,11 @@ def load_config(root):
         return None, f"kit: cannot read {path}: {exc}"
 
 
+def config_dir():
+    """Claude Code's config dir: CLAUDE_CONFIG_DIR, else ~/.claude."""
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
 def glob_to_regex(glob):
     """`**` spans directories, `*` and `?` stay inside one path segment."""
     out, i = "", 0

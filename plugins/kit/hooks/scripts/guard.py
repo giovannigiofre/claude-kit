@@ -269,9 +269,12 @@ def in_sibling_worktree(target, root):
     next to this one): anything inside one, or a linked one as a whole; never the main
     checkout's root, nor anything in a .git."""
     listing = git(root, "worktree", "list", "--porcelain")
-    trees = [Path(os.path.normpath(line[len("worktree "):])) for line in listing.splitlines()
-             if line.startswith("worktree ")]
+    entries = [block.splitlines() for block in listing.split("\n\n") if block.startswith("worktree ")]
+    trees = [None if "bare" in lines else Path(os.path.normpath(lines[0][len("worktree "):]))
+             for lines in entries]  # a bare repository's directory is all history: never a worktree
     for i, tree in enumerate(trees):
+        if tree is None:
+            continue
         for t in {target, Path(os.path.realpath(str(target)))}:
             if t == tree:
                 if i > 0:  # the first entry is the main checkout

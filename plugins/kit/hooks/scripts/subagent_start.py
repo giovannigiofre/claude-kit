@@ -130,7 +130,7 @@ def lessons(cwd, config_dir):
     memory = Path(config_dir) / "projects" / slug(main) / "memory" / "MEMORY.md"
     return compose([
         (f"User feedback for this repo (files in {memory.parent}):",
-         index_lines(memory, lambda line: "(feedback_" in line)),
+         index_lines(memory, lambda line: re.search(r"[(\s]feedback_[^\s)]*\.md\b", line))),
         (f"Pitfalls the kit verifier found here before (files in {verifier.parent}):",
          index_lines(verifier)),
     ])
@@ -139,7 +139,7 @@ def lessons(cwd, config_dir):
 def main():
     data = kitlib.read_input()
     cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    config_dir = os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
+    config_dir = kitlib.config_dir()
     try:
         text = lessons(cwd, config_dir)
     except Exception:
