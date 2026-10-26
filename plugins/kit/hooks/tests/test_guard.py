@@ -116,6 +116,7 @@ MORE = [
     ("find -x ~ -name '*.log' -delete", "block"),
     ("find . -name '*.pyc' -delete", "allow"),
     ("find .. -name '*.pyc' -delete", "block"),
+    ("find . -name '*' -delete", "block"),
     ("rm -rf {~,/tmp/kit-vfy-x}", "block"),
     ("python3 -c 'import shutil, os; shutil.rmtree(os.path.expanduser(\"~\"))'", "block"),
     ("python3 -c 'print(1)'", "allow"),
@@ -143,16 +144,21 @@ MORE = [
     ("export S=~ && rm -rf $S", "block"),
     ("S=/tmp/kit-x; S=~; rm -rf $S", "ask"),
     ("TMPDIR=/; S=$TMPDIR; rm -rf $S", "block"),
+    ('SP=/tmp/kit-sp; T=$(mktemp -d "$SP/fx.XXXX"); rm -rf $T/sub', "allow"),
     ("false &&\nS=/tmp/kit-x\nrm -rf $S/*", "ask"),
-    ("S=/tmp/kit-x; command eval S\\=\\~; rm -rf $S", "ask"),
+    ("S=/tmp/kit-x; command \\eval S\\=\\~; rm -rf $S", "ask"),
     ("S=/tmp/kit-x; rm -rf \\$S/../x", "ask"),
     ("cd - && rm -rf src", "ask"),
+    ("CDPATH=~; cd code && rm -rf *", "ask"),
+    ("rm -rf ~root", "block"),
+    ("rm -rf ~/" + "{a,b}" * 1200, "ask"),
     # quoted text over several lines is an argument, not commands; sh -c over several lines is
     ('git commit -m "fix\n\nrm -rf ~ is what the guard stops"', "allow"),
     ('bash -c "echo hi\nrm -rf ~"', "block"),
     ("echo \"$(echo '\"')\"\nrm -rf ~\n: '\n'", "block"),
     ("cat <<'EOF'x\nEOFx\nrm -rf ~\nEOF", "block"),
     ("echo $((1<<y))\nrm -rf ~\ny", "block"),
+    ("git commit -m \"$(cat <<'EOF'\nIt's fixed\nEOF\n)\"\nrm -rf ~", "block"),
 ]
 
 

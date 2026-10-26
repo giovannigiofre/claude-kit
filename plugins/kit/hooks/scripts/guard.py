@@ -13,9 +13,11 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    `cd <dir> &&` into another work tree, that repository counts as inside too
                    (its root and .git do not). A variable set once by a plain NAME=value
                    earlier in the command is judged by its value; a target known only at run
-                   time ($(...), a loop variable, a value set twice, xargs, a folder after
-                   `cd -`) is asked about; find with no name or path test at a repo root
-                   counts as deleting the root
+                   time ($(...) other than mktemp, a loop variable, a value set twice or by
+                   eval or source, an escaped or single-quoted $NAME, xargs, a folder after
+                   `cd -`, popd or `cd $X`) is asked about. A repository entered by cd counts
+                   only when it holds that folder. find with no name or path test at a repo
+                   root counts as deleting the root
   push-protected   a push to a protected branch (main, master, the remote's default), a force
                    push to one, a mirror push, or deleting one
   discard-work     git reset --hard, checkout/restore of the whole tree, clean, stash drop/clear
@@ -44,8 +46,9 @@ Active when the project has .claude/kit.json (unless its "guard" is "off"), or e
 Each denial is counted in the kit's lesson ledger (lessons.py) by its shape, once per session.
 """
 
-import hashlib
+import fnmatch
 import glob
+import hashlib
 import json
 import os
 import re
@@ -89,6 +92,11 @@ def expand(word, cwd, raw=False):
         return UNKNOWN
     if w == "~" or w.startswith("~/"):
         w = str(home()) + w[1:]
+    elif w.startswith("~"):  # ~user: that user's home folder
+        user = os.path.expanduser(w.split("/")[0])
+        if user.startswith("~"):
+            return UNKNOWN
+        w = user + w[len(w.split("/")[0]):]
     joined = os.path.join(str(cwd), w)
     return joined if raw else Path(os.path.normpath(joined))
 
@@ -132,22 +140,59 @@ def quote_mask(text):
     return "".join(mask)
 
 
+def mktemp_value(inner, known):
+    """Where `$(mktemp ...)` puts its file or folder, as a path below the folder it is made in
+    (the template's folder, -p DIR, or $TMPDIR): rm -rf of it is judged as a delete in that
+    folder. None when the folder is not an absolute path known now."""
+    if re.search(r"[`;&|<>()]", inner) or ("'" in inner and "$" in inner):
+        return None
+    try:
+        words = shlex.split(inner)[1:]
+    except ValueError:
+        return None
+    env = {"HOME": str(home()), "TMPDIR": tempfile.gettempdir(), **known}
+    words = [with_vars(str(home()) + w[1:] if w == "~" or w.startswith("~/") else w, env) for w in words]
+    base, template, in_dir = env["TMPDIR"], None, False
+    while words:
+        w = words.pop(0)
+        if w in ("-p", "--tmpdir") and words:
+            base, in_dir = words.pop(0), True
+        elif w.startswith("--tmpdir="):
+            base, in_dir = w.split("=", 1)[1], True
+        elif w.startswith("-t"):
+            in_dir = True
+            if w == "-t" and words:
+                words.pop(0)
+        elif w.startswith("-"):
+            continue  # -d, -q, -u
+        else:
+            template = w
+    if template and (re.search(r"\s", template) or glob.has_magic(template)):
+        return None
+    if template and "/" in template:
+        base = os.path.dirname(template)
+    elif template and not in_dir:
+        return None  # a bare template is made in the working folder
+    if "$" in base or not os.path.isabs(base) or re.search(r"\s", base) or glob.has_magic(base):
+        return None
+    return os.path.normpath(base) + "/mktemp.XXXXXX"
+
+
 def assigned_value(command, name, known):
     """The value a command gives `name` with its one plain `name=value`, when that value is known
-    now: a literal, ~, or $HOME, $TMPDIR and names already known. None when the name is set more
-    than once or any other way (read, for, local, ${name:=...}), or the value has $(...),
-    backticks, a glob, whitespace, or is empty: those are only known when the command runs."""
+    now: a literal, ~, $HOME, $TMPDIR, names already known, or the folder $(mktemp ...) makes.
+    None when the name is set more than once or any other way (read, for, local, ${name:=...},
+    eval or source), or the value has other $(...), backticks, a glob, whitespace, or is empty:
+    those are only known when the command runs. The caller rules out eval, source and `.`."""
     n = re.escape(name)
     sets = list(re.finditer(rf"(?<![\w$]){n}\+?=", command))
     other = rf"\bfor\s+{n}\b|\bselect\s+{n}\b|\$\{{{n}:?[=?]|\(\([^)]*\b{n}\b|\b{n}\[|\bprintf\s+-v\s*{n}\b" \
-            rf"|\b(read|unset|declare|typeset|local|readonly|let|getopts|mapfile|readarray)\b[^\n;&|]*\b{n}\b" \
-            r"|(^|[;&|({\n]|\b(then|do|else|" + "|".join(WRAPPERS) + r"))\s*\.\s"
-    mask = quote_mask(command)
-    unseen = [m for m in re.finditer(r"(?<![\w./-])(eval|source)(?![\w./-])", command) if mask[m.start()] == " "]
-    # eval, source and . can set it unseen, also behind `command`, `builtin` or `time`
-    if len(sets) != 1 or command[sets[0].end() - 2] == "+" or unseen or re.search(other, command):
+            rf"|\b(read|unset|declare|typeset|local|readonly|let|getopts|mapfile|readarray)\b[^\n;&|]*\b{n}\b"
+    if len(sets) != 1 or command[sets[0].end() - 2] == "+" or re.search(other, command):
         return None
     c, i, parts = command, sets[0].end(), []
+    if m := re.match(r"(\"?)\$\((mktemp\b[^()`]*)\)\1(?=[\s;&|)]|$)", c[i:]):
+        return mktemp_value(m.group(2), known)
     while i < len(c) and c[i] not in " \t\n;&|()<>":
         if c[i] in "'\"":
             j = c.find(c[i], i + 1)
@@ -190,7 +235,9 @@ def with_vars(word, env):
 def braces(word, limit=256):
     """The words the shell makes of `word` by brace expansion, before rm or find sees them:
     {a,b}, nested ones, {1..9..2} and {a..e}; ${...} and a brace with no comma or range stay as
-    written. None when there would be more than `limit` words to judge."""
+    written. None when there would be more than `limit` words (or 32 braces) to judge."""
+    if word.count("{") > 32:
+        return None
     i = 0
     while (i := word.find("{", i)) != -1:
         depth, commas = 0, []
@@ -345,6 +392,22 @@ def logical_lines(text):
             cur.append(text[i:i + 2])
             i += 2
             continue
+        elif top in ("((", "a("):  # arithmetic: no quotes, no here-documents, << is a shift
+            if top == "((" and text.startswith("))", i):
+                stack.pop()
+                cur.append("))")
+                i += 2
+                continue
+            if ch == "(":
+                stack.append("a(")
+            elif ch == ")" and top == "a(":
+                stack.pop()
+        elif text.startswith("$((", i) or (not top and text.startswith("((", i)):
+            stack.append("((")
+            n = 3 if ch == "$" else 2
+            cur.append(text[i:i + n])
+            i += n
+            continue
         elif text.startswith("$(", i):
             stack.append("(")
             cur.append("$(")
@@ -359,14 +422,9 @@ def logical_lines(text):
             stack.append("$'" if ch == "'" and cur and cur[-1] == "$" else ch)
         elif top == "(" and ch in "()":
             stack.pop() if ch == ")" else stack.append("(")
-        elif top:
+        elif top == "`" or (top == "(" and ch == "\n" and not heredocs):
             pass  # inside $(...) or backticks: a newline there is part of the substitution
-        elif text.startswith("((", i):  # arithmetic: its << is a shift, not a here-document
-            stack += ["(", "("]
-            cur.append("((")
-            i += 2
-            continue
-        elif ch == "#" and (not cur or cur[-1] in " \t;&|()"):
+        elif ch == "#" and (not cur or cur[-1] in " \t;&|()\n"):
             while i < len(text) and text[i] != "\n":
                 i += 1
             continue
@@ -383,7 +441,9 @@ def logical_lines(text):
                 i += len(m.group(0))
                 continue
         elif ch == "\n":
-            if re.search(r"(&&|\|\||\|)\s*$", "".join(cur)):
+            if top:  # a here-document inside $(...): the substitution goes on after its body
+                cur.append("\n")
+            elif re.search(r"(&&|\|\||\|)\s*$", "".join(cur)):
                 cur.append(" ")  # the command goes on after the newline (and any here-document)
             else:
                 lines.append("".join(cur))
@@ -538,6 +598,29 @@ def check_rm(argv, cwd, repos):
     return None
 
 
+GIT_NAMES = [".git", "HEAD", "ORIG_HEAD", "FETCH_HEAD", "COMMIT_EDITMSG", "config", "index", "packed-refs",
+             "description", "objects", "refs", "heads", "tags", "hooks", "info", "logs", "exclude", "pack",
+             "pack-0a.pack", "pack-0a.idx", "pre-commit.sample", "0a"]
+
+
+def reaches_git(args):
+    """True when find's expression can match .git or what is in it: no name or path test, a
+    negation or an -o, or a test whose pattern matches .git itself."""
+    def matches(test, pattern):
+        if test == "-regex":
+            try:
+                return any(re.fullmatch(pattern, p) for p in ("./.git", "./.git/x"))
+            except re.error:
+                return True
+        if test.endswith("name") and test != "-wholename":  # .git or a name inside it
+            pattern = pattern.lower() if test == "-iname" else pattern
+            return any(fnmatch.fnmatchcase(n.lower() if test == "-iname" else n, pattern) for n in GIT_NAMES)
+        return any(fnmatch.fnmatchcase(p, pattern.lower() if test == "-ipath" else pattern)
+                   for p in ("./.git", "./.git/x"))
+    tests = [(a, args[k + 1]) for k, a in enumerate(args[:-1]) if re.fullmatch(r"-i?(name|path|regex)|-wholename", a)]
+    return not tests or any(a in ("!", "-not", "-o", "-or") for a in args) or any(matches(*t) for t in tests)
+
+
 def check_find(argv, cwd, repos):
     deletes = "-delete" in argv or any(
         a in ("-exec", "-execdir", "-ok") and i + 1 < len(argv) and Path(argv[i + 1]).name in ("rm", "rmdir", "shred")
@@ -573,7 +656,7 @@ def check_find(argv, cwd, repos):
         raw = expand(word, cwd, raw=True)
         if raw is not UNKNOWN:
             real = resolved(raw)
-            whole = not any(re.fullmatch(r"-i?(name|path|regex|wholename)", a) for a in args)
+            whole = reaches_git(args)
             if any(under(real, r) and not (real == r and whole) for r in roots) and ".git" not in real.parts:
                 continue  # find deletes what matches below the path; with no name or path test, all of .git
         found = delete_target(word, cwd, repos)
@@ -835,17 +918,21 @@ def check_bash(command, cwd, root, opts):
     asked, env, repos, lost_cwd = None, {}, [root], False
     code = "\n".join(logical_lines(command.replace("\\\n", " ")))  # no comments, no here-document bodies
     mask = quote_mask(code)
-    for seg in segments(command):
+    # a $NAME escaped or in single quotes stays as written: the shell does not put the value in
+    literal = {m.group(1) for m in re.finditer(r"\$\{?([A-Za-z_]\w*)", code) if mask[m.start()] in "'\\"}
+    segs = segments(command)
+    # eval, source and . can set any variable unseen, also as \eval, "eval" or behind `command`
+    unseen = any(seg["argv"] and (seg["argv"][0] == "." or Path(seg["argv"][0]).name in ("eval", "source"))
+                 for seg in segs)
+    for seg in segs:
         for var in seg.get("assigns") or []:
-            value = assigned_value(code, var, env) if seg["plain"] else None
+            value = assigned_value(code, var, env) if seg["plain"] and not unseen else None
             if value is not None:
                 env[var] = value
             elif var in ("HOME", "TMPDIR", "PWD"):
                 env[var] = "${%s:?}" % var  # expand() must not put the session's value in
             else:
                 env.pop(var, None)
-        # a $NAME escaped or in single quotes stays as written: the shell does not put the value in
-        literal = {m.group(1) for m in re.finditer(r"\$\{?([A-Za-z_]\w*)", code) if mask[m.start()] in "'\\"}
         known = {n: v for n, v in env.items() if n not in literal}
         argv = seg["argv"] if seg.get("nested") else [with_vars(a, known) for a in seg["argv"]]
         if not argv:
@@ -853,8 +940,11 @@ def check_bash(command, cwd, root, opts):
         name = Path(argv[0]).name
         if name in ("cd", "pushd", "popd"):
             args = [a for a in argv[1:] if a not in ("-L", "-P", "-e", "-@", "--")]
-            target = UNKNOWN if name == "popd" or args[:1] == ["-"] else \
-                expand(args[0], cwd) if args else home()
+            # with CDPATH set, `cd name` can land in a folder other than ./name
+            searched = args and not args[0].startswith(("/", ".", "~", "$")) \
+                and ("CDPATH" in code or os.environ.get("CDPATH"))
+            target = UNKNOWN if name == "popd" or (name == "pushd" and not args) or searched \
+                or re.fullmatch(r"-|[+-]\d+", (args or [""])[0]) else expand(args[0], cwd) if args else home()
             lost_cwd = lost_cwd or target is UNKNOWN
             cwd = cwd if target is UNKNOWN else target
             # `cd <dir> &&` into another work tree: its relative deletes are judged against that
@@ -862,8 +952,7 @@ def check_bash(command, cwd, root, opts):
             # does not hold the folder (core.worktree set elsewhere) is not trusted.
             top = git(cwd, "rev-parse", "--show-toplevel") if seg["plain"] and target is not UNKNOWN else ""
             top = Path(os.path.normpath(top)) if top else None
-            inside = top and (Path(os.path.realpath(cwd)) == Path(os.path.realpath(top))
-                              or under(Path(os.path.realpath(cwd)), Path(os.path.realpath(top))))
+            inside = top and under(os.path.realpath(cwd), os.path.realpath(top))
             repos = [root] + ([top] if inside and top != root and not under(home(), top) else [])
             continue
         if seg["piped_from"] and (name in SHELLS or name in INTERPRETERS) and \
@@ -931,7 +1020,10 @@ def main():
         return 0
     found = None
     if tool == "Bash":
-        found = check_bash(str(tool_input.get("command") or ""), cwd, root, opts)
+        try:
+            found = check_bash(str(tool_input.get("command") or ""), cwd, root, opts)
+        except Exception as error:  # a crash would let the command run unchecked
+            found = ("ask", "guard", f"the guard could not judge this command ({type(error).__name__})")
     elif tool in ("Read", "Grep", "Glob"):
         target = str(tool_input.get("file_path") or tool_input.get("path") or "")
         if target:
