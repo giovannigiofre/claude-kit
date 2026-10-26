@@ -43,7 +43,7 @@ reviewed, not-high-risk PRs. Medium- or high-risk work gets a review by
 `kit:verifier` in a fresh context before it reaches you. When a thread finishes while you're away,
 the coordinator sends a notification (desktop, or phone with Remote Control).
 
-**The status line.** `kit loop · host · $1.20 · 2 running · 1 overnight · 1 ready · 1 need you`,
+**The status line.** `kit: loop · host · $1.20 · 2 running · 1 overnight · 1 ready · 1 need you`,
 read again every 15 seconds. Mode per project (`/kit-mode`): **Light** (a normal session) or
 **Loop** (every typed message goes to the coordinator; the default in a project with
 `kit.json`). Safety per project (`/kit-safety`): **Host** or **Sandbox**.
