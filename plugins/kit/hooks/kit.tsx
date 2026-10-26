@@ -249,7 +249,7 @@ async function refreshStatus($: $): Promise<void> {
   if (board !== undefined) lastBoard = board
   const running = await runningAgents($)
   const live = await liveOvernightRuns($, root)
-  const parts = [`kit ${mode}`, safety]
+  const parts: string[] = [mode, safety]
   if (costUsd !== null) parts.push(`$${costUsd.toFixed(2)}`)
   if (running) parts.push(`${running} running`)
   if (live) parts.push(`${live} overnight`)
@@ -266,6 +266,12 @@ export const register: Register = on => {
     await $.command.register({ name: 'kit-mode', description: 'Kit mode for this project: light or loop', argumentHint: '[light|loop]' })
     await $.command.register({ name: 'kit-safety', description: 'Kit safety for this project: host or sandbox', argumentHint: '[host|sandbox]' })
     const result = await next(e)
+    // panes outlive a module reload, and the kit has none since 1.2.0: close what an older one left
+    try {
+      for (const pane of await $.ui.panes()) await $.ui.close({ id: pane.id })
+    } catch {
+      // never blocks a session's start
+    }
     try {
       // nothing to draw in a headless run (claude -p, an overnight iteration): no timer there
       if ((await $.session.surfaces()).length === 0) return result

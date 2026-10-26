@@ -153,7 +153,7 @@ test('the status line follows the board on every tick', async ($, on) => {
     return { value: undefined }
   })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  expect(lines.at(-1)).toContain('1 ready · 1 need you')
+  expect(lines.at(-1)).toBe('light · host · $1.50 · 1 ready · 1 need you')
 
   files['/repo/.claude/lead/board.md'] = [
     'NEEDS YOU: none',
@@ -162,4 +162,16 @@ test('the status line follows the board on every tick', async ($, on) => {
   await clock.advance(15000)
   expect(lines.at(-1)).not.toContain('ready')
   expect(lines.at(-1)).not.toContain('need you')
+})
+
+test('a pane an older kit left open is closed on session start', async ($, on) => {
+  world(on)
+  const open = ['kit']
+  on('ui.panes', () => ({ value: open.map(id => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })) }))
+  on('ui.close', (_, e: any) => {
+    open.splice(open.indexOf(e.id), 1)
+    return { value: undefined }
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  expect(open).toEqual([])
 })
