@@ -9,9 +9,11 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
 
   rm-outside       recursive delete (rm -r, find -delete/-exec rm, rmtree in python -c ...) of
                    /, the home folder, the repo root, .git, or anything outside the repo except
-                   its other linked worktrees, the temp folders and the cache folders; a
-                   target known only at run time ($VAR,
-                   $(...), xargs) is asked about
+                   its other linked worktrees, the temp folders and the cache folders; after
+                   `cd <dir> &&` into another work tree, that repository counts as inside too
+                   (its root and .git do not). A variable set once by a plain NAME=value
+                   earlier in the command is judged by its value; a target known only at run
+                   time ($(...), a loop variable, a value set twice, xargs) is asked about
   push-protected   a push to a protected branch (main, master, the remote's default), a force
                    push to one, a mirror push, or deleting one
   discard-work     git reset --hard, checkout/restore of the whole tree, clean, stash drop/clear
@@ -29,7 +31,8 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    guard.attribution = "allow" turns this rule off
 
 Multi-line commands, subshells, braces, if/for/while bodies, $(...) and backticks, sh -c and
-`cd` within one command are followed.
+`cd` within one command are followed; quoted text over several lines (a commit message) and
+here-document bodies are arguments, not commands.
 
 Active when the project has .claude/kit.json (unless its "guard" is "off"), or everywhere when
 ~/.claude/kit.json says "guard": "on". Options, under "guard" in either file:
@@ -86,6 +89,60 @@ def expand(word, cwd, raw=False):
         w = str(home()) + w[1:]
     joined = os.path.join(str(cwd), w)
     return joined if raw else Path(os.path.normpath(joined))
+
+
+def assigned_value(command, name, known):
+    """The value a command gives `name` with its one plain `name=value`, when that value is known
+    now: a literal, ~, or $HOME, $TMPDIR and names already known. None when the name is set more
+    than once or any other way (read, for, local, ${name:=...}), or the value has $(...),
+    backticks, a glob, whitespace, or is empty: those are only known when the command runs."""
+    n = re.escape(name)
+    sets = list(re.finditer(rf"(?<![\w$]){n}\+?=", command))
+    other = rf"\bfor\s+{n}\b|\bselect\s+{n}\b|\$\{{{n}:?[=?]|\(\([^)]*\b{n}\b|\b{n}\[|\bprintf\s+-v\s*{n}\b" \
+            rf"|\b(read|unset|declare|typeset|local|readonly|let|getopts|mapfile|readarray)\b[^\n;&|]*\b{n}\b" \
+            r"|(^|[;&|({\n]|\bthen|\bdo|\belse)\s*(eval|source|\.)\s"  # these can set it unseen
+    if len(sets) != 1 or command[sets[0].end() - 2] == "+" or re.search(other, command):
+        return None
+    c, i, parts = command, sets[0].end(), []
+    while i < len(c) and c[i] not in " \t\n;&|()<>":
+        if c[i] in "'\"":
+            j = c.find(c[i], i + 1)
+            if j == -1 or (c[i] == '"' and re.search(r"[\\`]", c[i + 1:j])):
+                return None
+            parts.append((c[i], c[i + 1:j]))
+            i = j + 1
+        elif c[i] in "\\`":
+            return None
+        else:
+            j = i
+            while j < len(c) and c[j] not in " \t\n;&|()<>'\"\\`":
+                j += 1
+            parts.append(("", c[i:j]))
+            i = j
+    value = ""
+    for k, (quote, text) in enumerate(parts):
+        if quote and k == 0 and text.startswith("~"):
+            return None  # a quoted ~ is a folder named ~, not the home folder
+        if quote == "'":
+            value += text
+            continue
+        if not quote and glob.has_magic(text):
+            return None
+        if not quote and k == 0 and (text == "~" or text.startswith("~/")):
+            text = str(home()) + text[1:]
+        known = dict(known, HOME=str(home()), TMPDIR=tempfile.gettempdir())
+        text = re.sub(r"\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)",
+                      lambda m: known.get(m.group(1) or m.group(2), m.group(0)), text)
+        if "$" in text:
+            return None
+        value += text
+    return value if value and not re.search(r"\s", value) else None
+
+
+def with_vars(word, env):
+    """A word with the variables of `env` put in ($NAME and ${NAME}); an unknown one stays."""
+    return re.sub(r"\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)(?!\w)",
+                  lambda m: env.get(m.group(1) or m.group(2), m.group(0)), word)
 
 
 def tilde(paths):
@@ -182,25 +239,75 @@ def strip_wrappers(argv):
     return argv
 
 
-def segments(command):
-    """Simple commands of a shell text, in order: lines, ; && || | & ( ) and braces split them,
-    keywords and redirections are dropped, $(...), backticks and sh -c bodies are followed."""
-    text = command.replace("\\\n", " ")
-    out = []
-    heredoc = None
-    for line in text.split("\n"):
-        if heredoc is not None:
-            if line.strip() == heredoc:
-                heredoc = None
-            continue  # the body of a here-document is data, not commands
-        if not line.strip():
+def logical_lines(text):
+    """The command lines of a shell text. A newline inside quotes stays in its line (a multi-line
+    commit message is one argument), a comment ends at the newline, and the bodies of
+    here-documents opened outside quotes are dropped: they are data, not commands."""
+    lines, cur, quote, heredocs, i = [], [], None, [], 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\" and quote != "'" and i + 1 < len(text):
+                cur.append(ch + text[i + 1])
+                i += 2
+                continue
+            if ch == quote[-1]:
+                quote = None
+        elif ch == "\\" and i + 1 < len(text):
+            cur.append(ch + text[i + 1])
+            i += 2
             continue
-        m = re.search(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", line)
-        if m:
-            heredoc = m.group(1)
+        elif ch in "'\"":
+            quote = "$'" if ch == "'" and cur and cur[-1] == "$" else ch
+        elif ch == "#" and (not cur or cur[-1] in " \t;&|()"):
+            while i < len(text) and text[i] != "\n":
+                i += 1
+            continue
+        elif text.startswith("<<<", i):  # a here-string: its word is on this line
+            cur.append("<<<")
+            i += 3
+            continue
+        elif text.startswith("<<", i):
+            m = re.match(r"<<-?[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", text[i:])
+            if m:
+                heredocs.append(m.group(2))
+                cur.append(m.group(0))
+                i += len(m.group(0))
+                continue
+        elif ch == "\n":
+            lines.append("".join(cur))
+            cur, i = [], i + 1
+            for word in heredocs:  # skip each body, up to its closing word
+                while i < len(text):
+                    end = text.find("\n", i)
+                    end = len(text) if end == -1 else end
+                    line, i = text[i:end], end + 1
+                    if line.strip() == word:
+                        break
+            heredocs = []
+            continue
+        cur.append(ch)
+        i += 1
+    lines.append("".join(cur))
+    return [line for line in lines if line.strip()]
+
+
+OPENERS, CLOSERS = {"if", "for", "while", "until", "case", "select", "{", "function"}, {"fi", "done", "esac", "}"}
+ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\+?=")
+
+
+def segments(command, inner=False):
+    """Simple commands of a shell text, in order: lines, ; && || | & ( ) and braces split them,
+    keywords and redirections are dropped, $(...), backticks and sh -c bodies are followed.
+    A segment made only of variable assignments (or `export NAME=...`) lists their names under
+    "assigns"; "plain" says it runs in this shell, unconditionally and once (not in a subshell,
+    a pipeline, the background, a loop or an if, nor after && or ||). "nested" marks sh -c bodies,
+    which get only exported variables."""
+    out, depth, lost = [], 0, False
+    for line in logical_lines(command.replace("\\\n", " ")):
         for body in substitutions(line):
-            out.extend(segments(body))
-        cur, pipe_from, skip = [], None, False
+            out.extend(segments(body, inner=True))
+        cur, pipe_from, skip, prev = [], None, False, ";"
         for tok in tokenize(line) + [";"]:
             if skip:
                 skip = False
@@ -209,18 +316,29 @@ def segments(command):
                 skip = True  # the redirection's target is a file, not an argument
                 continue
             if tok and set(tok) <= set(";&|()"):
+                words = cur
+                while words and (words[0] in KEYWORDS or words[0] in OPENERS):
+                    depth += (words[0] in OPENERS) - (words[0] in CLOSERS)
+                    words = words[1:]
+                lost = lost or depth < 0  # a case pattern's `)` or the like: stop trusting the depth
+                plain = not (inner or lost or depth or words != cur or set(prev) & set("&|")
+                             or "|" in tok or "&" in tok.replace("&&", ""))
                 argv = strip_wrappers(cur)
-                if argv:
-                    out.append({"argv": argv, "piped_from": pipe_from})
+                assigns = [ASSIGN.match(w).group(1) for w in words if ASSIGN.match(w)]
+                if words and (len(assigns) == len(words) or (words[0] == "export" and assigns)):
+                    out.append({"argv": argv, "piped_from": None, "assigns": assigns, "plain": plain})
+                elif argv:
+                    out.append({"argv": argv, "piped_from": pipe_from, "plain": plain})
+                depth += tok.count("(") - tok.count(")")
                 pipe_from = argv if tok == "|" else None
-                cur = []
+                prev, cur = tok, []
             else:
                 cur.append(tok)
     nested = []
     for seg in out:
         argv = seg["argv"]
-        if Path(argv[0]).name in SHELLS and "-c" in argv[1:-1]:
-            nested.extend(segments(argv[argv.index("-c") + 1]))
+        if argv and Path(argv[0]).name in SHELLS and "-c" in argv[1:-1]:
+            nested.extend(dict(s, nested=True, plain=False) for s in segments(argv[argv.index("-c") + 1], True))
     return out + nested
 
 
@@ -249,12 +367,12 @@ def resolved(raw):
     link's target); a glob is matched inside the real folder; otherwise rm -rf on a link removes
     only the link."""
     head, name = os.path.split(raw)
-    if not name or name == ".":
+    if name in ("", ".", ".."):
         return Path(os.path.realpath(raw))
     return Path(os.path.realpath(head)) / name
 
 
-def delete_target(word, cwd, root):
+def delete_target(word, cwd, repos):
     if word in (".", "..", ".*", "/*", "~/*", "*") and Path(cwd) in (Path("/"), home()):
         return ("deny", f"delete of '{word}' in {cwd}")
     if word in ("..", ".*") or word.endswith("/.."):
@@ -263,7 +381,7 @@ def delete_target(word, cwd, root):
     if target is UNKNOWN:
         return ("ask", f"delete target '{word}' is only known when the command runs")
     real, hm = resolved(expand(word, cwd, raw=True)), home()
-    roots = {Path(root), Path(os.path.realpath(str(root)))}
+    roots = {p for r in repos for p in (Path(r), Path(os.path.realpath(str(r))))}
     for t in {target, real}:
         if t == Path("/") or t == hm or under(hm, t):
             return ("deny", f"delete of '{word}' ({t})")
@@ -273,7 +391,7 @@ def delete_target(word, cwd, root):
             return ("deny", f"delete of the repository root ('{word}')")
     # what is allowed is decided on the real path, so a symlink cannot lead the delete elsewhere
     if any(under(real, c) for c in tilde(CACHE_PATHS)) or any(under(real, r) for r in roots) \
-            or any(under(real, t) for t in temp_roots()) or in_sibling_worktree(real, root):
+            or any(under(real, t) for t in temp_roots()) or any(in_sibling_worktree(real, r) for r in repos):
         return None
     return ("deny", f"delete outside the repository ('{word}' -> {real})")
 
@@ -289,7 +407,7 @@ def in_sibling_worktree(real, root):
                for tree in linked)
 
 
-def check_rm(argv, cwd, root):
+def check_rm(argv, cwd, repos):
     flags = [a for a in argv[1:] if a.startswith("-")]
     recursive = any(f in ("-r", "-R", "--recursive") or (not f.startswith("--") and ("r" in f or "R" in f))
                     for f in flags)
@@ -299,13 +417,13 @@ def check_rm(argv, cwd, root):
     if not targets:
         return ("ask", "rm-outside", "recursive delete whose targets come from input (xargs or similar)")
     for word in targets:
-        found = delete_target(word, cwd, root)
+        found = delete_target(word, cwd, repos)
         if found:
             return (found[0], "rm-outside", f"recursive {found[1]}")
     return None
 
 
-def check_find(argv, cwd, root):
+def check_find(argv, cwd, repos):
     deletes = "-delete" in argv or any(
         a in ("-exec", "-execdir", "-ok") and i + 1 < len(argv) and Path(argv[i + 1]).name in ("rm", "rmdir", "shred")
         for i, a in enumerate(argv))
@@ -325,7 +443,7 @@ def check_find(argv, cwd, root):
         if a.startswith("-") or a in ("(", "!", ")"):
             break
         paths.append(a)
-    roots = {Path(root), Path(os.path.realpath(str(root)))}
+    roots = {p for r in repos for p in (Path(r), Path(os.path.realpath(str(r))))}
     words = []
     for word in paths or ["."]:  # a glob is judged by what the shell will match
         raw = expand(word, cwd, raw=True)
@@ -339,7 +457,7 @@ def check_find(argv, cwd, root):
             real = resolved(raw)
             if any(real == r or under(real, r) for r in roots) and ".git" not in real.parts:
                 continue  # find deletes what matches below the path, not the path itself
-        found = delete_target(word, cwd, root)
+        found = delete_target(word, cwd, repos)
         if found:
             return (found[0], "rm-outside", f"find deleting: {found[1]}")
     return None
@@ -595,13 +713,29 @@ def check_bash(command, cwd, root, opts):
         return ("deny", "system", "fork bomb")
     if re.search(r">\s*/dev/(sd|disk|nvme|hd)", command):
         return ("deny", "system", "write to a disk device")
-    asked = None
+    asked, env, repos = None, {}, [root]
+    code = "\n".join(logical_lines(command.replace("\\\n", " ")))  # no comments, no here-document bodies
     for seg in segments(command):
-        argv = seg["argv"]
+        for var in seg.get("assigns") or []:
+            value = assigned_value(code, var, env) if seg["plain"] else None
+            if value is not None:
+                env[var] = value
+            elif var in ("HOME", "TMPDIR", "PWD"):
+                env[var] = "${%s:?}" % var  # expand() must not put the session's value in
+            else:
+                env.pop(var, None)
+        argv = seg["argv"] if seg.get("nested") else [with_vars(a, env) for a in seg["argv"]]
+        if not argv:
+            continue
         name = Path(argv[0]).name
         if name == "cd":
             target = expand(argv[1], cwd) if len(argv) > 1 else home()
             cwd = cwd if target is UNKNOWN else target
+            # `cd <dir> &&` into another work tree: its relative deletes are judged against that
+            # repository too (its root and .git stay protected, as this one's do)
+            top = git(cwd, "rev-parse", "--show-toplevel") if seg["plain"] and target is not UNKNOWN else ""
+            top = Path(os.path.normpath(top)) if top else None
+            repos = [root] + ([top] if top and top != root and not under(home(), top) else [])
             continue
         if seg["piped_from"] and (name in SHELLS or name in INTERPRETERS) and \
                 Path(seg["piped_from"][0]).name in DOWNLOADERS:
@@ -610,9 +744,9 @@ def check_bash(command, cwd, root, opts):
         if name in ("git", "gh") and opts.get("attribution") != "allow":
             checks.append(check_attribution(argv, cwd, command))
         if name == "rm":
-            checks.append(check_rm(argv, cwd, root))
+            checks.append(check_rm(argv, cwd, repos))
         elif name == "find":
-            checks.append(check_find(argv, cwd, root))
+            checks.append(check_find(argv, cwd, repos))
         elif name == "git":
             checks.append(check_git(argv, cwd, opts))
         elif name in INTERPRETERS:

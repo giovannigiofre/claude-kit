@@ -115,6 +115,7 @@ MORE = [
     ("find / -exec rm -rf {} +", "block"),
     ("find -x ~ -name '*.log' -delete", "block"),
     ("find . -name '*.pyc' -delete", "allow"),
+    ("find .. -name '*.pyc' -delete", "block"),
     ("python3 -c 'import shutil, os; shutil.rmtree(os.path.expanduser(\"~\"))'", "block"),
     ("python3 -c 'print(1)'", "allow"),
     ("cd .. && rm -rf app", "block"),
@@ -136,6 +137,13 @@ MORE = [
     ("git push --force-with-lease origin feat/x", "allow"),
     ("git push origin HEAD:refs/heads/main", "block"),
     ("cat .env", "allow"),
+    # a variable set once earlier in the same command is judged by its value; set twice, it is not
+    ('S=/tmp/kit-x; rm -rf "$S"/home ${S}', "allow"),
+    ("export S=~ && rm -rf $S", "block"),
+    ("S=/tmp/kit-x; S=~; rm -rf $S", "ask"),
+    # quoted text over several lines is an argument, not commands; sh -c over several lines is
+    ('git commit -m "fix\n\nrm -rf ~ is what the guard stops"', "allow"),
+    ('bash -c "echo hi\nrm -rf ~"', "block"),
 ]
 
 
@@ -222,6 +230,18 @@ def main():
         if got != want:
             failed += 1
             print(f"FAIL sibling worktree {want} expected, got {got}: {command!r} from {cwd.name}")
+
+    # `cd <dir> &&` into another repository: deletes inside it are judged against that repository
+    other = repo.parent / "other"
+    subprocess.run(["git", "init", "-q", str(other)], check=True)
+    for command, want in (("cd ../other && rm -r .claude/evidence && find . -name __pycache__ -exec rm -rf {} +",
+                           "allow"),
+                          ("cd ../other && rm -rf .", "block"), ("cd ../other && rm -rf .git/objects", "block"),
+                          ("cd ../other && rm -rf ../elsewhere", "block")):
+        got = verdict(home, repo, command)
+        if got != want:
+            failed += 1
+            print(f"FAIL other repository {want} expected, got {got}: {command!r}")
 
     # Read/Grep/Glob of credential stores
     for tool, inp in (("Read", {"file_path": str(home / ".ssh" / "id_rsa")}),
