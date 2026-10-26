@@ -9,7 +9,6 @@ function world(on: On, files: Record<string, string> = {}) {
   const written: Record<string, string> = {}
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.surfaces', () => ({ value: ['terminal'] }))
-  on('ui.panes', () => ({ value: [] }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, percent: 12 }, rateLimits: [], cost: { usd: 1.5 } } }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: '/repo\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.read', (_, e: any) => {
@@ -25,7 +24,6 @@ function world(on: On, files: Record<string, string> = {}) {
   on('settings.read', () => ({ value: {} }))
   on('agent.list', () => ({ value: [] }))
   on('command.register', (_, e: any) => ({ value: { command: e.name } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   return { written, clock }
 }
@@ -141,49 +139,7 @@ test('the kit does not overwrite a sandbox the person configured', async ($, on)
   expect(written['/repo/.claude/settings.local.json']).toBeUndefined()
 })
 
-const PANE = {
-  plugin: 'kit',
-  component: 'Pane',
-  requestId: 'kit',
-  props: {
-    title: 'Kit',
-    isFocused: false,
-    bodyColumns: 60,
-    placement: 'dock',
-    scroll: { offset: 0, bodyRows: 30 },
-    view: {},
-  },
-} as const
-
-test('the pane shows mode, safety, spend and what needs the person, on every surface', async ($, on) => {
-  const board = [
-    'SHIP: pr+fix | PARALLEL: 3 | BUDGET: none',
-    'RULES: reuse the thread for follow-ups | propose before starting',
-    'NEEDS YOU: A1: send emails in production or only log in dev?',
-    'A2 | scout | Supabase or SQLite | DONE WHEN report written | done | agent A2 | - | report ready',
-    'A3 | ship | CSV export | DONE WHEN download test passes | review | agent A3 | PR #4 | CI green',
-    'A1 | ship | magic-link login | DONE WHEN e2e login passes | needs-you | agent A1 | feat/login | PR #3',
-  ].join('\n')
-  world(on, { '/repo/.claude/lead/board.md': board })
-  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'kit-panel', args: '' } as any)
-
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ ...PANE, surface })
-    expect(await ui.find({ key: 'mode-light' })).toBeDefined()
-    expect(await ui.find({ key: 'safety-sandbox' })).toBeDefined()
-    expect((await ui.find({ type: 'Text', text: /session \$1\.50/ }))?.text).toContain('context 12%')
-    expect(await ui.find({ type: 'Text', text: /NEEDS YOU/ })).toBeDefined()
-    expect((await ui.find({ type: 'Text', text: /send emails/ }))?.text).toContain('A1')
-    expect(await ui.find({ type: 'Text', text: /magic-link login/ })).toBeDefined()
-    expect((await ui.find({ type: 'Text', text: /CSV export/ }))?.text).toContain('ready')
-    expect(await ui.find({ type: 'Text', text: /reuse the thread/ })).toBeUndefined()
-    await ui.press({ key: 'mode-loop' })
-    await ui.unmount()
-  }
-})
-
-test('the status line follows the board while the pane is closed', async ($, on) => {
+test('the status line follows the board on every tick', async ($, on) => {
   const files: Record<string, string> = {
     '/repo/.claude/lead/board.md': [
       'NEEDS YOU: A1: which region?',

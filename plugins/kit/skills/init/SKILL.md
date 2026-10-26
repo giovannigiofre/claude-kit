@@ -53,7 +53,7 @@ and its CI actually run, not guesses.
 9. **Safety**, in three lines: the kit guard is on with `kit.json` (blocks deletes outside the
    repo, pushes to main, discarding uncommitted work, `sudo`, `curl | sh`, reading credentials;
    best effort, it reads shell text). Then ask which profile the project uses: **Host** (no OS
-   sandbox) or **Sandbox** (`/kit-safety sandbox` or the kit panel).
+   sandbox) or **Sandbox** (`/kit-safety sandbox`).
 10. **Permissions and authorship**: propose (never write silently) allow rules in
     `.claude/settings.json` for the read-only, check and verify commands; suggest the built-in
     `/fewer-permission-prompts`. The user is the only author of commits and PRs: in the same file
