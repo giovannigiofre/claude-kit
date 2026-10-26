@@ -87,7 +87,10 @@ SECRET = re.compile(
     r"|\bA(?:KIA|SIA)[A-Z0-9]{16}\b|\bAIza[A-Za-z0-9_-]{30,}"
     r"|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
     r"|://[^/\s:@]+:[^/\s@]+@"
-    r"|\b(?:password|passwd|secret|token|api[_-]?key|bearer)\s*[:=]\s*\S{6,}",
+    # NAME=value where the value mixes letters and digits, so `first_pass: always` is not one
+    r"|(?<![A-Za-z0-9])(?:\w*(?:password|passwd|secret|token|api[_-]?key)|(?:\w*_)?pass)\s*[:=]\s*"
+    r"(?=\S*[A-Za-z])(?=\S*\d)\S{6,}"
+    r"|\bbearer\s*[:=]\s*\S{6,}|\bbearer\s+(?=\S*\d)\S{8,}",
     re.I,
 )
 OPAQUE = re.compile(r"[A-Za-z0-9+/_=-]{32,}")

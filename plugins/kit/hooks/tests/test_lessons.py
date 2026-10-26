@@ -22,6 +22,7 @@ os.environ["TMPDIR"] = str(TMP / "tmp")
 (TMP / "tmp").mkdir()
 sys.path.insert(0, str(SCRIPTS))
 import distill  # noqa: E402
+import kitlib  # noqa: E402
 import lessons  # noqa: E402
 
 GIT = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
@@ -54,6 +55,10 @@ def test_ledger():
     repo = make_repo("ledger", "git@example.com:acme/ledger.git")
     slug = lessons.repo(repo)["slug"]
     assert lessons.observe(slug, "k1", "pitfall", "token: ghp_" + "a1B2" * 9, "user") is None, "secret refused"
+    for leak in ("PGPASSWORD=hunter2hunter2", "MY_API_KEY=abc123def456ghi", "Authorization: Bearer abcdef123456",
+                 "DB_PASS=Sup3rS3cret!", "client_secret=0a1b2c3d4e5f"):
+        assert kitlib.looks_secret(f"run it with {leak} set"), leak
+    assert not kitlib.looks_secret("first_pass: always run lint, max_token=4096000"), "a setting is not a secret"
     first = lessons.observe(slug, "k1", "pitfall", "Fixed in https://example.com/acme/ledger/commit/"
                             "4a24c23f0e1d2c3b4a5968778695a4b3c2d1e0f9; rerun", "gate")
     assert first and rows(repo)[0]["status"] == "candidate", "a commit SHA is not a secret; new = candidate"
@@ -160,13 +165,32 @@ def test_delivery():
 
 def test_fail_then_pass():
     repo = make_repo("fixed", "https://example.com/acme/fixed.git")
-    fail = "VERDICT: FAIL\nPROBLEMS:\n1. the export button ignores the date filter\nNOT CHECKED: none\n"
-    hook("subagent_stop.py", {"cwd": str(repo), "agent_type": "kit:verifier", "agent_id": "r1",
-                              "last_assistant_message": fail})
-    assert [r["status"] for r in rows(repo)] == ["candidate"]
-    hook("subagent_stop.py", {"cwd": str(repo), "agent_type": "kit:verifier", "agent_id": "r2",
-                              "last_assistant_message": "VERDICT: PASS\nPROBLEMS: none\n"})
-    assert [r["status"] for r in rows(repo)] == ["active"], "a PASS after the FAIL confirms its problems"
+
+    def verifier(agent, branch, verdict, *problems):
+        """A verifier run shaped like the real transcript: the report goes back through SubagentHandback
+        and the final text is small talk."""
+        listed = "".join(f"{i}. {p}\n   - where it shows\n" for i, p in enumerate(problems, 1)) or "none\n"
+        lines = [{"type": "user", "message": {"role": "user", "content":
+                  f"Compared with branch `develop`, verify branch `{branch}` in its worktree."}},
+                 {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "SubagentHandback",
+                  "input": {"message": f"VERDICT: {verdict}\n\nEVIDENCE:\n- gate ok\n\nPROBLEMS:\n{listed}"}}]}},
+                 {"type": "assistant", "message": {"content": [{"type": "text", "text": "Cleanup next."}]}}]
+        path = TMP / f"{agent}.jsonl"
+        path.write_text("".join(json.dumps(r) + "\n" for r in lines))
+        hook("subagent_stop.py", {"cwd": str(repo), "agent_type": "kit:verifier", "agent_id": agent,
+                                  "agent_transcript_path": str(path), "last_assistant_message": "Cleanup next."})
+
+    verifier("x1", "feat/x", "FAIL", "the export button ignores the date filter", "the totals row is off by one")
+    verifier("y1", "feat/y", "FAIL", "the export button ignores the date filter", "the csv header is in German")
+    verifier("z1", "feat/z", "FAIL", "the retry banner never clears")
+
+    def status():
+        return {r["text"].split(": ", 1)[1]: r["status"] for r in rows(repo)}
+    assert list(status().values()) == ["active", "candidate", "candidate", "candidate"], status()
+    verifier("x2", "feat/x", "PASS")
+    assert status() == {"the export button ignores the date filter": "active", "the totals row is off by one": "active",
+                        "the csv header is in German": "candidate", "the retry banner never clears": "candidate"}, \
+        "a PASS confirms only its own branch's FAIL"
 
 
 def test_distill():
@@ -189,16 +213,21 @@ def test_distill():
     lines, _ = distill.distill(repo, model=False)
     by_id = {r["id"]: r for r in rows(repo)}
     assert by_id[b]["status"] == "merged" and by_id[a]["seen"] == 2, "the same lesson told twice is one"
-    assert by_id[old]["status"] == "retired" and by_id[miss]["proposal"]["state"] == "proposed", by_id
+    assert by_id[old]["status"] == "active" and by_id[old]["retire_proposed"], "a stale lesson is only proposed"
+    assert by_id[miss]["proposal"]["state"] == "proposed", by_id
     assert len(lines) == 4 and all("undo" in line or "Not applied" in line for line in lines), lines
     start = hook("session_start.py", {"cwd": str(repo), "source": "startup"}, KIT_HEADLESS="1").stdout
-    assert f"merged {b} into {a}" in start and "proposal for" in start, start
+    assert f"merged {b} into {a}" in start and "proposal to retire" in start, start
     again = hook("session_start.py", {"cwd": str(repo), "source": "startup"}, KIT_HEADLESS="1").stdout
     assert f"merged {b} into" not in again, "news is told once"
     assert lessons.observe(slug, "b", "recipe", "again", "verifier-fail") == a, "a merged key counts on the kept one"
-    assert lessons.main(["undo", old, str(repo)]) == 0
+    for lesson_id in (old, miss):  # keep: undoing a proposal is not redone
+        assert lessons.main(["undo", lesson_id, str(repo)]) == 0
+    assert lessons.main(["retire", older, str(repo)]) == 0  # accept
+    distill.distill(repo, model=False)
     by_id = {r["id"]: r for r in rows(repo)}
-    assert by_id[old]["status"] == "active" and by_id[older]["status"] == "retired", "one line, one undo"
+    assert not by_id[old].get("retire_proposed") and not by_id[miss].get("proposal"), by_id
+    assert by_id[old]["status"] != "retired" and by_id[older]["status"] == "retired", "one line, one answer"
 
 
 def test_model_pass():
@@ -266,7 +295,7 @@ def test_promotion():
     cand = next(r for r in lessons.read_rows(lessons.file_of(lessons.MACHINE)) if r.get("key") == "kit-worktree-bash")
     assert lessons.observe(slugs[0], "kit-worktree-bash", "preference", "seen again", "verifier-fail") == cand["id"], \
         "a promoted repo lesson is counted on its machine lesson"
-    os.environ["CLAUDE_CODE_ENTRYPOINT"] = "sdk-cli"
+    os.environ["CLAUDE_CODE_ENTRYPOINT"] = "claude-code-github-action"  # not sdk-*, still headless
     assert promote.brief(cand["id"], lessons.repo(repos[0]))[0] is None, "no promotion from a headless run"
     os.environ["CLAUDE_CODE_ENTRYPOINT"] = "cli"
     text = promote.brief(cand["id"], lessons.repo(repos[0]))[0]
@@ -279,6 +308,15 @@ def test_promotion():
     distill.distill(repos[0], model=False)
     cand = next(r for r in lessons.read_rows(lessons.file_of(lessons.MACHINE)) if r["id"] == cand["id"])
     assert cand["status"] == "retired" and "fixed in kit" in cand["retired"]["why"], "a shipped fix retires it"
+
+    for i in range(3):
+        teach(i, "kit-hook-cwd", "the subagent hook sees the parent checkout as its cwd")
+    distill.distill(repos[0], model=False)
+    again = next(r for r in lessons.read_rows(lessons.file_of(lessons.MACHINE)) if r.get("key") == "kit-hook-cwd")
+    assert again.get("promote") and lessons.main(["undo", again["id"], str(repos[0])]) == 0
+    distill.distill(repos[0], model=False)
+    again = next(r for r in lessons.read_rows(lessons.file_of(lessons.MACHINE)) if r.get("key") == "kit-hook-cwd")
+    assert not again.get("promote"), "an undone kit candidate is not marked again"
 
     found = promote.scrub(f"+ see {repos[1]}/README\n+ for acme/p1 set API_BASE_URL\n+ a generic guard step")
     assert len(found) >= 2 and not any("line 3" in f for f in found), found

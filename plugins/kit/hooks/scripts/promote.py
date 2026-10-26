@@ -10,7 +10,7 @@
   claude-kit branch and PR are prepared only by `/kit:learn promote <id>`, run by the user in a
   session (`brief` refuses in a headless run), and the PR is never merged by Claude.
 - **Version-bound.** A lesson whose fix shipped (`fixed_in`, set by `lessons.py promoted`) retires
-  once its PR is merged and the installed kit is at that version (distill.stale_why).
+  once its PR is merged and the installed kit is at that version (distill.retire_why).
 
 `scrub` checks text bound for the kit (a diff) against what the ledgers know about this machine:
 repo names, orgs, slugs and checkout paths, the home folder, env var names lessons mention, and
@@ -172,7 +172,9 @@ def mark_candidates():
         machine = slug == lessons.MACHINE
 
         def pick(r):
-            return r.get("status") == "active" and not r.get("promote") and why_candidate(r, machine)
+            return r.get("status") == "active" and not r.get("promote") and not r.get("kept") \
+                and not r.get("retire_proposed") \
+                and why_candidate(r, machine)
 
         def act(r):
             why = why_candidate(r, machine)

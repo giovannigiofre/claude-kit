@@ -157,8 +157,12 @@ A repo is its normalized git origin, so every checkout and worktree of it shares
 slug is the auto mode one). Only kit code writes there; nothing in a repo can plant a lesson.
 
 **Capture** is deterministic and costs no tokens: a failed fast `check` (Stop), a guard denial,
-and a kit:verifier FAIL (SubagentStop: each problem headline becomes a candidate). Verifier
-verdicts and revert commits are counted as events, for stats and the distiller. The same key seen again is counted, not added; a repeat after the lesson was delivered
+and a kit:verifier FAIL (SubagentStop: each problem headline becomes a candidate). The verdict
+is read from the verifier's report: its final message, else the SubagentHandback report in its
+transcript. Verifier verdicts and revert commits are counted as events, for stats and the
+distiller; a verdict is tied to the branch its brief names (else its report, else a PR number),
+and a PASS confirms only the last
+FAIL on the same branch (with no branch named, it confirms nothing). The same key seen again is counted, not added; a repeat after the lesson was delivered
 counts as a miss. A new automatic lesson starts as a candidate and turns active on its second
 sighting, at most 3 a day per repo. Text that looks like a key or token is refused.
 
@@ -174,11 +178,13 @@ verifier minus its own memory, which it already reads), the main session gets ga
 lessons after the gate lines. Most repeated and newest first; about 600 tokens for a thread,
 400 for the session. With an empty ledger the thread gets the memory index lines directly.
 
-**Distiller** (`distill.py`): runs after a kit:verifier PASS that follows a FAIL (the FAIL's
+**Distiller** (`distill.py`): runs after a kit:verifier PASS that follows a FAIL on the same branch (the FAIL's
 problems become active lessons), at SessionEnd once 5 new events are pending (in the background),
-and on `/kit:learn`. Without tokens it merges lessons that say the same thing, retires automatic
-pitfall and gate lessons not seen for 60 days, candidates seen once in 30 and any lesson marked
-wrong twice (`harmful`), and writes a hardening proposal
+and on `/kit:learn`. Without tokens it merges lessons that say the same thing, retires a lesson
+marked wrong twice (`harmful`), and proposes retiring stale ones: automatic pitfall and gate
+lessons not seen for 60 days, candidates seen once in 30. A proposal changes nothing; accept it
+with `/kit:learn retire <id>`, or keep the lesson with `/kit:learn undo <id>` (it is not asked
+again). Unanswered, it is asked again after 30 days; a new sighting withdraws it. It also writes a hardening proposal
 for a lesson that came back twice after threads were told (a check, a test or a CLAUDE.md line;
 announced, never applied). Every change is one line at the next session start, with
 `undo: /kit:learn undo <id>`.
@@ -187,8 +193,8 @@ It may also make one model call to reword and merge lessons: `claude -p --model 
 tools, hooks or plugins, from an empty folder, capped at $0.05 (`--max-budget-usd`) and run at
 most once a day per repo. A typical call costs about $0.001. The model can only edit, merge
 or retire existing lessons, and its text passes the same secret filter. It never runs in a
-headless session: overnight (`KIT_HEADLESS`) or `claude -p` and the SDK (`CLAUDE_CODE_ENTRYPOINT`
-`sdk-*`); turn it off with `KIT_LEARN_MODEL=0` or `"learn": {"model": false}` in kit.json.
+headless session: overnight (`KIT_HEADLESS`), or any `CLAUDE_CODE_ENTRYPOINT` other than an
+interactive one (`cli`, `claude-vscode`, `claude-desktop`), so `claude -p` and the SDK; turn it off with `KIT_LEARN_MODEL=0` or `"learn": {"model": false}` in kit.json.
 
 **Promotion** (`promote.py`, run by the distiller): a lesson active in 2 repos becomes one machine
 lesson (`M` ids) that every repo gets; the repo copies turn `promoted`, and undoing the machine

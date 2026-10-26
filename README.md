@@ -76,7 +76,8 @@ read again every 15 seconds. Mode per project (`/kit-mode`): **Light** (a normal
                          denials are captured too (no tokens), all into
                          ~/.claude/kit-lessons/, outside every repo (see docs/reference.md)
    SessionEnd            runs the distiller in the background once 5 new events are pending
-                         (merge, retire, hardening proposals; each told once, with undo)
+                         (merge, retire shipped fixes, propose retiring stale lessons and
+                         hardening; each told once, with undo)
 ```
 
 ## What's in it
@@ -92,7 +93,7 @@ read again every 15 seconds. Mode per project (`/kit-mode`): **Light** (a normal
 | `kit:extras` | Offers `kit-ui` or `kit-llm` when a task needs one the project lacks |
 | `/kit:go` | Intent → sync → test like a user → `/code-review` → `/simplify` → risk → PR → CI green |
 | `/kit:init` | Sets up a project (kit.json, e2e skill, safety, permissions) |
-| `/kit:learn` | Tidies the lesson ledger (merge, retire, hardening proposals, undo); `promote` turns a lesson seen across repos into a kit PR; corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
+| `/kit:learn` | Tidies the lesson ledger (merge, retire shipped fixes, proposals to retire or harden, undo); `promote` turns a lesson seen across repos into a kit PR; corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
 | `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
 | `kit:implementer` | A thread: one item from brief to PR in its own worktree, effort medium |
 | `kit:verifier` | A fresh-context review against the intent, with a per-project memory of pitfalls |
@@ -158,7 +159,8 @@ project.
 ## Safety
 
 - **Host** (your own machine): no OS sandbox. The guard still blocks recursive deletes outside
-  the repo, pushes or force pushes to main, `git reset --hard` or `clean` over uncommitted work,
+  the repo (a sibling linked worktree of the same repository counts as inside, outside its
+  `.git`; the main checkout does not; a path is judged by where its symlinks really lead), pushes or force pushes to main, `git reset --hard` or `clean` over uncommitted work,
   `sudo`, `curl … | sh`, and reading `~/.ssh`, `~/.aws`, gh, docker or kube config and the
   keychain. It also keeps you the only author: it blocks a commit, PR, issue or comment that
   credits an AI (`Co-Authored-By: Claude`, "Generated with Claude Code", a session link), through

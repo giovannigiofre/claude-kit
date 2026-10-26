@@ -2,7 +2,7 @@
 name: learn
 description: Tidies the kit's lesson ledger for this repo (merge, retire, propose hardening), shows or undoes what it learned, and turns a correction or a repeated mistake into a durable fix - a check, a hook entry, a project skill or a CLAUDE.md line. Use after the user corrects Claude, when the verifier caught the same defect twice, or with "undo", "news", "list" or "sweep".
 disable-model-invocation: true
-argument-hint: "[empty = distill + this session's corrections | undo <id> | news | list | stats | promote [id] | sweep [N] | the lesson to make stick]"
+argument-hint: "[empty = distill + this session's corrections | undo <id> | retire <id> | news | list | stats | promote [id] | sweep [N] | the lesson to make stick]"
 ---
 
 # /learn: the kit's lessons, kept small and true
@@ -18,11 +18,14 @@ expanded, the script is in the kit plugin's `hooks/scripts/`).
 ## Commands
 
 - **empty**: run `$L distill .` and relay its lines as they are (each says what changed and how
-  to undo it). It merges duplicates, retires stale lessons and writes hardening proposals; with
+  to undo it). It merges duplicates, retires lessons whose fix shipped, proposes retiring stale
+  ones and writes hardening proposals; with
   a model allowed it also rewords lessons (one haiku call, at most $0.05, once a day per repo).
   `--no-model` skips the model. Then take this session's corrections and repeated failures, if
   any, through the section below.
-- **undo <id>**: `$L undo <id> .`, then say what came back.
+- **undo <id>**: `$L undo <id> .`, then say what came back. On a proposal (to retire, or to
+  harden) this keeps the lesson as it is, and the distiller does not ask again.
+- **retire <id>**: `$L retire <id> .`, for example to accept a proposal to retire a stale lesson.
 - **promote [id]**: follow `promote.md` in this folder. Without an id, list the kit candidates.
 - **news**, **list**, **stats**: `$L news .`, `$L list --all .`, `$L stats .`; show the output,
   shortened to what the user asked about.

@@ -9,9 +9,11 @@ session start passes on ("... · undo: /kit:learn undo L7"); a lesson brought ba
 Deterministic, no tokens:
   - merge   two lessons of the same kind whose words mostly agree (the most seen, else the
             older, keeps its id);
-  - retire  automatic pitfalls and gate lessons not seen for STALE_DAYS, candidates seen once and
-            not again within CANDIDATE_DAYS, lessons marked wrong twice (`harmful`), and lessons
-            whose fix shipped in the installed kit (`fixed_in`);
+  - retire  a lesson whose fix shipped in the installed kit (`fixed_in`, its PR merged) or that
+            was marked wrong twice (`harmful`). Stale ones are only proposed for retiring, with a
+            one-command accept or keep, and asked again after STALE_ASK_DAYS when unanswered:
+            automatic pitfalls and gate lessons not seen for STALE_DAYS, candidates seen once and
+            not again within CANDIDATE_DAYS;
   - harden  a lesson that came back MISSES_TO_HARDEN times after threads were told gets a
             proposal for a mechanical home (a check, a test, a CLAUDE.md line). It is written to
             the ledger and announced; nothing is applied;
@@ -40,6 +42,7 @@ import lessons  # noqa: E402
 
 STALE_DAYS = 60
 CANDIDATE_DAYS = 30
+STALE_ASK_DAYS = 30
 SIMILAR = 0.6
 MISSES_TO_HARDEN = 2
 EVENTS_TO_RUN = 5
@@ -122,18 +125,33 @@ def version(text):
     return tuple(int(x) for x in re.findall(r"\d+", str(text or ""))[:3])
 
 
-def stale_why(r):
-    """Why an automatic retire applies to `r`, or None (never for one the user brought back)."""
-    if r.get("kept"):
+def settled(r):
+    """Not for the distiller to retire: brought back by the user, or no longer live."""
+    return r.get("kept") or r.get("status") not in ("active", "candidate")
+
+
+def retire_why(r):
+    """Why `r` retires on its own: its fix shipped (PR merged, installed kit at that version), or
+    the user marked it wrong twice (`harmful`)."""
+    if settled(r):
         return None
-    if r.get("status") in ("active", "candidate") and version(r.get("fixed_in")) and lessons.kit_version() \
+    if version(r.get("fixed_in")) and lessons.kit_version() \
             and version(lessons.kit_version()) >= version(r["fixed_in"]):
         import promote
         if promote.merged((r.get("promote") or {}).get("pr")):  # the fix shipped, not just a number
             return f"fixed in kit {r['fixed_in']}"
-    idle = lessons.days_between(r.get("last") or r.get("created"), lessons.today())
-    if r.get("status") in ("active", "candidate") and int(r.get("harmful", 0)) >= 2:
+    if int(r.get("harmful", 0)) >= 2:
         return f"marked wrong {r['harmful']} times"
+    return None
+
+
+def stale_why(r):
+    """Why retiring `r` is worth proposing, or None. An unanswered proposal is asked again after
+    STALE_ASK_DAYS, so it is never silently forgotten."""
+    asked = (r.get("retire_proposed") or {}).get("date")
+    if settled(r) or (asked and lessons.days_between(asked, lessons.today()) < STALE_ASK_DAYS):
+        return None
+    idle = lessons.days_between(r.get("last") or r.get("created"), lessons.today())
     if r.get("status") == "active" and r.get("origin_src") not in ("import", "user") \
             and r.get("kind") in ("pitfall", "gate") and idle >= STALE_DAYS:
         return f"not seen for {idle} days"
@@ -158,11 +176,19 @@ def each(slug, pick, act):
 
 
 def retire_pass(slug):
-    def act(r):
-        why = stale_why(r)
+    """A shipped fix or a lesson marked wrong twice retires (announced, with undo); a stale one is
+    only proposed."""
+    def retire(r):
+        why = retire_why(r)
         r["status"], r["retired"] = "retired", {"date": lessons.today(), "why": why}
         return f"retired {r['id']} ({why}): {lessons.brief(r['text'])} · {UNDO.format(r['id'])}"
-    return each(slug, stale_why, act)
+
+    def propose(r):
+        why = stale_why(r)
+        r["retire_proposed"] = {"date": lessons.today(), "why": why}
+        return (f"proposal to retire {r['id']} ({why}): {lessons.brief(r['text'])}. Still in use; "
+                f"accept: /kit:learn retire {r['id']} · keep it: /kit:learn undo {r['id']}")
+    return each(slug, retire_why, retire) + each(slug, stale_why, propose)
 
 
 def home_for(record):
@@ -177,7 +203,7 @@ def harden_pass(slug):
         return (f"proposal for {r['id']}: it came back {r['misses']} times after threads were told "
                 f"({lessons.brief(r['text'])}); make it {r['proposal']['home']}. Not applied; say if you "
                 f"want it · {UNDO.format(r['id'])}")
-    return each(slug, lambda r: r.get("status") == "active" and not r.get("proposal")
+    return each(slug, lambda r: r.get("status") == "active" and not r.get("proposal") and not r.get("kept")
                 and int(r.get("misses", 0)) >= MISSES_TO_HARDEN, act)
 
 
@@ -192,10 +218,12 @@ def confirm(slug, keys):
     return each(slug, lambda r: r.get("key") in keys and r.get("status") == "candidate", act)
 
 
-def fixed_fail_keys(slug, agent):
-    """Keys of the problems of the last FAIL before this PASS (by `agent`), within 3 days."""
+def fixed_fail_keys(slug, agent, scope):
+    """Keys of the problems of the last FAIL on branch `scope` before this PASS (by `agent`),
+    within 3 days. Verdicts on other branches never count."""
     events = lessons.read_rows(lessons.file_of(slug, ".events"))
-    verdicts = [e for e in events if str(e.get("src", "")).startswith("verdict-") and e.get("once") != agent]
+    verdicts = [e for e in events if str(e.get("src", "")).startswith("verdict-") and e.get("once") != agent
+                and scope and e.get("scope") == scope]
     if not verdicts or verdicts[-1].get("src") != "verdict-fail" \
             or lessons.days_between(verdicts[-1].get("date"), lessons.today()) > 3:
         return set()
