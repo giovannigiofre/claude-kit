@@ -1,144 +1,262 @@
 #!/usr/bin/env python3
-"""Per-repo auto mode environment, kept in sync with ~/.claude/settings.json.
+"""Per-repo auto mode environment lines, kept in user settings.
 
 Auto mode reads `autoMode` from user settings only, so a repo cannot describe its own environment
-(organization, cloud, trusted domains, secret files, protected branches). Each repo keeps its
-lines in `.claude/auto-mode.local.json`, never committed:
+(organization, cloud, trusted domains, secret files, protected branches). The user approves each
+repo's lines once and this script stores them under the Claude config dir (CLAUDE_CONFIG_DIR, else
+~/.claude), one block per repo:
 
-  {"environment": ["**Organization**: colpal", "**Cloud provider(s)**: GCP project x-dev"]}
+  kit-auto-mode/<slug>.json   {"repo": {"origin", "name", "paths"}, "environment": ["**Label**: text"]}
 
-On every SessionStart in a kit project this script:
-  - reads that file only when git does not track it: a cloned repo must never make itself trusted;
-  - records the lines in ~/.claude/kit-auto-mode.json (main checkout -> name, origin, lines) and
-    drops repos whose file is gone;
-  - rebuilds `autoMode.environment` in ~/.claude/settings.json: the user's own lines stay as they
-    are, the kit's lines (ending in MARKER) are replaced, each one scoped to its repo by name,
-    origin and path. A new list starts with "$defaults" so the built-in entries stay current.
+Nothing inside a repository is ever read for these lines: only the user's explicit command adds
+them, so a cloned repo cannot make itself trusted. A repo is its normalized origin URL (ssh and
+https forms are the same repo, any checkout or worktree matches), or its path when it has none.
 
-It writes only when something changed (backup first, other keys kept), never rewrites a settings
-file that is not valid JSON, and runs no `claude` command. Standard library only.
+Every run rebuilds `autoMode.environment` in settings.json: the user's own lines stay as they are,
+the kit's lines (ending in MARKER) are replaced, each scoped to its repo by origin and paths. A new
+list starts with "$defaults" so the built-in entries stay current; a non-list is left alone.
+Writes happen under a lock, atomically, only when something changed, after a backup
+(settings.json.kit-auto-mode-backup; the first one ever is also kept as .orig). Standard library only.
 
-  python3 auto_mode_sync.py [DIR]     sync for the repo containing DIR (default: cwd)
+  python3 auto_mode_sync.py                     rebuild settings from the blocks (SessionStart)
+  python3 auto_mode_sync.py --set FILE|- [DIR]  store the approved lines for the repo at DIR (default cwd)
+  python3 auto_mode_sync.py --show [DIR]        print the stored lines for that repo
+  python3 auto_mode_sync.py --remove [DIR]      forget that repo's lines
 """
 
+import contextlib
+import fcntl
+import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import kitlib  # noqa: E402
-from machine_setup import read_json, settings_path  # noqa: E402
+from machine_setup import read_json  # noqa: E402
 
-REPO_FILE = ".claude/auto-mode.local.json"
-MARKER = "[kit: .claude/auto-mode.local.json]"
-LABELLED = re.compile(r"^\*\*(.+?)\*\*:\s*(.*)$", re.S)
-
-
-def registry_path():
-    return Path.home() / ".claude" / "kit-auto-mode.json"
+MARKER = "[kit auto-mode]"
+MAX_LINES = 20       # per repo
+MAX_TEXT = 400       # characters of one line as the user approved it
+MAX_LINE = 1000      # characters of one line in settings, scope included
+MAX_PATHS = 3
+BACKUP = "settings.json.kit-auto-mode-backup"
 
 
-def git(root, *args):
+def config_dir():
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
+def blocks_dir():
+    return config_dir() / "kit-auto-mode"
+
+
+@contextlib.contextmanager
+def locked():
+    config_dir().mkdir(parents=True, exist_ok=True)
+    with open(config_dir() / "kit-auto-mode.lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        yield
+
+
+def write_atomic(path, text):
+    """Replace the file's target (a symlinked settings.json stays a symlink) in one step."""
+    path = path.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
     try:
-        out = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=10)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        if path.exists():
+            shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def dumps(value):
+    return json.dumps(value, indent=2, ensure_ascii=False) + "\n"
+
+
+def git(start, *args):
+    try:
+        out = subprocess.run(["git", "-C", str(start), *args], capture_output=True, text=True, timeout=5)
     except Exception:
         return None
     return out.stdout.strip() if out.returncode == 0 else None
 
 
-def main_checkout(start):
-    """The repo's main working tree, so a worktree shares its checkout's entry."""
+def normalize_origin(url):
+    """git@host:o/r.git, ssh://git@host/o/r, https://user:tok@host/o/r.git -> host/o/r (lowercase)."""
+    url = (url or "").strip()
+    m = re.match(r"^[\w.+-]+://(?:[^@/]*@)?([^/:]+)(?::\d+)?/(.+)$", url) or \
+        re.match(r"^(?:[^@/]+@)?([^/:]+):(?!/)(.+)$", url)
+    if not m:
+        return url.rstrip("/").lower()
+    path = re.sub(r"\.git$", "", m.group(2).strip("/"))
+    return f"{m.group(1)}/{path}".lower()
+
+
+def identify(start):
+    """(key, origin, name, main checkout) for the repo at `start`, or None outside a git checkout."""
     common = git(start, "rev-parse", "--path-format=absolute", "--git-common-dir")
-    if common and Path(common).name == ".git":
-        return Path(common).parent
-    return kitlib.git_root(start)
+    top = git(start, "rev-parse", "--show-toplevel")
+    if not common or not top:
+        return None
+    main = Path(common).parent if Path(common).name == ".git" else Path(top)
+    origin = normalize_origin(git(top, "remote", "get-url", "origin"))
+    name = origin.rsplit("/", 1)[-1] if origin else main.name
+    return origin or str(main), origin, name, str(main)
 
 
-def scoped(line, name, path, origin):
-    """One repo line, rewritten so the classifier reads it as applying in that repo only."""
-    line = " ".join(line.split())
-    m = LABELLED.match(line)
+def block_path(key):
+    slug = re.sub(r"[^a-z0-9]+", "-", key.lower()).strip("-")[-60:]
+    return blocks_dir() / f"{slug}-{hashlib.sha1(key.encode()).hexdigest()[:8]}.json"
+
+
+def clean(line):
+    """(label, text) of one approved line: a single line, no bold markup."""
+    line = " ".join(str(line).split())
+    m = re.match(r"^\*\*(.+?)\*\*:\s*(.*)$", line)
     label, text = (m.group(1), m.group(2)) if m else ("Repo note", line)
-    where = f"In the repository {name} (checkout {path} and its worktrees"
-    where += f", origin {origin})" if origin else ")"
-    return f"**{label} ({name} only)**: {where}, and nowhere else: {text} {MARKER}"
+    label = label.replace("*", "").strip()[:60] or "Repo note"
+    return label, text.replace("**", "").strip()
 
 
-def repo_lines(top):
-    """(lines, warning): lines to record, [] to forget this repo (tracked file), None to leave it as is."""
-    path = top / REPO_FILE
-    if not path.is_file():
-        return None, None
-    if git(top, "ls-files", "--error-unmatch", REPO_FILE) is not None:
-        return [], f"kit: {REPO_FILE} is committed in this repo, so auto mode ignores it (a cloned repo cannot make itself trusted); untrack it to use it."
-    data, ok = read_json(path)
-    env = data.get("environment") if ok else None
-    if not isinstance(env, list) or not all(isinstance(x, str) for x in env):
-        return None, f"kit: {path} needs {{\"environment\": [\"**Label**: text\", ...]}}; auto mode lines not synced."
-    return [x for x in env if x.strip()], None
+def scoped(line, repo):
+    """One repo line as the classifier reads it: scoped to that repo, tagged as the kit's."""
+    label, text = clean(line)
+    origin, paths = repo.get("origin") or "", [str(p) for p in repo.get("paths", [])][:MAX_PATHS]
+    if origin:
+        where = f"In the repository whose git origin is {origin}, in any checkout or worktree of it"
+        where += f" (known checkouts: {', '.join(paths)})" if paths else ""
+    else:
+        where = f"In the repository checked out at {', '.join(paths) or '?'} and its worktrees"
+    name = re.sub(r"[^\w.-]", "", str(repo.get("name") or "repo"))[:60]
+    head = f"**{label} ({name} repo only)**: {where}, and nowhere else: "
+    room = MAX_LINE - len(head) - len(MARKER) - 1
+    text = text if len(text) <= room else text[:room - 1] + "…"
+    return f"{head}{text} {MARKER}"
 
 
-def sync(start):
-    """Bring the registry and settings up to date. Returns the lines worth showing (none when nothing changed)."""
-    top = kitlib.git_root(start)
-    main = main_checkout(start)
-    out = []
-    registry, ok = read_json(registry_path())
-    if not ok:
-        return [f"kit: {registry_path()} is not a valid JSON object; auto mode lines not synced."]
-    repos = registry.get("repos") if isinstance(registry.get("repos"), dict) else {}
-    before = json.dumps(repos, sort_keys=True)
+def load_blocks():
+    """(blocks sorted by file name, warnings)."""
+    blocks, warnings = [], []
+    for path in sorted(blocks_dir().glob("*.json")):
+        data, ok = read_json(path)
+        env = data.get("environment") if ok else None
+        repo = data.get("repo") if ok else None
+        if not isinstance(env, list) or not isinstance(repo, dict):
+            warnings.append(f"kit: {path} is not a valid auto mode block; skipped.")
+            continue
+        blocks.append({"repo": repo, "environment": [x for x in env if isinstance(x, str)][:MAX_LINES]})
+    return blocks, warnings
 
-    if top and main:
-        lines, warning = repo_lines(top)
-        if warning:
-            out.append(warning)
-        if lines:
-            repos[str(main)] = {"name": main.name, "lines": lines,
-                                "origin": git(top, "remote", "get-url", "origin") or ""}
-        elif lines == []:
-            repos.pop(str(main), None)
-    for key in [k for k in repos if not (Path(k) / REPO_FILE).is_file()]:
-        del repos[key]
 
-    path = settings_path()
+def rebuild():
+    """Bring settings.json in line with the blocks. Call under the lock. Returns lines to show."""
+    blocks, out = load_blocks()
+    kit_lines = [scoped(line, b["repo"]) for b in blocks for line in b["environment"]]
+    path = config_dir() / "settings.json"
     settings, ok = read_json(path)
     if not ok:
-        return out + [f"kit: {path} is not a valid JSON object; auto mode lines not synced."]
+        return out + ([f"kit: {path} is not a valid JSON object; auto mode lines not synced."] if kit_lines else [])
     auto = settings.get("autoMode", {})
-    if not isinstance(auto, dict):
-        return out + [f"kit: autoMode in {path} is not an object; auto mode lines not synced."]
-    current = auto.get("environment")
-    kit_lines = [scoped(line, entry.get("name", Path(key).name), key, entry.get("origin"))
-                 for key, entry in sorted(repos.items()) for line in entry.get("lines", [])]
+    current = auto.get("environment") if isinstance(auto, dict) else None
+    if not isinstance(auto, dict) or not (current is None or isinstance(current, list)):
+        return out + ([f"kit: autoMode.environment in {path} is not a list; left as is, auto mode "
+                       "lines not synced."] if kit_lines else [])
     if isinstance(current, list):
         env = [x for x in current if not (isinstance(x, str) and x.endswith(MARKER))] + kit_lines
     else:
         env = ["$defaults"] + kit_lines if kit_lines else None
-
-    if json.dumps(repos, sort_keys=True) != before:
-        registry["repos"] = repos
-        registry_path().parent.mkdir(parents=True, exist_ok=True)
-        registry_path().write_text(json.dumps(registry, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     if env is None or env == current:
         return out
     if path.exists():
-        shutil.copy2(path, path.with_name("settings.json.kit-backup"))
+        shutil.copy2(path, path.with_name(BACKUP))
+        if not path.with_name(BACKUP + ".orig").exists():  # settings as they were before the kit's first write
+            shutil.copy2(path, path.with_name(BACKUP + ".orig"))
     auto["environment"] = env
     settings["autoMode"] = auto
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    out.append(f"kit: auto mode environment in {path} synced from {len(repos)} repo(s)' {REPO_FILE} "
-               f"({len(kit_lines)} line(s); backup settings.json.kit-backup).")
+    write_atomic(path, dumps(settings))
+    out.append(f"kit: auto mode environment in {path} rebuilt: {len(kit_lines)} repo-scoped line(s) "
+               f"from {len(blocks)} repo(s) (backup {BACKUP}).")
     return out
 
 
+def sync():
+    """The SessionStart entry: rebuild under the lock; reads no repository content."""
+    if not any(blocks_dir().glob("*.json")):
+        return []  # nothing approved on this machine: no lock, no write, nothing to say
+    with locked():
+        return rebuild()
+
+
+def read_lines(source):
+    text = sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")
+    data = json.loads(text)
+    env = data.get("environment") if isinstance(data, dict) else data
+    if not isinstance(env, list) or not all(isinstance(x, str) for x in env):
+        raise ValueError('expected {"environment": ["**Label**: text", ...]}')
+    env = [" ".join(x.split()) for x in env if x.strip()]
+    if len(env) > MAX_LINES or any(len(x) > MAX_TEXT for x in env):
+        raise ValueError(f"at most {MAX_LINES} lines of at most {MAX_TEXT} characters each")
+    return env
+
+
+def show(lines):
+    if lines:
+        print("\n".join(lines))
+
+
 def main(argv):
-    for line in sync(Path(argv[0]) if argv else Path.cwd()):
-        print(line)
+    cmd = argv[0] if argv and argv[0].startswith("-") else None
+    if cmd not in (None, "--set", "--show", "--remove"):
+        print(__doc__)
+        return 2
+    if cmd is None:
+        show(sync())
+        return 0
+    rest = argv[1:]
+    source = rest.pop(0) if cmd == "--set" and rest else None
+    if cmd == "--set" and source is None:
+        print("kit: --set needs a file, or - for stdin.")
+        return 2
+    repo = identify(rest[0] if rest else Path.cwd())
+    if not repo:
+        print("kit: not inside a git checkout (or git failed); nothing changed.")
+        return 1
+    key, origin, name, main_path = repo
+    bpath = block_path(key)
+    if cmd == "--show":
+        data, ok = read_json(bpath)
+        print(dumps(data) if ok and data else f"No auto mode lines stored for {key}.")
+        return 0
+    if cmd == "--set":
+        try:
+            env = read_lines(source)
+        except (OSError, ValueError) as exc:
+            print(f"kit: {exc}; nothing changed.")
+            return 1
+    with locked():
+        if cmd == "--remove":
+            with contextlib.suppress(FileNotFoundError):
+                bpath.unlink()
+        else:
+            old, ok = read_json(bpath)
+            old_paths = ((old or {}).get("repo") or {}).get("paths", []) if ok else []
+            paths = [main_path] + [p for p in old_paths if isinstance(p, str) and p != main_path]
+            write_atomic(bpath, dumps({"repo": {"origin": origin, "name": name, "paths": paths[:MAX_PATHS]},
+                                       "environment": env}))
+        out = rebuild()
+    print(f"kit: {'removed' if cmd == '--remove' else 'stored'} auto mode lines for {key} ({bpath}).")
+    show(out)
     return 0
 
 

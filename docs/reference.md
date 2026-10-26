@@ -81,33 +81,49 @@ you declined, so reviews don't raise them again). Gitignored: `.claude/evidence/
 
 ### Auto mode environment, per repo
 
-Auto mode reads `autoMode` (allow, soft_deny, environment) from `~/.claude/settings.json` only; an
-`autoMode` block in a project's settings is ignored. So each repo keeps the environment lines that
-describe it (organization, cloud, trusted domains, secret files, protected branches) in
-`.claude/auto-mode.local.json`, never committed (`/kit:init` drafts it and adds it to
-`.git/info/exclude`):
+Auto mode reads `autoMode` (allow, soft_deny, environment) from user settings only; an `autoMode`
+block in a project's settings is ignored. So the environment lines that describe one repo
+(organization, cloud, trusted domains, secret files, protected branches) are stored in your
+Claude config dir (`$CLAUDE_CONFIG_DIR`, else `~/.claude`), one block per repo, and the kit adds
+them to `autoMode.environment` scoped to that repo. Only environment lines are per repo; `allow`
+and `soft_deny` stay in your user settings.
 
-```json
-{"environment": ["**Organization**: acme", "**Cloud provider(s)**: GCP project shop-dev"]}
+```bash
+S=<kit>/hooks/scripts/auto_mode_sync.py
+echo '{"environment": ["**Organization**: acme", "**Cloud provider(s)**: GCP project shop-dev"]}' \
+  | python3 $S --set -        # store the approved lines for the repo you are in, then rebuild
+python3 $S --show             # what is stored for this repo
+python3 $S --remove           # forget this repo
+python3 $S                    # rebuild only (what SessionStart runs)
 ```
 
-Only environment lines are per repo; `allow` and `soft_deny` stay in your user settings. At every
-session start in a kit project, `hooks/scripts/auto_mode_sync.py`:
+`/kit:init` drafts the lines from what the repo shows and runs `--set` once you approve them.
 
-- reads the file only if git does not track it. A committed one is ignored with a warning, so a
-  cloned repo can never declare itself trusted;
-- records it in `~/.claude/kit-auto-mode.json` (main checkout path -> name, origin, lines; a
-  worktree shares its checkout's entry) and drops repos whose file is gone;
-- rebuilds `autoMode.environment`: your own lines stay as written, and each repo line is added as
-  `**Organization (shop only)**: In the repository shop (checkout /path/shop and its worktrees,
-  origin git@github.com:acme/shop.git), and nowhere else: acme [kit: .claude/auto-mode.local.json]`.
-  The trailing tag marks the kit's lines; later syncs replace exactly those. A new list starts
-  with `"$defaults"` (which `environment` supports, as `allow` does), so the built-in entries
-  stay current; an existing list without it is left that way.
+**Security model:** nothing inside a repository can add auto mode lines. No file in the repo is
+read for them; only your `--set` command writes a block, so a cloned repo cannot declare itself
+trusted, whatever it commits.
 
-It writes only when the result changes (backup `settings.json.kit-backup`, other keys kept),
-never rewrites a file that is not valid JSON, and runs no `claude` command. Run it by hand with
-`python3 hooks/scripts/auto_mode_sync.py [dir]`; check the result with `claude auto-mode config`.
+- A repo is its origin URL, normalized (`git@github.com:Acme/shop.git` and
+  `https://github.com/acme/shop` are the same `github.com/acme/shop`, credentials dropped), so
+  every checkout and worktree matches; without a remote, its main checkout path.
+- Blocks: `kit-auto-mode/<slug>.json` = `{"repo": {"origin", "name", "paths"}, "environment": [...]}`.
+  At most 20 lines of 400 characters per repo.
+- Each line is written as `**Organization (shop repo only)**: In the repository whose git origin
+  is github.com/acme/shop, in any checkout or worktree of it (known checkouts: /path/shop), and
+  nowhere else: acme [kit auto-mode]`. Labels lose `**` and newlines; the `(repo only)` suffix and
+  the trailing tag are always the kit's. The tag marks the kit's lines: a rebuild replaces exactly
+  those and keeps your own lines and their order.
+- A new list starts with `"$defaults"` (`environment` supports it, as `allow` does), so the
+  built-in entries stay current; a list without it is left that way, and a non-list
+  `environment` is left alone with a one-line warning.
+- Writes happen under a lock (`kit-auto-mode.lock`), atomically, only when the result changes,
+  after a backup to `settings.json.kit-auto-mode-backup`; the first backup ever is also kept as
+  `settings.json.kit-auto-mode-backup.orig`. A settings file that is not valid JSON is never
+  rewritten.
+
+At session start in a kit project the hook only rebuilds from the stored blocks (no git, no
+`claude` command, nothing read from the repo), so a reset or hand-edited settings file gets the
+lines back; it is silent when nothing changed. Check the result with `claude auto-mode config`.
 
 ## Modes and the panel
 

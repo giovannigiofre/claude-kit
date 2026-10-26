@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SessionStart: tell Claude which kit gates this project has, make the user the git author when
-kit.json names them, offer the kit's machine settings once, sync this repo's auto mode
-environment lines into user settings, and after a compaction put the coordinator's board back
+kit.json names them, offer the kit's machine settings once, re-apply the user's approved
+per-repo auto mode lines to user settings, and after a compaction put the coordinator's board back
 into context (stdout is added to context)."""
 
 import os
@@ -90,7 +90,7 @@ def main():
     if not config:
         return 0  # project has not opted in: stay silent
     try:  # silent unless something changed or is wrong
-        for line in auto_mode_sync.sync(root):
+        for line in auto_mode_sync.sync():
             print(line)
     except Exception as exc:
         print(f"kit: auto mode sync failed: {exc}")

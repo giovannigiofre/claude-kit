@@ -63,15 +63,14 @@ and its CI actually run, not guesses.
     machine-level settings (no attribution, and an auto mode rule that lets agents rewrite the
     branches they created) are offered by the kit at session start; if the user declined them
     before and wants them now, run `python3 <kit>/hooks/scripts/machine_setup.py --apply`.
-11. **Auto mode environment**: auto mode reads its environment from user settings only, so this
-    repo's lines live in `.claude/auto-mode.local.json`, never committed, and the kit syncs them
-    there, scoped to this repo. Draft `{"environment": ["**Organization**: ...", ...]}` from
-    what the repo shows: the remote's org, cloud manifests (project, region, registry), secret
-    and `.env` files, protected branches (if `gh` works:
+11. **Auto mode environment**: auto mode reads its environment from user settings only, so the
+    kit keeps each repo's approved lines in the user's Claude config and adds them there, scoped
+    to this repo's origin. Draft `{"environment": ["**Organization**: ...", ...]}` from what the
+    repo shows: the remote's org, cloud manifests (project, region, registry), secret and `.env`
+    files, protected branches (if `gh` works:
     `gh api repos/{owner}/{repo}/branches --jq '.[] | select(.protected) | .name'`), trusted
-    domains. Show it and write it only on approval, add `/.claude/auto-mode.local.json` to
-    `.git/info/exclude`, then run
-    `python3 <kit>/hooks/scripts/auto_mode_sync.py`.
+    domains. `--show` prints lines stored earlier. Show the draft; only on approval pipe it to
+    `python3 <kit>/hooks/scripts/auto_mode_sync.py --set -` (`--remove` forgets the repo).
 12. **Domain plugins**: if the repo has a frontend, or code that calls an LLM, offer `kit-ui` or
     `kit-llm` for this project now (`kit:extras` explains the install).
 13. Write `.claude/kit.json`, show it, and explain that it is committed so every clone and session
