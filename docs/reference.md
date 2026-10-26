@@ -79,6 +79,36 @@ Also per project, committed: `CLAUDE.md` (the project's rules, which win over th
 you declined, so reviews don't raise them again). Gitignored: `.claude/evidence/`,
 `.claude/overnight/`, `.claude/lead/`.
 
+### Auto mode environment, per repo
+
+Auto mode reads `autoMode` (allow, soft_deny, environment) from `~/.claude/settings.json` only; an
+`autoMode` block in a project's settings is ignored. So each repo keeps the environment lines that
+describe it (organization, cloud, trusted domains, secret files, protected branches) in
+`.claude/auto-mode.local.json`, never committed (`/kit:init` drafts it and adds it to
+`.git/info/exclude`):
+
+```json
+{"environment": ["**Organization**: acme", "**Cloud provider(s)**: GCP project shop-dev"]}
+```
+
+Only environment lines are per repo; `allow` and `soft_deny` stay in your user settings. At every
+session start in a kit project, `hooks/scripts/auto_mode_sync.py`:
+
+- reads the file only if git does not track it. A committed one is ignored with a warning, so a
+  cloned repo can never declare itself trusted;
+- records it in `~/.claude/kit-auto-mode.json` (main checkout path -> name, origin, lines; a
+  worktree shares its checkout's entry) and drops repos whose file is gone;
+- rebuilds `autoMode.environment`: your own lines stay as written, and each repo line is added as
+  `**Organization (shop only)**: In the repository shop (checkout /path/shop and its worktrees,
+  origin git@github.com:acme/shop.git), and nowhere else: acme [kit: .claude/auto-mode.local.json]`.
+  The trailing tag marks the kit's lines; later syncs replace exactly those. A new list starts
+  with `"$defaults"` (which `environment` supports, as `allow` does), so the built-in entries
+  stay current; an existing list without it is left that way.
+
+It writes only when the result changes (backup `settings.json.kit-backup`, other keys kept),
+never rewrites a file that is not valid JSON, and runs no `claude` command. Run it by hand with
+`python3 hooks/scripts/auto_mode_sync.py [dir]`; check the result with `claude auto-mode config`.
+
 ## Modes and the panel
 
 - **Light**: a normal session. `/kit:lead <work>` starts the coordinator when you want it.
@@ -135,6 +165,7 @@ python3 tests/test_budget.py
 python3 plugins/kit/hooks/tests/test_guard.py
 python3 plugins/kit/hooks/tests/test_session_start.py
 python3 plugins/kit/hooks/tests/test_machine_setup.py
+python3 plugins/kit/hooks/tests/test_auto_mode_sync.py
 python3 plugins/kit/skills/investigate/tests/test_compact_logs.py
 python3 plugins/kit/skills/overnight/tests/test_overnight.py
 python3 plugins/kit-llm/hooks/tests/test_llm_detect.py

@@ -121,6 +121,9 @@ footer or session link: you are the only author) and an `autoMode.allow` rule th
 rewrite and force-push, with lease, the branches they created. On yes it merges them in (with a
 backup, other keys kept); on no it never asks again on that machine
 (`hooks/scripts/machine_setup.py --apply | --decline | --check`).
+Each repo's own auto mode environment (org, cloud, secrets, protected branches) lives in its
+uncommitted `.claude/auto-mode.local.json`, and the kit keeps it in that list, scoped to the repo
+([reference](docs/reference.md#auto-mode-environment-per-repo)).
 
 Also worth having in `~/.claude/settings.json` (auto mode is already the default on Pro and Max):
 system notifications on; `"env": {"CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "4"}` if you want a
