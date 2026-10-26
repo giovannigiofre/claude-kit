@@ -69,8 +69,9 @@ def home():
     return Path(os.path.normpath(os.environ.get("HOME") or str(Path.home())))
 
 
-def expand(word, cwd):
-    """A path for a shell word, or UNKNOWN when it depends on run-time values."""
+def expand(word, cwd, raw=False):
+    """A path for a shell word, or UNKNOWN when it depends on run-time values. With raw, the path
+    is joined but not normalised as text, so `link/..` and a trailing `/` survive for resolved()."""
     w = word
     for var in ("${HOME}", "$HOME"):
         w = w.replace(var, str(home()))
@@ -82,10 +83,8 @@ def expand(word, cwd):
         return UNKNOWN
     if w == "~" or w.startswith("~/"):
         w = str(home()) + w[1:]
-    p = Path(w)
-    if not p.is_absolute():
-        p = Path(cwd) / p
-    return Path(os.path.normpath(str(p)))
+    joined = os.path.join(str(cwd), w)
+    return joined if raw else Path(os.path.normpath(joined))
 
 
 def tilde(paths):
@@ -243,6 +242,17 @@ def protected_branches(cwd, opts):
 # ---------------------------------------------------------------- the checks
 # Each returns None, or (decision, rule, why) with decision "deny" or "ask".
 
+def resolved(raw):
+    """What rm really acts on, walked on the filesystem (symlinks followed, `..` taken after them),
+    not as text. The last name is followed too when the word ends in `/` (rm then removes the
+    link's target); a glob is matched inside the real folder; otherwise rm -rf on a link removes
+    only the link."""
+    head, name = os.path.split(raw)
+    if not name or name == ".":
+        return Path(os.path.realpath(raw))
+    return Path(os.path.realpath(head)) / name
+
+
 def delete_target(word, cwd, root):
     if word in (".", "..", ".*", "/*", "~/*", "*") and Path(cwd) in (Path("/"), home()):
         return ("deny", f"delete of '{word}' in {cwd}")
@@ -251,34 +261,31 @@ def delete_target(word, cwd, root):
     target = expand(word, cwd)
     if target is UNKNOWN:
         return ("ask", f"delete target '{word}' is only known when the command runs")
-    hm = home()
-    if any(under(target, c) for c in tilde(CACHE_PATHS)):
+    real, hm = resolved(expand(word, cwd, raw=True)), home()
+    roots = {Path(root), Path(os.path.realpath(str(root)))}
+    for t in {target, real}:
+        if t == Path("/") or t == hm or under(hm, t):
+            return ("deny", f"delete of '{word}' ({t})")
+        if t.name == ".git" or (any(under(t, r) for r in roots) and "/.git/" in str(t) + "/"):
+            return ("deny", f"delete inside .git ('{word}')")
+        if any(t == r or under(r, t) for r in roots):
+            return ("deny", f"delete of the repository root ('{word}')")
+    # what is allowed is decided on the real path, so a symlink cannot lead the delete elsewhere
+    if any(under(real, c) for c in tilde(CACHE_PATHS)) or any(under(real, r) for r in roots) \
+            or any(under(real, t) for t in temp_roots()) or in_sibling_worktree(real, root):
         return None
-    if target == Path("/") or target == hm or under(hm, target):
-        return ("deny", f"delete of '{word}' ({target})")
-    if target.name == ".git" or (under(target, root) and "/.git/" in str(target) + "/"):
-        return ("deny", f"delete inside .git ('{word}')")
-    if target == root or under(root, target):
-        return ("deny", f"delete of the repository root ('{word}')")
-    if under(target, root) or any(under(target, t) for t in temp_roots()):
-        return None
-    if in_sibling_worktree(target, root):
-        return None
-    return ("deny", f"delete outside the repository ('{word}' -> {target})")
+    return ("deny", f"delete outside the repository ('{word}' -> {real})")
 
 
-def in_sibling_worktree(target, root):
-    """True when target is in, or is, another linked worktree registered to this repository (a
-    thread's checkout next to this one), outside its .git. The main checkout stays outside: it can
-    hold uncommitted work, and a bare repository's folder is all history."""
+def in_sibling_worktree(real, root):
+    """True when the real path `real` is in, or is, another linked worktree registered to this
+    repository (a thread's checkout next to this one), outside its .git. The main checkout stays
+    outside: it can hold uncommitted work, and a bare repository's folder is all history."""
     listing = git(root, "worktree", "list", "--porcelain")
     entries = [block.splitlines() for block in listing.split("\n\n") if block.startswith("worktree ")]
-    linked = [Path(os.path.normpath(lines[0][len("worktree "):])) for lines in entries[1:]]  # [0]: main or bare
-    for tree in linked:
-        for t in {target, Path(os.path.realpath(str(target)))}:
-            if t == tree or (under(t, tree) and ".git" not in t.relative_to(tree).parts):
-                return True
-    return False
+    linked = [Path(os.path.realpath(lines[0][len("worktree "):])) for lines in entries[1:]]  # [0]: main or bare
+    return any(real == tree or (under(real, tree) and ".git" not in real.relative_to(tree).parts)
+               for tree in linked)
 
 
 def check_rm(argv, cwd, root):

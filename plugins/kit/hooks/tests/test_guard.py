@@ -195,8 +195,21 @@ def main():
     subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "feat/k2", str(sibling)], check=True)
     (sibling / ".claude").mkdir()
     (sibling / ".claude" / "kit.json").write_text("{}")
+    # ... judged by where a path really leads: a symlink in a worktree cannot carry a delete elsewhere
+    third = repo.parent / "app-k3"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "feat/k3", str(third)], check=True)
+    (home / "other").mkdir()
+    for name, to in (("to-main", repo), ("to-gitdir", repo / ".git"), ("to-other", home / "other")):
+        (third / name).symlink_to(to)
+    (sibling / "to-other").symlink_to(home / "other")
     for cwd, command, want in ((repo, "rm -rf ../app-k2/build", "allow"), (repo, "rm -rf ../app-k2", "allow"),
-                               (sibling, "rm -rf ../app/node_modules", "block"), (sibling, "rm -rf ../app", "block")):
+                               (sibling, "rm -rf ../app/node_modules", "block"), (sibling, "rm -rf ../app", "block"),
+                               (sibling, "rm -rf ../app-k3/to-main/node_modules", "block"),
+                               (sibling, "rm -rf ../app-k3/to-gitdir/objects", "block"),
+                               (sibling, "rm -rf ../app-k3/to-other/a.txt", "block"),
+                               (sibling, "rm -rf ../app-k3/to-main/", "block"),
+                               (sibling, "rm -rf ../app-k3/to-main/../app/src", "block"),
+                               (sibling, "rm -rf to-other/a.txt", "block"), (sibling, "rm -rf ../app-k3/to-main", "allow")):
         got = verdict(home, cwd, command)
         if got != want:
             failed += 1
