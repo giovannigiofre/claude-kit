@@ -192,6 +192,16 @@ def test_fail_then_pass():
                                "PROBLEMS: see above\n") == \
         ("FAIL", ["alpha breaks (see e.g. the log) in prod.", "the totals row is off TODO: on empty lists"]), \
         "the heading after EVIDENCE in any case, bullet problems over their steps, no sub-heading, any-case end"
+    assert subagent_stop.parse("VERDICT: FAIL\nPROBLEMS:\n1. Typecheck fails:\n   - src/a.ts:3 is untyped\n"
+                               "2. Token leak (informational endpoint returns the API key)\n"
+                               "3. Retry loop never ends (nit-picker job, worker.ts:9)\n4. Scope and naming.\n"
+                               "   - the flag is x2 in api.ts\n5. **`parseDate`** drops the timezone.\n"
+                               "6. Remaining notes (informational):\n   - a style point\n") == \
+        ("FAIL", ["Typecheck fails: src/a.ts:3 is untyped", "Token leak (informational endpoint returns the API key)",
+                  "Retry loop never ends (nit-picker job, worker.ts:9)", "Scope and naming: the flag is x2 in api.ts",
+                  "`parseDate` drops the timezone."]), \
+        "a numbered problem with details stays, a word in its own parenthesis does not make it a note, " \
+        "an empty headline takes its first detail, code keeps its backtick"
     verifier("x1", "feat/x", "FAIL", "the export button ignores the date filter", "the totals row is off by one")
     verifier("y1", "feat/y", "FAIL", "the export button ignores the date filter", "the csv header is in German")
     verifier("z1", "feat/z", "FAIL", "the retry banner never clears")

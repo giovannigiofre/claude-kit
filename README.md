@@ -160,7 +160,9 @@ project.
 
 - **Host** (your own machine): no OS sandbox. The guard still blocks recursive deletes outside
   the repo (a sibling linked worktree of the same repository counts as inside, outside its
-  `.git`; the main checkout does not; a path is judged by where its symlinks really lead),
+  `.git`; the main checkout does not; another repository that a `cd <dir> &&` enters also
+  counts as inside when it holds that folder, outside its root and `.git`; a path is judged by where its symlinks really lead, a variable
+  by the value the same command set it to once, a `$(mktemp -d)` one as inside its folder),
   pushes or force pushes to main, `git reset --hard` or `clean` over uncommitted work,
   `sudo`, `curl … | sh`, and reading `~/.ssh`, `~/.aws`, gh, docker or kube config and the
   keychain. It also keeps you the only author: it blocks a commit, PR, issue or comment that

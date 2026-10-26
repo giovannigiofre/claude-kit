@@ -34,7 +34,7 @@ PROBLEMS_HEAD = re.compile(r"^(?:#+[ \t]*)?(?:PROBLEMS\b" + NOTE + r"(?::([^\n]*
 BLOCK_END = re.compile(r"^(?:#+[ \t]*)?(?:(?i:" + "|".join(SECTIONS) + r")\b" + NOTE + r"(?::|$)"
                        r"|[A-Z][A-Z _/-]{2,}" + NOTE + r":[ \t]*$)|(?<=\n\n)[A-Z][A-Z _/-]{2,}" + NOTE + ":", re.M)
 ITEM = re.compile(r"^(\s*)(?:(\d+[.)])|[-*])\s+(.*)")
-NOT_DEFECTS = re.compile(r"\binformational\b|\bnot (?:a )?defects?\b|\bnits?\b", re.I)
+NOT_DEFECTS = re.compile(r"\binformational\b|\bnot (?:a )?defects?\b|\bnits?\b(?!-)", re.I)
 HAS_VERDICT = re.compile(r"^\W*VERDICT:", re.M)
 BRANCH = re.compile(r"\bbranch:?\s+(?:`([^`\s]+)`|\*\*([^*\s]+)\*\*|([A-Za-z0-9][\w.-]*/[\w./-]*\w))", re.I)
 BASES = ("main", "master", "develop", "trunk")
@@ -61,7 +61,7 @@ def block_items(text, head):
 
 def parse(message):
     """(verdict or None, [problem headlines])."""
-    text = re.sub(r"[*`]{2,}", "", message or "")
+    text = re.sub(r"\*{2,}|`{3,}", "", message or "")
     m = re.search(r"^\W*VERDICT:\s*(PASS|FAIL|CANNOT_VERIFY)\b", text, re.M)
     verdict = m.group(1) if m else None
     # the last PROBLEMS heading with items under it: one quoted in EVIDENCE, or a later "PROBLEMS: see
@@ -72,25 +72,42 @@ def parse(message):
     if not first:
         return verdict, []
     numbered, indent = bool(first.group(2)), len(first.group(1))  # the first item sets the style
-    problems, current = [], None
+    problems, current = [], None  # [headline text, its detail items]
     for line in lines:
         item = ITEM.match(line)
         if item and bool(item.group(2)) == numbered and len(item.group(1)) <= indent:
             current = item.group(3).strip()
-            problems.append(current)
-        elif current is not None and line.strip() and not item and not line.rstrip().endswith(":") \
-                and len(problems[-1]) < 300:
-            problems[-1] += " " + line.strip()  # a wrapped headline
+            problems.append([current, []])
+        elif item and problems:
+            problems[-1][1].append(item.group(3).strip())
+            current = None
+        elif current is not None and line.strip() and not line.rstrip().endswith(":") \
+                and len(problems[-1][0]) < 300:
+            problems[-1][0] += " " + line.strip()  # a wrapped headline
         elif not line.strip() or line.rstrip().endswith(":"):
             current = None  # a blank line or a sub-heading ends the headline
-    headlines = [headline(p) for p in problems if p.lower() not in ("none", "-")]
-    # a sub-heading ("Docs nits:", "Remaining notes (informational)") is not a problem; a problem
-    # that introduces its list with a colon is, so only short ones go
-    return verdict, [h.rstrip(":") for h in headlines if not sub_heading(h)][:10]
+    found = []
+    for text, details in problems:
+        h = headline(text)
+        if text.lower() in ("none", "-") or sub_heading(h, numbered and details):
+            continue
+        h = h.rstrip(":")
+        if details and len(re.sub(r"\([^)]*\)", "", h).split()) <= 3:  # "Scope and naming." says nothing
+            h = h.rstrip(".") + ": " + headline(details[0])
+        found.append(h)
+    return verdict, found[:10]
 
 
-def sub_heading(h):
-    return h.endswith((":", ")")) and (NOT_DEFECTS.search(h) or (h.endswith(":") and len(h.split()) <= 4))
+def sub_heading(h, has_details=False):
+    """A sub-heading ("Docs nits:", "Remaining notes (informational)") is not a problem. A
+    numbered problem that introduces its details with a colon ("1. Typecheck fails:") is, and so
+    is one whose own parenthesis only mentions such a word ("Token leak (informational endpoint
+    ...)")."""
+    outside = re.sub(r"\([^)]*\)", "", h)
+    notes = re.findall(r"\(([^)]*)\)", h)
+    if NOT_DEFECTS.search(outside) or any(NOT_DEFECTS.search(n) and len(n.split()) <= 3 for n in notes):
+        return h.endswith((":", ")")) or not has_details
+    return h.endswith(":") and len(h.split()) <= 4 and not has_details
 
 
 def text_of(content):

@@ -115,6 +115,9 @@ MORE = [
     ("find / -exec rm -rf {} +", "block"),
     ("find -x ~ -name '*.log' -delete", "block"),
     ("find . -name '*.pyc' -delete", "allow"),
+    ("find .. -name '*.pyc' -delete", "block"),
+    ("find . -name '*' -delete", "block"),
+    ("rm -rf {~,/tmp/kit-vfy-x}", "block"),
     ("python3 -c 'import shutil, os; shutil.rmtree(os.path.expanduser(\"~\"))'", "block"),
     ("python3 -c 'print(1)'", "allow"),
     ("cd .. && rm -rf app", "block"),
@@ -136,6 +139,26 @@ MORE = [
     ("git push --force-with-lease origin feat/x", "allow"),
     ("git push origin HEAD:refs/heads/main", "block"),
     ("cat .env", "allow"),
+    # a variable set once earlier in the same command is judged by its value; set twice, it is not
+    ('S=/tmp/kit-x; rm -rf "$S"/home ${S}', "allow"),
+    ("export S=~ && rm -rf $S", "block"),
+    ("S=/tmp/kit-x; S=~; rm -rf $S", "ask"),
+    ("TMPDIR=/; S=$TMPDIR; rm -rf $S", "block"),
+    ('SP=/tmp/kit-sp; T=$(mktemp -d "$SP/fx.XXXX"); rm -rf $T/sub', "allow"),
+    ("false &&\nS=/tmp/kit-x\nrm -rf $S/*", "ask"),
+    ("S=/tmp/kit-x; command \\eval S\\=\\~; rm -rf $S", "ask"),
+    ("S=/tmp/kit-x; rm -rf \\$S/../x", "ask"),
+    ("cd - && rm -rf src", "ask"),
+    ("CDPATH=~; cd code && rm -rf *", "ask"),
+    ("rm -rf ~root", "block"),
+    ("rm -rf ~/" + "{a,b}" * 1200, "ask"),
+    # quoted text over several lines is an argument, not commands; sh -c over several lines is
+    ('git commit -m "fix\n\nrm -rf ~ is what the guard stops"', "allow"),
+    ('bash -c "echo hi\nrm -rf ~"', "block"),
+    ("echo \"$(echo '\"')\"\nrm -rf ~\n: '\n'", "block"),
+    ("cat <<'EOF'x\nEOFx\nrm -rf ~\nEOF", "block"),
+    ("echo $((1<<y))\nrm -rf ~\ny", "block"),
+    ("git commit -m \"$(cat <<'EOF'\nIt's fixed\nEOF\n)\"\nrm -rf ~", "block"),
 ]
 
 
@@ -217,11 +240,30 @@ def main():
                                (sibling, "find -s -H to-home -delete", "block"),
                                (sibling, "find -xH to-home -name b -delete", "block"),
                                (sibling, "find -- to-home/ -delete", "block"),
-                               (sibling, "find -H to-h?me -delete", "block")):
+                               (sibling, "find -H to-h?me -delete", "block"),
+                               (sibling, "find to-{home,x}/ -delete", "block")):
         got = verdict(home, cwd, command)
         if got != want:
             failed += 1
             print(f"FAIL sibling worktree {want} expected, got {got}: {command!r} from {cwd.name}")
+
+    # `cd <dir> &&` into another repository: deletes inside it are judged against that repository
+    other = repo.parent / "other"
+    subprocess.run(["git", "init", "-q", str(other)], check=True)
+    lent = repo.parent / "lent"  # its work tree is set to a folder outside it
+    (home / "docs").mkdir()
+    subprocess.run(["git", "init", "-q", str(lent)], check=True)
+    subprocess.run(["git", "-C", str(lent), "config", "core.worktree", str(home / "docs")], check=True)
+    for command, want in (("cd ../other && rm -r .claude/evidence && find . -name __pycache__ -exec rm -rf {} +",
+                           "allow"),
+                          ("cd ../other && rm -rf .", "block"),
+                          ("cd ../other && find . -delete", "block"),
+                          ("cd ../lent && rm -rf ../../docs/x", "block"),
+                          ("cd ../other && rm -rf ../elsewhere", "block")):
+        got = verdict(home, repo, command)
+        if got != want:
+            failed += 1
+            print(f"FAIL other repository {want} expected, got {got}: {command!r}")
 
     # Read/Grep/Glob of credential stores
     for tool, inp in (("Read", {"file_path": str(home / ".ssh" / "id_rsa")}),
