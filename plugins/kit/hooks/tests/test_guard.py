@@ -143,9 +143,16 @@ MORE = [
     ("export S=~ && rm -rf $S", "block"),
     ("S=/tmp/kit-x; S=~; rm -rf $S", "ask"),
     ("TMPDIR=/; S=$TMPDIR; rm -rf $S", "block"),
+    ("false &&\nS=/tmp/kit-x\nrm -rf $S/*", "ask"),
+    ("S=/tmp/kit-x; command eval S\\=\\~; rm -rf $S", "ask"),
+    ("S=/tmp/kit-x; rm -rf \\$S/../x", "ask"),
+    ("cd - && rm -rf src", "ask"),
     # quoted text over several lines is an argument, not commands; sh -c over several lines is
     ('git commit -m "fix\n\nrm -rf ~ is what the guard stops"', "allow"),
     ('bash -c "echo hi\nrm -rf ~"', "block"),
+    ("echo \"$(echo '\"')\"\nrm -rf ~\n: '\n'", "block"),
+    ("cat <<'EOF'x\nEOFx\nrm -rf ~\nEOF", "block"),
+    ("echo $((1<<y))\nrm -rf ~\ny", "block"),
 ]
 
 
@@ -237,9 +244,15 @@ def main():
     # `cd <dir> &&` into another repository: deletes inside it are judged against that repository
     other = repo.parent / "other"
     subprocess.run(["git", "init", "-q", str(other)], check=True)
+    lent = repo.parent / "lent"  # its work tree is set to a folder outside it
+    (home / "docs").mkdir()
+    subprocess.run(["git", "init", "-q", str(lent)], check=True)
+    subprocess.run(["git", "-C", str(lent), "config", "core.worktree", str(home / "docs")], check=True)
     for command, want in (("cd ../other && rm -r .claude/evidence && find . -name __pycache__ -exec rm -rf {} +",
                            "allow"),
                           ("cd ../other && rm -rf .", "block"),
+                          ("cd ../other && find . -delete", "block"),
+                          ("cd ../lent && rm -rf ../../docs/x", "block"),
                           ("cd ../other && rm -rf ../elsewhere", "block")):
         got = verdict(home, repo, command)
         if got != want:

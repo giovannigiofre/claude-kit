@@ -13,7 +13,9 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    `cd <dir> &&` into another work tree, that repository counts as inside too
                    (its root and .git do not). A variable set once by a plain NAME=value
                    earlier in the command is judged by its value; a target known only at run
-                   time ($(...), a loop variable, a value set twice, xargs) is asked about
+                   time ($(...), a loop variable, a value set twice, xargs, a folder after
+                   `cd -`) is asked about; find with no name or path test at a repo root
+                   counts as deleting the root
   push-protected   a push to a protected branch (main, master, the remote's default), a force
                    push to one, a mirror push, or deleting one
   discard-work     git reset --hard, checkout/restore of the whole tree, clean, stash drop/clear
@@ -91,6 +93,45 @@ def expand(word, cwd, raw=False):
     return joined if raw else Path(os.path.normpath(joined))
 
 
+def quote_mask(text):
+    """For each character of a shell text: "'" inside single quotes or $'...', '"' inside double
+    quotes, "\\" when a backslash escapes it, " " otherwise. $(...) and backticks quote afresh."""
+    mask, stack, i = [], [], 0
+    while i < len(text):
+        ch, top = text[i], stack[-1] if stack else None
+        if top in ("'", "$'"):
+            if ch == "\\" and top == "$'" and i + 1 < len(text):
+                mask += ["'", "'"]
+                i += 2
+                continue
+            mask.append("'")
+            if ch == "'":
+                stack.pop()
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < len(text):
+            mask += [top or " ", "\\"]
+            i += 2
+            continue
+        mask.append(top if top == '"' else " ")
+        if text.startswith("$(", i):
+            stack.append("(")
+            mask.append(mask[-1])
+            i += 1
+        elif ch == "`":
+            stack.pop() if top == "`" else stack.append("`")
+        elif top == '"':
+            if ch == '"':
+                stack.pop()
+                mask[-1] = " "
+        elif ch in "'\"":
+            stack.append("$'" if ch == "'" and text[i - 1:i] == "$" else ch)
+        elif top == "(" and ch in "()":
+            stack.pop() if ch == ")" else stack.append("(")
+        i += 1
+    return "".join(mask)
+
+
 def assigned_value(command, name, known):
     """The value a command gives `name` with its one plain `name=value`, when that value is known
     now: a literal, ~, or $HOME, $TMPDIR and names already known. None when the name is set more
@@ -100,8 +141,11 @@ def assigned_value(command, name, known):
     sets = list(re.finditer(rf"(?<![\w$]){n}\+?=", command))
     other = rf"\bfor\s+{n}\b|\bselect\s+{n}\b|\$\{{{n}:?[=?]|\(\([^)]*\b{n}\b|\b{n}\[|\bprintf\s+-v\s*{n}\b" \
             rf"|\b(read|unset|declare|typeset|local|readonly|let|getopts|mapfile|readarray)\b[^\n;&|]*\b{n}\b" \
-            r"|(^|[;&|({\n]|\bthen|\bdo|\belse)\s*(eval|source|\.)\s"  # these can set it unseen
-    if len(sets) != 1 or command[sets[0].end() - 2] == "+" or re.search(other, command):
+            r"|(^|[;&|({\n]|\b(then|do|else|" + "|".join(WRAPPERS) + r"))\s*\.\s"
+    mask = quote_mask(command)
+    unseen = [m for m in re.finditer(r"(?<![\w./-])(eval|source)(?![\w./-])", command) if mask[m.start()] == " "]
+    # eval, source and . can set it unseen, also behind `command`, `builtin` or `time`
+    if len(sets) != 1 or command[sets[0].end() - 2] == "+" or unseen or re.search(other, command):
         return None
     c, i, parts = command, sets[0].end(), []
     while i < len(c) and c[i] not in " \t\n;&|()<>":
@@ -283,25 +327,45 @@ def strip_wrappers(argv):
 
 
 def logical_lines(text):
-    """The command lines of a shell text. A newline inside quotes stays in its line (a multi-line
-    commit message is one argument), a comment ends at the newline, and the bodies of
-    here-documents opened outside quotes are dropped: they are data, not commands."""
-    lines, cur, quote, heredocs, i = [], [], None, [], 0
+    """The command lines of a shell text. A newline inside quotes or $(...) stays in its line (a
+    multi-line commit message is one argument), a line ending in && || or | goes on to the next,
+    a comment ends at the newline, and the bodies of here-documents opened outside quotes are
+    dropped: they are data, not commands. Inside "...", $(...) and backticks quote afresh."""
+    lines, cur, stack, heredocs, i = [], [], [], [], 0
     while i < len(text):
-        ch = text[i]
-        if quote:
-            if ch == "\\" and quote != "'" and i + 1 < len(text):
-                cur.append(ch + text[i + 1])
+        ch, top = text[i], stack[-1] if stack else None
+        if top in ("'", "$'"):
+            if ch == "\\" and top == "$'" and i + 1 < len(text):
+                cur.append(text[i:i + 2])
                 i += 2
                 continue
-            if ch == quote[-1]:
-                quote = None
+            if ch == "'":
+                stack.pop()
         elif ch == "\\" and i + 1 < len(text):
-            cur.append(ch + text[i + 1])
+            cur.append(text[i:i + 2])
             i += 2
             continue
+        elif text.startswith("$(", i):
+            stack.append("(")
+            cur.append("$(")
+            i += 2
+            continue
+        elif ch == "`":
+            stack.pop() if top == "`" else stack.append("`")
+        elif top == '"':
+            if ch == '"':
+                stack.pop()
         elif ch in "'\"":
-            quote = "$'" if ch == "'" and cur and cur[-1] == "$" else ch
+            stack.append("$'" if ch == "'" and cur and cur[-1] == "$" else ch)
+        elif top == "(" and ch in "()":
+            stack.pop() if ch == ")" else stack.append("(")
+        elif top:
+            pass  # inside $(...) or backticks: a newline there is part of the substitution
+        elif text.startswith("((", i):  # arithmetic: its << is a shift, not a here-document
+            stack += ["(", "("]
+            cur.append("((")
+            i += 2
+            continue
         elif ch == "#" and (not cur or cur[-1] in " \t;&|()"):
             while i < len(text) and text[i] != "\n":
                 i += 1
@@ -311,15 +375,20 @@ def logical_lines(text):
             i += 3
             continue
         elif text.startswith("<<", i):
-            m = re.match(r"<<-?[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", text[i:])
-            if m:
-                heredocs.append(m.group(2))
+            m = re.match(r"<<-?[ \t]*([^\s;&|<>()]+)", text[i:])
+            word = m and re.sub(r"[\\'\"]", "", m.group(1))
+            if word and m.group(1).count("'") % 2 == 0 and m.group(1).count('"') % 2 == 0:
+                heredocs.append(word)  # the shell ends it at the word with its quotes removed
                 cur.append(m.group(0))
                 i += len(m.group(0))
                 continue
         elif ch == "\n":
-            lines.append("".join(cur))
-            cur, i = [], i + 1
+            if re.search(r"(&&|\|\||\|)\s*$", "".join(cur)):
+                cur.append(" ")  # the command goes on after the newline (and any here-document)
+            else:
+                lines.append("".join(cur))
+                cur = []
+            i += 1
             for word in heredocs:  # skip each body, up to its closing word
                 while i < len(text):
                     end = text.find("\n", i)
@@ -504,8 +573,9 @@ def check_find(argv, cwd, repos):
         raw = expand(word, cwd, raw=True)
         if raw is not UNKNOWN:
             real = resolved(raw)
-            if any(real == r or under(real, r) for r in roots) and ".git" not in real.parts:
-                continue  # find deletes what matches below the path, not the path itself
+            whole = not any(re.fullmatch(r"-i?(name|path|regex|wholename)", a) for a in args)
+            if any(under(real, r) and not (real == r and whole) for r in roots) and ".git" not in real.parts:
+                continue  # find deletes what matches below the path; with no name or path test, all of .git
         found = delete_target(word, cwd, repos)
         if found:
             return (found[0], "rm-outside", f"find deleting: {found[1]}")
@@ -762,8 +832,9 @@ def check_bash(command, cwd, root, opts):
         return ("deny", "system", "fork bomb")
     if re.search(r">\s*/dev/(sd|disk|nvme|hd)", command):
         return ("deny", "system", "write to a disk device")
-    asked, env, repos = None, {}, [root]
+    asked, env, repos, lost_cwd = None, {}, [root], False
     code = "\n".join(logical_lines(command.replace("\\\n", " ")))  # no comments, no here-document bodies
+    mask = quote_mask(code)
     for seg in segments(command):
         for var in seg.get("assigns") or []:
             value = assigned_value(code, var, env) if seg["plain"] else None
@@ -773,18 +844,27 @@ def check_bash(command, cwd, root, opts):
                 env[var] = "${%s:?}" % var  # expand() must not put the session's value in
             else:
                 env.pop(var, None)
-        argv = seg["argv"] if seg.get("nested") else [with_vars(a, env) for a in seg["argv"]]
+        # a $NAME escaped or in single quotes stays as written: the shell does not put the value in
+        literal = {m.group(1) for m in re.finditer(r"\$\{?([A-Za-z_]\w*)", code) if mask[m.start()] in "'\\"}
+        known = {n: v for n, v in env.items() if n not in literal}
+        argv = seg["argv"] if seg.get("nested") else [with_vars(a, known) for a in seg["argv"]]
         if not argv:
             continue
         name = Path(argv[0]).name
-        if name == "cd":
-            target = expand(argv[1], cwd) if len(argv) > 1 else home()
+        if name in ("cd", "pushd", "popd"):
+            args = [a for a in argv[1:] if a not in ("-L", "-P", "-e", "-@", "--")]
+            target = UNKNOWN if name == "popd" or args[:1] == ["-"] else \
+                expand(args[0], cwd) if args else home()
+            lost_cwd = lost_cwd or target is UNKNOWN
             cwd = cwd if target is UNKNOWN else target
             # `cd <dir> &&` into another work tree: its relative deletes are judged against that
-            # repository too (its root and .git stay protected, as this one's do)
+            # repository too (its root and .git stay protected, as this one's do). A top that
+            # does not hold the folder (core.worktree set elsewhere) is not trusted.
             top = git(cwd, "rev-parse", "--show-toplevel") if seg["plain"] and target is not UNKNOWN else ""
             top = Path(os.path.normpath(top)) if top else None
-            repos = [root] + ([top] if top and top != root and not under(home(), top) else [])
+            inside = top and (Path(os.path.realpath(cwd)) == Path(os.path.realpath(top))
+                              or under(Path(os.path.realpath(cwd)), Path(os.path.realpath(top))))
+            repos = [root] + ([top] if inside and top != root and not under(home(), top) else [])
             continue
         if seg["piped_from"] and (name in SHELLS or name in INTERPRETERS) and \
                 Path(seg["piped_from"][0]).name in DOWNLOADERS:
@@ -792,10 +872,12 @@ def check_bash(command, cwd, root, opts):
         checks = [check_secrets(argv, cwd)]
         if name in ("git", "gh") and opts.get("attribution") != "allow":
             checks.append(check_attribution(argv, cwd, command))
-        if name == "rm":
-            checks.append(check_rm(argv, cwd, repos))
-        elif name == "find":
-            checks.append(check_find(argv, cwd, repos))
+        if name in ("rm", "find"):
+            check = check_rm if name == "rm" else check_find
+            found = check(argv, cwd, repos)
+            if not found and lost_cwd and check(argv, Path("/"), repos):  # after `cd -` or `cd $X`
+                found = ("ask", "rm-outside", "delete in a folder only known when the command runs")
+            checks.append(found)
         elif name == "git":
             checks.append(check_git(argv, cwd, opts))
         elif name in INTERPRETERS:
