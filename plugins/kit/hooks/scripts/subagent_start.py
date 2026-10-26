@@ -88,26 +88,28 @@ def cut_note(cut, total):
 
 
 def compose(sections, limit=MAX_CHARS):
-    """HEADER plus each (title, lines) section, never over `limit` characters. Each section gets an
-    even share of what is left, and a section that needs less passes the rest on. Lines that do not
-    fit are counted in a note at the end."""
-    sections = [(title, lines) for title, lines in sections if lines]
+    """HEADER plus each (title, lines, newest_last) section, never over `limit` characters. Each
+    section gets an even share of what is left, and a section that needs less passes the rest on.
+    A newest_last section keeps its last lines when it must cut (an index grows at the end). Lines
+    that do not fit are counted in a note at the end."""
+    sections = [s for s in sections if s[1]]
     if not sections:
         return ""
-    total = sum(len(lines) for _, lines in sections)
+    total = sum(len(lines) for _, lines, _ in sections)
     left = limit - len(HEADER) - 1 - len(cut_note(total, total)) - 1
     parts, cut = [HEADER], 0
-    for i, (title, lines) in enumerate(sections):
+    for i, (title, lines, newest_last) in enumerate(sections):
         share = left // (len(sections) - i)
-        block, used = [title], len(title) + 1
-        for line in lines:
+        kept, used = [], len(title) + 1
+        for line in (reversed(lines) if newest_last else lines):
             if used + len(line) + 1 > share:
                 break
-            block.append(line)
+            kept.append(line)
             used += len(line) + 1
-        cut += len(lines) - (len(block) - 1)
-        if len(block) > 1:
-            parts.extend(block)
+        cut += len(lines) - len(kept)
+        if kept:
+            parts.append(title)
+            parts.extend(reversed(kept) if newest_last else kept)
             left -= used
     if len(parts) == 1:
         return ""
@@ -130,9 +132,9 @@ def lessons(cwd, config_dir):
     memory = Path(config_dir) / "projects" / slug(main) / "memory" / "MEMORY.md"
     return compose([
         (f"User feedback for this repo (files in {memory.parent}):",
-         index_lines(memory, lambda line: re.search(r"[(\s]feedback_[^\s)]*\.md\b", line))),
+         index_lines(memory, lambda line: re.search(r"[(\s]feedback_[^\s)]*\.md\b", line)), False),
         (f"Pitfalls the kit verifier found here before (files in {verifier.parent}):",
-         index_lines(verifier)),
+         index_lines(verifier), True),
     ])
 
 

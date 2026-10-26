@@ -50,7 +50,8 @@ def main():
 
         text = run(tree, config)  # from a worktree: the main checkout's lessons
         assert len(text) <= subagent_start.MAX_CHARS, len(text)
-        assert "- feedback_lean-tests.md: one test per behaviour" in text and "pitfall_0.md" in text, text
+        assert "- feedback_lean-tests.md: one test per behaviour" in text and "pitfall_39.md" in text, text
+        assert "pitfall_0.md" not in text, "the oldest pitfalls are the ones cut"
         assert "project_deploy" not in text and "ghp_" not in text, "feedback lines only, no secrets"
         assert re.search(r"\(cut \d+ of 41 lines", text), "the cut is said"
     print("subagent_start: all checks passed")

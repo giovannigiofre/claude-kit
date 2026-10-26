@@ -9,7 +9,7 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
 
   rm-outside       recursive delete (rm -r, find -delete/-exec rm, rmtree in python -c ...) of
                    /, the home folder, the repo root, .git, or anything outside the repo, the
-                   repo's other registered worktrees (a linked one may go whole), the temp
+                   repo's other linked worktrees (whole or in part), the temp
                    folders and the cache folders; a target known only at run time ($VAR,
                    $(...), xargs) is asked about
   push-protected   a push to a protected branch (main, master, the remote's default), a force
@@ -265,21 +265,15 @@ def delete_target(word, cwd, root):
 
 
 def in_sibling_worktree(target, root):
-    """True when target is in another worktree registered to this repository (a thread's checkout
-    next to this one): anything inside one, or a linked one as a whole; never the main
-    checkout's root, nor anything in a .git."""
+    """True when target is in, or is, another linked worktree registered to this repository (a
+    thread's checkout next to this one), outside its .git. The main checkout stays outside: it can
+    hold uncommitted work, and a bare repository's folder is all history."""
     listing = git(root, "worktree", "list", "--porcelain")
     entries = [block.splitlines() for block in listing.split("\n\n") if block.startswith("worktree ")]
-    trees = [None if "bare" in lines else Path(os.path.normpath(lines[0][len("worktree "):]))
-             for lines in entries]  # a bare repository's directory is all history: never a worktree
-    for i, tree in enumerate(trees):
-        if tree is None:
-            continue
+    linked = [Path(os.path.normpath(lines[0][len("worktree "):])) for lines in entries[1:]]  # [0]: main or bare
+    for tree in linked:
         for t in {target, Path(os.path.realpath(str(target)))}:
-            if t == tree:
-                if i > 0:  # the first entry is the main checkout
-                    return True
-            elif under(t, tree) and ".git" not in t.relative_to(tree).parts:
+            if t == tree or (under(t, tree) and ".git" not in t.relative_to(tree).parts):
                 return True
     return False
 
