@@ -85,8 +85,10 @@ offers this rule (with `attribution` off) once per machine at session start and 
 ```
 
 Also per project, committed: `CLAUDE.md` (the project's rules, which win over the kit),
-`.claude/skills/e2e/SKILL.md` (how to exercise the app), `.claude/review-decisions.md` (findings
-you declined, so reviews don't raise them again). Gitignored: `.claude/evidence/`,
+`.claude/skills/verify/SKILL.md` (how to run and exercise the app; Claude Code runs a skill of
+that name before each commit), `.claude/loop.md` (what a bare `/loop` does for this project's
+PR: fix CI, answer reviews, sync with the base; it never merges), `.claude/review-decisions.md`
+(findings you declined, so reviews don't raise them again). Gitignored: `.claude/evidence/`,
 `.claude/overnight/`, `.claude/lead/`.
 
 ### Auto mode environment, per repo

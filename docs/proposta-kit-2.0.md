@@ -136,7 +136,7 @@ Stato: **fatto** (in kit 1.4), **proposta** (da decidere), **no** (scartata, con
 | Notifica nativa quando la board guadagna lavoro per te | fatto | il mod confronta i conteggi a ogni tick; `$.ui.notify` una volta |
 | `/loop` nativo al posto di `/kit:go babysit` schedulato | fatto | la prompt schedulata non caricava la skill |
 | Thread come sessioni `claude --bg` + agent view | proposta | persistenza tra terminali, worktree, gruppi "Needs input / Ready for review" nativi, notifiche. Sostituirebbe metà della board. Da provare una giornata contro `kit:lead` |
-| `.claude/loop.md` scritto da `/kit:init` | proposta | il `/loop` nudo del progetto con gate, formato PR, pulizia; prosa, caricata solo dal loop |
+| `.claude/loop.md` scritto da `/kit:init` | fatto (senza merge automatico) | il `/loop` nudo del progetto: CI, review, conflitti, pulizia; a PR verde si ferma e lo dice; prosa, caricata solo dal loop |
 | Rendering delle opzioni di `kit:shape` in pagina annotabile (lavish) | no | già in trial candidate; nessuna prova nuova |
 
 ### Efficienza (token, prompt, tempo)
@@ -231,8 +231,8 @@ in più per thread (circa 60 token) con il comando del gate.
 ## 5. Da decidere (in ordine di impatto)
 
 Decisioni già prese dall'utente il 29 ottobre: guard come in 1.3 (niente regole su deploy,
-segreti, push altrove, niente fail-closed), nessun blocco della PR, `loop.md` da `/kit:init` da
-preparare e mostrare prima; sweep post-merge, `kit-supabase` e ultrareview non ora.
+segreti, push altrove, niente fail-closed), nessun blocco della PR, `loop.md` da `/kit:init`
+approvato senza merge automatico; sweep post-merge, `kit-supabase` e ultrareview non ora.
 
 1. **Thread come `claude --bg` + agent view, o `kit:lead` com'è?** Una giornata su un repo con
    entrambi; si tiene chi dà PR giudicabili con meno messaggi.

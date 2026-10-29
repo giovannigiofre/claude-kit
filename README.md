@@ -18,7 +18,7 @@ the model can't do alone, re-checked when a new model lands.
 
 | When | Type | What happens |
 |---|---|---|
-| Once per project | `/kit:init` | writes `.claude/kit.json` (check, verify, formatters, protected paths), an e2e skill that says how to exercise the app, and proposes safety and permissions |
+| Once per project | `/kit:init` | writes `.claude/kit.json` (check, verify, formatters, protected paths), a `verify` skill that says how to exercise the app, a `loop.md` that tells the native `/loop` how to tend a PR (never merging), and proposes safety and permissions |
 | All day | just talk | in a project with `kit.json`, loop mode is on by default: every message goes to the coordinator (`kit:lead`), which answers, starts a thread or steers one, in at most four lines |
 | A messy idea | just write it | the coordinator (or `kit:shape`) asks 2-3 multiple-choice rounds and writes a brief with a checkable DONE WHEN |
 | Something broke | describe it | `kit:investigate`: evidence (asks you once, with exact export steps), reproduction, hypotheses, a regression-tested fix |

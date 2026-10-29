@@ -50,8 +50,9 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
    what you touched, push; at most 3 rounds, then report. A merge conflict: sync as in step 3.
    Review comments that ask for a product decision go to the user. If CI takes longer than
    about 10 minutes, hand over to Claude Code's own loop: a bare `/loop` tends this branch's PR
-   (comments, failed CI, conflicts) at its own pace. (`/kit:go babysit` works when the user types
-   it; a scheduled prompt cannot invoke a user-only skill.)
+   (comments, failed CI, conflicts) at its own pace, the way `.claude/loop.md` says when the
+   project has one. (`/kit:go babysit` works when the user types it; a scheduled prompt cannot
+   invoke a user-only skill.)
 8. **Merge per the project's policy** (`.claude/kit.json` `lead.merge`): `agent` merges once CI
    is green, nothing from the review is open and the risk is not high (`gh pr merge --squash
    --delete-branch`, or the method the repo allows); `user`, or a high risk, leaves the PR for

@@ -58,12 +58,17 @@ and its CI actually run, not guesses.
    constraints and decisions stated exactly, user preferences, in-flight work and branches, open
    items, failing checks, exact names, paths and numbers; drop tool output already acted on),
    unless there is one.
-9. **Safety**, in three lines: the kit guard is on with `kit.json` (blocks deletes outside the
+9. **The maintenance loop**: write `.claude/loop.md` from [loop.md](loop.md) with the
+   project's values (name, git author, default branch, the kit's install path from
+   `claude plugin marketplace list --json`), and commit it. Claude Code's bare `/loop` reads it
+   instead of its built-in maintenance prompt, so a long CI or a review round is tended the way
+   this project wants: fix, gate, push, answer; never a merge.
+10. **Safety**, in three lines: the kit guard is on with `kit.json` (blocks deletes outside the
    repo, pushes to main, discarding uncommitted work, `sudo`, `curl | sh`, reading credentials;
    best effort, it reads shell text; `guard.denyCommands` / `askCommands` hold the project's own
    rules). Then ask which profile the project uses: **Host** (no OS sandbox) or **Sandbox**
    (`/kit-safety sandbox`).
-10. **Permissions and authorship**: propose (never write silently) allow rules in
+11. **Permissions and authorship**: propose (never write silently) allow rules in
     `.claude/settings.json` for the read-only, check and verify commands; suggest the built-in
     `/fewer-permission-prompts`. The user is the only author of commits and PRs: in the same file
     set `"attribution": {"commit": "", "pr": "", "sessionUrl": false}` (merge, never drop keys), and
@@ -72,7 +77,7 @@ and its CI actually run, not guesses.
     machine-level settings (no attribution, and an auto mode rule that lets agents rewrite the
     branches they created) are offered by the kit at session start; if the user declined them
     before and wants them now, run `python3 <kit>/hooks/scripts/machine_setup.py --apply`.
-11. **Auto mode environment**: auto mode reads its environment from user settings only, so the
+12. **Auto mode environment**: auto mode reads its environment from user settings only, so the
     kit keeps each repo's approved lines in the user's Claude config and adds them there, scoped
     to this repo's origin. Draft `{"environment": ["**Organization**: ...", ...]}` from what the
     repo shows: the remote's org, cloud manifests (project, region, registry), secret and `.env`
@@ -82,9 +87,9 @@ and its CI actually run, not guesses.
     earlier; pipe the draft to `python3 $S --preview -` and show the user its full output (the
     exact lines, origin and paths included). Only on approval pipe the same draft to
     `python3 $S --set -`; `--remove` forgets the repo.
-12. **Domain plugins**: if the repo has a frontend, or code that calls an LLM, offer `kit-ui` or
+13. **Domain plugins**: if the repo has a frontend, or code that calls an LLM, offer `kit-ui` or
     `kit-llm` for this project now (`kit:extras` explains the install).
-13. Write `.claude/kit.json`, show it, and explain that it is committed so every clone and session
+14. Write `.claude/kit.json`, show it, and explain that it is committed so every clone and session
     gets the same gates. Confirm the hooks fire: make a trivial edit to a file matching an
     `onEdit` glob, revert it, and report what ran.
 
