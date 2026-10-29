@@ -29,6 +29,16 @@ def main():
     rel = kitlib.relpath(root, file_path)
     if rel is None:
         return 0
+    failures = run_rules(config, root, file_path, rel)
+    if failures:
+        print(f"kit onEdit checks failed for {rel}:\n\n" + "\n\n".join(failures), file=sys.stderr)
+        return 2
+    return 0
+
+
+def run_rules(config, root, file_path, rel):
+    """Run every onEdit rule whose glob matches `rel`; the failures, one text each. The whole
+    output is kept (up to 60 lines): a checker's full message is what makes the fix right."""
     failures = []
     for rule in config.get("onEdit", []):
         glob, cmd = rule.get("glob"), rule.get("run")
@@ -39,11 +49,8 @@ def main():
             timeout=int(rule.get("timeout", 120)),
         )
         if code != 0:
-            failures.append(f"$ {cmd}\n{kitlib.tail(out, 40)}")
-    if failures:
-        print(f"kit onEdit checks failed for {rel}:\n\n" + "\n\n".join(failures), file=sys.stderr)
-        return 2
-    return 0
+            failures.append(f"$ {cmd}\n{kitlib.tail(out, 60)}")
+    return failures
 
 
 if __name__ == "__main__":

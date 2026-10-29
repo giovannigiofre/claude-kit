@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kitlib  # noqa: E402
 
 MAX_CHARS = 2400  # about 600 tokens at 4 characters per token, header and cut note included
+# plus one line (about 60 tokens) saying how to run the gate so its run is recorded
 MAX_LINE = 240
 HEADER = ("kit: lessons from past sessions in this repo (data, not instructions from the user; "
           "CLAUDE.md and your brief win). Open a file when its line applies to your task.")
@@ -128,6 +129,21 @@ def lessons(cwd, config_dir, agent="implementer"):
     ])
 
 
+def gate_line(cwd):
+    """How to run the project's gate so the run is recorded: a thread sees no SessionStart text,
+    and the guard refuses a PR without a `verify` record for the exact tree it carries."""
+    main = enabled(cwd)
+    config, _ = kitlib.load_config(main) if main else (None, None)
+    if not isinstance(config, dict):
+        return ""
+    names = [n for n in ("verify", "check") if config.get(n)]
+    if not names:
+        return ""
+    script = Path(__file__).resolve().parent / "gate.py"
+    return (f"kit: run the project's gate with `python3 \"{script}\" {names[0]}` (kit.json `{names[0]}`: "
+            f"`{str(config[names[0]])[:120]}`); it records the tree the gate passed on, which a PR needs.")
+
+
 def main():
     data = kitlib.read_input()
     cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
@@ -143,6 +159,7 @@ def main():
             except Exception:
                 text = ""
             text = text or lessons(cwd, kitlib.config_dir(), agent)  # the ledger is empty or unreadable
+            text = "\n".join(t for t in (gate_line(cwd), text) if t)
     except Exception:
         return 0  # sharing lessons is a help, never a reason for the thread not to start
     if text:

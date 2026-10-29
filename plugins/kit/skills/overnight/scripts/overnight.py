@@ -179,23 +179,35 @@ Never touch files outside this repository, secrets, credentials or production sy
 """
 
 
-def run_agent(args, prompt, root, budget_left, resume=None):
+def agent_command(args, prompt, budget_left=None, resume=None):
+    """The claude -p command line of one iteration."""
     cmd = shlex.split(args.agent_cmd) + ["-p", prompt, "--output-format", "json",
-                                         "--json-schema", json.dumps(REPORT_SCHEMA),
-                                         "--append-system-prompt", UNATTENDED]
+                                         "--json-schema", json.dumps(REPORT_SCHEMA)]
+    if not args.no_unattended_note:
+        cmd += ["--append-system-prompt", UNATTENDED]
     if resume:
         cmd += ["--resume", resume]
     if args.effort:
         cmd += ["--effort", args.effort]
-    if args.permission_mode:
-        cmd += ["--permission-mode", args.permission_mode]
+    # headless sessions cannot answer a prompt: anything that would ask is denied at once instead
+    # of waiting (claude -p starts in the manual mode since 2.1.302 unless a mode is given)
+    cmd += ["--permission-mode", args.permission_mode or "auto", "--permission-prompts", "none"]
     if args.model:
         cmd += ["--model", args.model]
+    if args.fallback_model:
+        cmd += ["--fallback-model", args.fallback_model]
+    if args.max_turns:
+        cmd += ["--max-turns", str(args.max_turns)]
     if getattr(args, "sandbox_block", None):
         cmd += ["--settings", json.dumps({"sandbox": args.sandbox_block})]
     per_iter = [b for b in (budget_left, args.iteration_usd) if b is not None]
     if per_iter:
         cmd += ["--max-budget-usd", f"{max(min(per_iter), 0.01):.2f}"]
+    return cmd
+
+
+def run_agent(args, prompt, root, budget_left, resume=None):
+    cmd = agent_command(args, prompt, budget_left, resume)
     try:
         # KIT_HEADLESS: the kit's hooks skip anything that needs a person to answer
         out = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=args.iteration_timeout,
@@ -251,8 +263,15 @@ def main(argv=None):
                    help="waits in a row before a rate limit counts as a failure (default 24: 6 h at 900 s)")
     p.add_argument("--branch", help="branch for the run (default overnight/<slug>-<run id>)")
     p.add_argument("--worktree", help="run in a new git worktree at this path instead of the current checkout")
-    p.add_argument("--permission-mode", help="passed to the agent, e.g. auto or acceptEdits (default: your settings)")
-    p.add_argument("--model", help="passed to the agent")
+    p.add_argument("--permission-mode", help="passed to the agent (default auto: a headless session cannot answer a prompt; "
+                                             "anything that would ask is denied, whatever the mode)")
+    p.add_argument("--model", help="passed to the agent (a Fable or Mythos model needs --allow-credits: in -p mode it "
+                                   "bills usage credits without asking)")
+    p.add_argument("--fallback-model", help="passed to the agent: model(s) to fall back to when the main one is overloaded")
+    p.add_argument("--allow-credits", action="store_true", help="allow a model that bills usage credits (Fable, Mythos)")
+    p.add_argument("--max-turns", type=int, default=None, help="passed to the agent: cap on turns per iteration")
+    p.add_argument("--no-unattended-note", action="store_true",
+                   help="do not append the kit's note about unattended runs to the agent's system prompt")
     p.add_argument("--effort", help="passed to the agent: low, medium, high, xhigh or max (default: your settings)")
     p.add_argument("--max-continuations", type=int, default=2,
                    help="times to resume an iteration that reports progress without a change (default 2)")
@@ -263,6 +282,9 @@ def main(argv=None):
     p.add_argument("--dry-run", action="store_true", help="print the plan and the first prompt, run nothing")
     argv = sys.argv[1:] if argv is None else list(argv)
     args = p.parse_args(argv)
+    if args.model and re.search(r"fable|mythos", args.model, re.I) and not args.allow_credits:
+        p.error(f"--model {args.model} bills usage credits in headless runs without asking; pass --allow-credits "
+                "if that is what you want, or use an Opus model")
     given = {a.dest for a in p._actions
              if any(tok.split("=", 1)[0] in a.option_strings for tok in argv if tok.startswith("-"))}
 
@@ -319,6 +341,8 @@ def main(argv=None):
         print("overnight: WARNING no budget set - the run ends only on the stop condition, "
               f"{args.max_failures} consecutive failures, or Ctrl-C")
     if args.dry_run:  # nothing is created or checked out
+        shown = [a if a != "<prompt>" else "'<the prompt below>'" for a in agent_command(args, "<prompt>", args.iteration_usd)]
+        print("agent command: " + " ".join(a if a.startswith("'") else shlex.quote(a) for a in shown))
         print("\n" + build_prompt(args, state["iteration"] + 1, notes_path, gate))
         return 0
 

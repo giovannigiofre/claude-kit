@@ -75,8 +75,10 @@ carries everything it needs:
 When a thread reports:
 
 - **Done, gate green, with evidence:** if its risk is medium or high, have `kit:verifier` review
-  the branch in the background against the intent, and send real findings back to the thread.
-  Then mark it `review` (`done` for local work) and apply the merge policy.
+  the branch in the background, briefed with the item's goal, DONE WHEN and branch (not with the
+  thread's report), and send real findings back to the thread. Then mark it `review` (`done` for
+  local work) and apply the merge policy. Once a PR is merged, remove the thread's worktree and
+  branch (`git worktree remove`, `git branch -D` after `git fetch --prune`).
 - **Blocked, a question, or still failing after 3 rounds:** `needs-you`, the question in one line.
 
 **Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it
@@ -104,11 +106,13 @@ and anything outside the repo always need the user's go-ahead.
 
 ## Standing loops
 
-kit.json `lead.loops`, e.g. `{"name": "babysit-prs", "every": "10m", "run": "/kit:go babysit"}`
-or `{"name": "cleanup", "every": "1d", "run": "/simplify and /code-review on today's merges, a
-small PR if anything is worth it"}`. Create the missing ones with CronCreate after checking
-CronList; they are session-only, expire after 7 days and fire only while the session is idle
-(say so). When one fires, hand its work to a background thread and reply in one line.
+kit.json `lead.loops`, e.g. `{"name": "tend-prs", "every": "10m", "run": "tend the threads' open
+PRs: failed CI, review comments, merge conflicts"}` or `{"name": "cleanup", "every": "1d", "run":
+"/simplify and /code-review on today's merges, a small PR if anything is worth it"}`. Write the
+task in words: a scheduled prompt cannot invoke a user-only skill such as `/kit:go`. Create the
+missing ones with CronCreate after checking CronList; they are session-only, expire after 7 days
+and fire only while the session is idle (say so). When one fires, hand its work to a background
+thread and reply in one line.
 
 ## Stop
 

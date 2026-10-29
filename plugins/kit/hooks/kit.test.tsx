@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 // The world beneath the kit mod: a repo at /repo, a home at /home/u, files in memory.
-function world(on: On, files: Record<string, string> = {}) {
+function world(on: On, files: Record<string, string> = {}, agents: any[] = []) {
   mock.store(on)
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.env(on, { HOME: '/home/u' })
@@ -22,7 +22,7 @@ function world(on: On, files: Record<string, string> = {}) {
   })
   on('fs.list', () => ({ deny: 'ENOENT' }))
   on('settings.read', () => ({ value: {} }))
-  on('agent.list', () => ({ value: [] }))
+  on('agent.list', () => ({ value: agents }))
   on('command.register', (_, e: any) => ({ value: { command: e.name } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   return { written, clock }
@@ -162,6 +162,42 @@ test('the status line follows the board on every tick', async ($, on) => {
   await clock.advance(15000)
   expect(lines.at(-1)).not.toContain('ready')
   expect(lines.at(-1)).not.toContain('need you')
+})
+
+// The notification itself needs an engine whose mods have $.ui.notify (Claude Code 2.1.295+ per
+// its docs); the test runtime of this version has none, so the test checks the line and that a
+// missing notify never breaks the tick.
+test('a thread waiting for an answer counts on the line; a board that gains work for the person keeps the line right', async ($, on) => {
+  const files: Record<string, string> = {
+    '/repo/.claude/lead/board.md': 'NEEDS YOU: none\nA1 | ship | login | DONE WHEN e2e | working | agent A1 | - | started',
+  }
+  const { clock } = world(on, files, [{ id: 'A1', status: 'waiting' }, { id: 'A2', status: 'running' }])
+  const lines: (string | undefined)[] = []
+  const notices: any[] = []
+  on('ui.status', (_, e) => {
+    lines.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.notify', (_, e: any) => {
+    notices.push(e)
+    return { value: { isSent: true, channel: 'terminal' } }
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  expect(lines.at(-1)).toBe('light · host · $1.50 · 1 running · 1 waiting')
+  expect(notices).toEqual([])
+
+  files['/repo/.claude/lead/board.md'] = [
+    'NEEDS YOU: A1: which region?',
+    'A1 | ship | login | DONE WHEN e2e | review | agent A1 | PR #3 | CI green',
+  ].join('\n')
+  await clock.advance(15000)
+  expect(lines.at(-1)).toContain('1 ready · 1 need you')
+  expect(notices.length).toBeLessThanOrEqual(1)
+  if (notices.length) expect(notices[0].summary).toBe('kit: 1 ready for review, 1 needs you')
+
+  await clock.advance(15000)
+  expect(lines.at(-1)).toContain('1 ready · 1 need you')
+  expect(notices.length).toBeLessThanOrEqual(1)
 })
 
 test('a pane an older kit left open is closed on session start', async ($, on) => {

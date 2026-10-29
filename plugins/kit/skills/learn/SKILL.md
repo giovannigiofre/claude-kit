@@ -44,7 +44,8 @@ Nothing copied.)
    needs two occurrences; with one, record it as a candidate (`$L add pitfall <key> "<text>" .`).
 2. **Pick the most mechanical home that works**, in this order:
    - a test, lint rule or script in the repo, whose error message says how to fix it;
-   - a `check`, `onEdit` or `protect` entry in `.claude/kit.json`;
+   - a `check`, `onEdit` or `protect` entry in `.claude/kit.json`, or for "never run X here" a
+     `guard.denyCommands` / `guard.askCommands` entry (a regex over the command, with the reason);
    - a project skill in `.claude/skills/` when it matters only for one kind of task;
    - a line in the repo's CLAUDE.md (or AGENTS.md) when every session needs it;
    - the user's `~/.claude/CLAUDE.md` for a personal preference across projects.

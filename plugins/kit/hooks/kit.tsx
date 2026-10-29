@@ -7,8 +7,9 @@
 // - Safety, per project: `host` (no OS sandbox; the kit's guard hook still blocks the
 //   irreversible actions) or `sandbox` (Claude Code's Bash sandbox, written by the kit into
 //   .claude/settings.local.json, which the overnight runner passes to its iterations too).
-// - The status line: mode, safety, session cost, threads running, live overnight runs, board
-//   items ready for review and questions for the person, re-read every 15 seconds.
+// - The status line: mode, safety, session cost, threads running and waiting for an answer, live
+//   overnight runs, board items ready for review and questions for the person, re-read every 15
+//   seconds; one native notification when the board gains a ready item or a question.
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 type KitMode = 'light' | 'loop'
@@ -222,11 +223,36 @@ async function liveOvernightRuns($: $, root: string): Promise<number> {
   return live
 }
 
-async function runningAgents($: $): Promise<number> {
+// Threads at work, and threads waiting for an answer (a question, a permission): the second
+// kind needs the person as much as a NEEDS YOU line on the board.
+async function agentCounts($: $): Promise<{ running: number; waiting: number }> {
   try {
-    return (await $.agent.list()).filter(a => a.status === 'running' || a.status === 'pending').length
+    const agents = await $.agent.list()
+    return {
+      running: agents.filter(a => a.status === 'running' || a.status === 'pending').length,
+      waiting: agents.filter(a => (a.status as string) === 'waiting').length,
+    }
   } catch {
-    return 0
+    return { running: 0, waiting: 0 }
+  }
+}
+
+// One native notification when the board gains something for the person (a thread finished and
+// its PR is ready, or a question appeared) while they may be away. The coordinator's own
+// message does the same when it can; this is the backstop that needs no model.
+async function notifyBoardChange($: $, before: BoardCounts | null, after: BoardCounts): Promise<void> {
+  if (!before) return
+  const ready = after.ready - before.ready
+  const needs = after.needs - before.needs
+  if (ready <= 0 && needs <= 0) return
+  const parts: string[] = []
+  if (ready > 0) parts.push(`${ready} ready for review`)
+  if (needs > 0) parts.push(`${needs} need${needs === 1 ? 's' : ''} you`)
+  try {
+    // an engine without $.ui.notify (2.1.295+), or without a channel, throws here: the line still shows it
+    await $.ui.notify({ summary: `kit: ${parts.join(', ')}`, detail: 'See the board (.claude/lead/board.md) or ask the coordinator.' })
+  } catch {
+    // nothing to do
   }
 }
 
@@ -246,12 +272,16 @@ async function refreshStatus($: $): Promise<void> {
     // spend unavailable: draw without it
   }
   const board = await readBoard($, root)
-  if (board !== undefined) lastBoard = board
-  const running = await runningAgents($)
+  if (board !== undefined) {
+    await notifyBoardChange($, lastBoard, board)
+    lastBoard = board
+  }
+  const { running, waiting } = await agentCounts($)
   const live = await liveOvernightRuns($, root)
   const parts: string[] = [mode, safety]
   if (costUsd !== null) parts.push(`$${costUsd.toFixed(2)}`)
   if (running) parts.push(`${running} running`)
+  if (waiting) parts.push(`${waiting} waiting`)
   if (live) parts.push(`${live} overnight`)
   if (lastBoard && lastBoard.ready) parts.push(`${lastBoard.ready} ready`)
   if (lastBoard && lastBoard.needs) parts.push(`${lastBoard.needs} need you`)

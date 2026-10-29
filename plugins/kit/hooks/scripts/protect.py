@@ -13,6 +13,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kitlib  # noqa: E402
 
 
+def violation(config, rel, exists):
+    """The protect rule an edit of `rel` breaks, as (glob, mode, reason), or None."""
+    for rule in config.get("protect", []):
+        glob, mode = rule.get("glob"), rule.get("mode", "read-only")
+        if not glob or not kitlib.matches(glob, rel):
+            continue
+        if mode == "read-only" or (mode == "no-overwrite" and exists):
+            return glob, mode, rule.get("reason", "")
+    return None
+
+
 def main():
     data = kitlib.read_input()
     tool_input = data.get("tool_input") or {}
@@ -29,19 +40,15 @@ def main():
     rel = kitlib.relpath(root, file_path)
     if rel is None:
         return 0
-    exists = Path(file_path).exists()
-    for rule in config.get("protect", []):
-        glob, mode = rule.get("glob"), rule.get("mode", "read-only")
-        if not glob or not kitlib.matches(glob, rel):
-            continue
-        why = rule.get("reason", "")
-        if mode == "read-only" or (mode == "no-overwrite" and exists):
-            print(
-                f"kit protect: {rel} matches '{glob}' ({mode}). {why} "
-                "Write a new file instead, or ask the user to change .claude/kit.json.",
-                file=sys.stderr,
-            )
-            return 2
+    found = violation(config, rel, Path(file_path).exists())
+    if found:
+        glob, mode, why = found
+        print(
+            f"kit protect: {rel} matches '{glob}' ({mode}). {why} "
+            "Write a new file instead, or ask the user to change .claude/kit.json.",
+            file=sys.stderr,
+        )
+        return 2
     return 0
 
 
