@@ -8,10 +8,9 @@
 A gate that ran is a claim until something records what it ran on. The record,
 .claude/evidence/<branch>/gate-<name>.json, holds the command, its exit code, how long it took,
 the hash of the tree it ran on (committed and uncommitted content, ignored files left out) and the
-last lines of its output. The guard reads it before a PR is opened (`gh pr create`, the GitHub
-MCP tool): a PR needs a passing verify on exactly the tree it carries, so a change made after
-the last run, or a "tests pass" with no run behind it, is caught by a machine and not by the
-reviewer. Threads, /kit:go and the verifier run the gate through this script for that reason.
+last lines of its output: the evidence a PR body and a reviewer can cite, and `status` tells
+whether the last run still covers the tree as it is now. Threads, /kit:go and the verifier run
+the gate through this script for that reason. Nothing blocks on it.
 
 The gate command gets KIT_CHANGED_FILES (the files this branch touched, shell-quoted) and
 KIT_CHANGED_COUNT, so a `check` can be diff-aware. Standard library only, Python 3.9+.

@@ -16,8 +16,7 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
     {"glob": "vendor/**", "mode": "read-only", "reason": "vendored code"}
   ],
   "guard": {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40, "allowCommands": [],
-            "deploy": "ask", "denyCommands": [{"pattern": "^npm install\\b", "reason": "pnpm only here"}], "askCommands": []},
-  "pr": {"sections": ["Intent", "Evidence", "Risk"], "gate": "verify"},
+            "denyCommands": [{"pattern": "^npm install\\b", "reason": "pnpm only here"}], "askCommands": []},
   "llm": "on",
   "learn": {"model": true},
   "author": "Giovanni Giofré <99892523+giovannigiofre@users.noreply.github.com>",
@@ -47,24 +46,10 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   "$KIT_CHANGED_FILES" | xargs -r ruff check` keeps names with spaces whole), `KIT_CHANGED_COUNT`
   and `KIT_GATE` in its environment, so `check` can look only at what changed. `gate.py` passes
   the same.
-- `pr` (on by default when `verify` exists): what `gh pr create` and the GitHub MCP tool need
-  before the guard lets a PR open. `sections`: headings or `Name:` labels the body must carry
-  (default Intent, Evidence, Risk); `gate`: `verify` (default), `check` or `false`: the named
-  gate must have passed, through `gate.py`, on exactly the tree the PR carries (a clean working
-  tree whose content hash equals the record's; the PR body file may sit untracked). A body that
-  names a path on this machine is refused. A draft or `--web` PR is let through. `"pr": "off"`
-  turns the whole check off.
 - `guard`: on by default in a project with `kit.json`; `"off"` turns it off. `protectedBranches`
-  defaults to main, master and the remote's default branch. `deploy` (default `ask`): what
-  happens to a command that changes a live environment (deploys, production flags, remote
-  migrations, platform secrets, cloud deletes, publishes, `gh repo create`, `gh api DELETE`,
-  also behind `npx`, `pnpm dlx`, `uv run` or `python -m`): `ask` (the user confirms; a headless
-  run is denied), `allow`, or `deny`. `denyCommands` / `askCommands`: the project's own rules,
-  `{"pattern": "<regex over the whole command>", "reason": "..."}` each; `/kit:learn` writes one
-  when a lesson is "never run X here". A push to a remote other than origin asks; `git add` or
-  `commit` of `.env*` (not `.example`/`.sample`/`.template`/`.dist`), ssh keys, `.pem`/`.key` files
-  that hold a private key, keystores, service-account or credentials JSON, `.netrc`, `.pypirc`
-  is refused, also when `-A`, `.` or a folder would sweep it in. `agentsAsk` / `agentsDeny` are an
+  defaults to main, master and the remote's default branch. `denyCommands` / `askCommands`: the
+  project's own rules, `{"pattern": "<regex over the whole command>", "reason": "..."}` each
+  (a plain string is a pattern); `/kit:learn` writes one when a lesson is "never run X here". `agentsAsk` / `agentsDeny` are an
   optional per-session cap on subagents (ask past one, refuse past the other); the native
   `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` caps how many run at once. `allowCommands`: regexes the
   guard lets through. `attribution` (default `"block"`): blocks AI credits in commit messages, PR,
@@ -177,12 +162,12 @@ python3 <kit>/hooks/scripts/gate.py status [verify|check]  # does the last recor
 The record, `.claude/evidence/<branch>/gate-<name>.json`, holds the command, exit code, duration,
 the hash of the tree it ran on (committed and uncommitted content, ignored files left out, so a
 commit of the same content keeps the hash), whether the gate itself changed files (a formatter),
-and the last 25 lines of output. The guard reads it before a PR opens (see `pr` above): a gate
-that ran is a claim until something records what it ran on. Threads and the verifier are told
-the exact command at start (SubagentStart), `/kit:go` runs it in step 4, and the guard's refusal
-names it. `.claude/evidence/` is added to `.git/info/exclude` when the project does not ignore
-it. Every hook that takes a snapshot of the tree uses the same hash (the Stop hook, to know
-whether anything changed).
+and the last 25 lines of output: a gate that ran is a claim until something records what it ran
+on, and this is what the PR's Evidence section and the verifier cite. Nothing blocks on it.
+Threads and the verifier are told the exact command at start (SubagentStart) and `/kit:go` runs
+it in step 4. `.claude/evidence/` is added to `.git/info/exclude` when the project does not
+ignore it. The Stop hook uses the same hash to know whether anything changed since its last
+passing check.
 
 ## Edits made through the shell
 

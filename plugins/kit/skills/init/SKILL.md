@@ -59,12 +59,10 @@ and its CI actually run, not guesses.
    items, failing checks, exact names, paths and numbers; drop tool output already acted on),
    unless there is one.
 9. **Safety**, in three lines: the kit guard is on with `kit.json` (blocks deletes outside the
-   repo, pushes to main, discarding uncommitted work, `sudo`, `curl | sh`, reading credentials,
-   committing `.env` and key files; asks before a deploy, a remote migration, a publish or a
-   cloud delete; best effort, it reads shell text). A PR needs Intent, Evidence and Risk in its
-   body and a `verify` recorded on the exact tree it carries (`"pr": "off"` turns that off,
-   `pr.sections` changes the list). Then ask which profile the project uses: **Host** (no OS
-   sandbox) or **Sandbox** (`/kit-safety sandbox`).
+   repo, pushes to main, discarding uncommitted work, `sudo`, `curl | sh`, reading credentials;
+   best effort, it reads shell text; `guard.denyCommands` / `askCommands` hold the project's own
+   rules). Then ask which profile the project uses: **Host** (no OS sandbox) or **Sandbox**
+   (`/kit-safety sandbox`).
 10. **Permissions and authorship**: propose (never write silently) allow rules in
     `.claude/settings.json` for the read-only, check and verify commands; suggest the built-in
     `/fewer-permission-prompts`. The user is the only author of commits and PRs: in the same file
@@ -100,8 +98,7 @@ Schema:
   "maxStopRetries": 3,
   "onEdit": [{"glob": "**/*.py", "run": "...\"$FILE\"...", "timeout": 120}],
   "protect": [{"glob": "data/raw/**", "mode": "no-overwrite", "reason": "raw files are immutable"}],
-  "guard": {"protectedBranches": ["main"], "allowCommands": [], "deploy": "ask", "denyCommands": []},
-  "pr": {"sections": ["Intent", "Evidence", "Risk"], "gate": "verify"},
+  "guard": {"protectedBranches": ["main"], "allowCommands": [], "denyCommands": []},
   "author": "Name <email>",
   "lead": {"read": ["docs/backlog.md"], "backlog": "docs/backlog.md", "notes": "...", "ship": "pr", "merge": "user", "parallel": 3}
 }

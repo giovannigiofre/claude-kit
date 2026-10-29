@@ -14,8 +14,11 @@ I rapporti completi sono stati scritti nel corso della sessione; le fonti sono i
 segnate *[sec.]* sono state lette tramite riassunti o estratti, perché il sito non era
 raggiungibile dalla sessione (arxiv.org, x.com, simonwillison.net, vercel.com, metr.org).
 
-> **Stato: implementata in kit 1.4** (29 ottobre 2026) per la parte deterministica; le opzioni
-> che cambiano il modo di lavorare restano qui come proposte, con la decisione da prendere.
+> **Stato: implementata in kit 1.4** (29 ottobre 2026) per la parte deterministica che
+> l'utente ha tenuto. Lo stesso giorno l'utente ha deciso che il guard resta quello di 1.3:
+> le regole su deploy, segreti in git, push altrove e fail-closed, e il blocco della PR senza
+> gate registrato, sono state costruite e tolte (restano descritte qui e in CATALOG.md). Le
+> opzioni che cambiano il modo di lavorare restano proposte, con la decisione da prendere.
 
 ---
 
@@ -29,8 +32,8 @@ raggiungibile dalla sessione (arxiv.org, x.com, simonwillison.net, vercel.com, m
 2. **Il buco più grande non era nelle istruzioni, ma nelle prove.** "I test passano" era una
    frase; niente registrava su quale albero il gate fosse passato. Le PR degli agenti, misurate su
    4.882 PR, lasciano il 27 % delle righe Python cambiate senza nessun test che le esegua. Ora il
-   gate registra l'albero su cui è passato e il guard non apre una PR senza quel record, senza le
-   sezioni Intento / Evidenza / Rischio, o con un percorso della macchina nel testo.
+   gate registra l'albero su cui è passato (`gate.py`), e la PR lo cita come prova; il blocco
+   della PR senza record è stato provato e tolto per scelta dell'utente.
 3. **In auto mode Claude modifica i file con `sed` e heredoc**, e un hook su `Write|Edit` non lo
    vede. `protect` e `onEdit` valevano solo per lo strumento Edit. Ora valgono anche per la shell.
 4. **Molto è diventato nativo** in sei giorni di changelog: `onFailure: "block"` sugli hook, il
@@ -54,8 +57,8 @@ raggiungibile dalla sessione (arxiv.org, x.com, simonwillison.net, vercel.com, m
 **R13. Un gate che ha girato è una pretesa finché qualcosa non registra su cosa ha girato.**
 gstack rifiuta nella merge queue una PR che non è passata da `/ship`; ECLoop (arXiv 2607.28815)
 tiene ferme le azioni finché le condizioni di prova non valgono: +4,8-11,8 punti su SWE-bench
-Verified, dichiarati dagli autori *[sec.]*. → `gate.py` registra l'hash dell'albero; il guard lo
-confronta con l'albero della PR.
+Verified, dichiarati dagli autori *[sec.]*. → `gate.py` registra l'hash dell'albero; `status`
+dice se il record copre ancora l'albero. Il blocco della PR è stato scartato dall'utente.
 
 **R14. Le PR degli agenti sono poco testate dove cambiano.** Dipongkor et al. (arXiv 2607.18057):
 4.882 PR, 5 agenti; il 61,5 % delle righe Java cambiate e il 27 % di quelle Python eseguite da un
@@ -96,9 +99,9 @@ prima/dopo senza un posto dove caricarlo. `gh 2.99` ha `--attach`. → `--attach
 di PR; il guard chiede prima di `gh repo create` e rifiuta un percorso della macchina nel corpo.
 
 **R20. Un hook che non parte non deve lasciar passare.** Claude Code 2.1.295 (`onFailure:
-"block"`), gstack 1.91.218 ("blocks skills when its gate can't run"). → `protect` e `guard`
-bloccano se crashano o vanno in timeout; `on_edit`, `bash_edits` e `stop_check` no, perché un
-loro crash non deve fermare il lavoro.
+"block"`), gstack 1.91.218 ("blocks skills when its gate can't run"). → Una riga in
+`hooks.json`; l'utente preferisce un guard che in caso di crash lascia passare a uno che ferma
+ogni comando finché non viene sistemato. Non adottata.
 
 ---
 
@@ -108,7 +111,7 @@ loro crash non deve fermare il lavoro.
 |---|---|---|
 | `/loop` nudo cura la PR del branch (commenti, CI rossa, conflitti); una prompt schedulata non può invocare una skill solo-utente | `/loop 10m /kit:go babysit` (non eseguiva mai la skill) | `/kit:go` passa a `/loop` nudo; i loop del lead sono scritti in parole |
 | skill di progetto `verify` eseguita prima di ogni commit (2.1.286), `/verify`, `/run` | skill `e2e` | `/kit:init` scrive `.claude/skills/verify/SKILL.md` |
-| `onFailure: "block"` (2.1.295) | fail open | su `protect` e `guard` |
+| `onFailure: "block"` (2.1.295) | fail open | resta fail open (scelta dell'utente) |
 | PermissionRequest hook | `/kit:init` proponeva allow rules | `permission.py`: `check` e `verify` del progetto senza prompt; `/fewer-permission-prompts` per il resto |
 | `$.agent.list()` con stato `waiting`, `$.ui.notify` (2.1.289, 2.1.295) | la status line contava solo i running; la notifica era prosa del lead | `N waiting` sulla riga; una notifica nativa quando la board guadagna un item `review` o una domanda |
 | tetto nativo di 8 blocchi dello Stop hook, `stop_hook_active` | `maxStopRetries` 3 | resta il 3 del kit, più stretto |
@@ -154,11 +157,11 @@ Stato: **fatto** (in kit 1.4), **proposta** (da decidere), **no** (scartata, con
 
 | Opzione | Stato | Cosa fa |
 |---|---|---|
-| Deploy, migrazioni remote, publish, delete cloud: chiedere | fatto | regola `deploy` del guard, anche dietro `npx`, `pnpm dlx`, `uv run`, `python -m`; `guard.deploy: ask|allow|deny` |
-| `.env` e chiavi mai in git | fatto | regola `commit-secret`, anche con `git add -A` |
-| Push verso un remote che non è origin: chiedere | fatto | regola `push-elsewhere` |
-| Regole di progetto deterministiche | fatto | `guard.denyCommands` / `askCommands`; `/kit:learn` le propone (idea da hookify) |
-| Hook fail-closed | fatto | `onFailure: "block"` su `protect` e `guard` |
+| Deploy, migrazioni remote, publish, delete cloud: chiedere | no (scelta) | costruita e tolta: il guard di 1.3 basta; la lista dei comandi è in CATALOG.md se servisse |
+| `.env` e chiavi mai in git | no (scelta) | idem; `gitleaks protect --staged` nel `check` copre lo stesso caso senza un hook |
+| Push verso un remote che non è origin: chiedere | no (scelta) | idem |
+| Regole di progetto deterministiche | fatto | `guard.denyCommands` / `askCommands`, vuote finché un progetto non le scrive; `/kit:learn` le propone (idea da hookify) |
+| Hook fail-closed | no (scelta) | `onFailure: "block"` resta una riga documentata in CATALOG.md |
 | Edit via shell coperti | fatto | `bash_edits.py` + snapshot del guard |
 | Runner notturno: `auto` + prompt negati, fallback model, max turns | fatto | |
 | Sweep post-merge (`sweep.py`) | proposta | worktree e branch delle PR mergiate, diff squash-safe, stop su file non tracciati; il lead ora fa la riga minima |
@@ -169,7 +172,7 @@ Stato: **fatto** (in kit 1.4), **proposta** (da decidere), **no** (scartata, con
 
 | Opzione | Stato | Cosa fa |
 |---|---|---|
-| Nessuna PR senza gate registrato sull'albero esatto, sezioni e niente percorsi locali | fatto | `gate.py` + regola `pr` del guard, anche per lo strumento MCP di GitHub |
+| Gate registrato sull'albero esatto, citato dalla PR | fatto (solo il record) | `gate.py` registra e `status` confronta; il blocco di `gh pr create` è stato tolto per scelta dell'utente |
 | Verifier con brief e branch, regole dal branch base | fatto | R16 |
 | Riga di scope nell'implementer | fatto | R18, misurata da Anthropic |
 | Prove allegate con `gh --attach` | fatto (istruzione) | R19 |
@@ -191,11 +194,9 @@ Deterministico, stdlib, con un test accanto a ogni pezzo:
   `.claude/evidence/<branch>/gate-<nome>.json` comando, esito, durata, hash dell'albero (contenuto
   committato e non, file ignorati esclusi), se il gate ha modificato file; `status` dice se il
   record copre l'albero com'è ora. `test_gate.py`.
-- `guard.py`: regole `deploy`, `commit-secret`, `push-elsewhere`, `project` (`denyCommands` /
-  `askCommands`), `pr` (sezioni, gate registrato, percorsi locali; anche
-  `mcp__github__create_pull_request`); i runner (`npx`, `pnpm dlx`, `uv run`, `python -m`)
-  vengono svolti prima di giudicare; snapshot dei file sporchi prima di ogni comando Bash.
-  +60 casi in `test_guard.py`.
+- `guard.py`: regola `project` (`denyCommands` / `askCommands`, vuote di default) e lo
+  snapshot dei file sporchi prima di ogni comando Bash, per `bash_edits.py`. Le regole su
+  deploy, segreti, push altrove e il controllo PR sono state tolte su richiesta dell'utente.
 - `bash_edits.py` (PostToolUse Bash): `onEdit` e `protect` sui file che un comando shell ha
   cambiato. `test_bash_edits.py`.
 - `permission.py` (PermissionRequest Bash): `check`, `verify` e gli script del kit senza
@@ -203,7 +204,7 @@ Deterministico, stdlib, con un test accanto a ogni pezzo:
 - `stop_check.py`: fingerprint sul contenuto dell'albero; `KIT_CHANGED_FILES`. `test_stop_check.py`.
 - `kitlib.py`: `changed_files`, `changed_env`, `dirty_snapshot`, `default_branch`.
 - `subagent_start.py`: una riga in più per ogni thread con il comando esatto del gate.
-- `hooks.json`: `onFailure: "block"`, matcher ancorati, i due hook nuovi.
+- `hooks.json`: matcher ancorati, i due hook nuovi (PermissionRequest, PostToolUse Bash).
 - `kit.tsx`: `N waiting`, notifica nativa su variazione della board; test del mod.
 - `overnight.py`: `auto` + `--permission-prompts none` di default, `--fallback-model`,
   `--max-turns`, `--allow-credits`, `--no-unattended-note`, comando mostrato in `--dry-run`.
@@ -215,8 +216,8 @@ Prosa, cambiata solo dove la ricerca lo giustifica:
 - `kit:verifier`: gate via `gate.py`; brief e regole dal branch base, non il racconto del thread.
 - `kit:lead`: brief del verifier, pulizia del worktree a PR mergiata, loop in parole.
 - `/kit:go`: gate via `gate.py` in step 4 e 6, `--attach`, `/loop` nudo per la CI lunga.
-- `/kit:init`: skill `verify`, `stacks.md`, `pr` e `guard.deploy` nello schema, compaction con
-  i sei punti della guida 5.1, `.worktreeinclude` e `symlinkDirectories`, blocco AGENTS.md di Next.
+- `/kit:init`: skill `verify`, `stacks.md`, compaction con i sei punti della guida 5.1,
+  `.worktreeinclude` e `symlinkDirectories`, blocco AGENTS.md di Next.
 - `/kit:learn`: `guard.denyCommands` tra le case possibili di una lezione.
 - `kit:overnight`: i flag nuovi.
 - `kit:investigate` `evidence-by-surface.md`: Supabase, Cloudflare, browser headless, MCP del
@@ -228,6 +229,10 @@ in più per thread (circa 60 token) con il comando del gate.
 ---
 
 ## 5. Da decidere (in ordine di impatto)
+
+Decisioni già prese dall'utente il 29 ottobre: guard come in 1.3 (niente regole su deploy,
+segreti, push altrove, niente fail-closed), nessun blocco della PR, `loop.md` da `/kit:init` da
+preparare e mostrare prima; sweep post-merge, `kit-supabase` e ultrareview non ora.
 
 1. **Thread come `claude --bg` + agent view, o `kit:lead` com'è?** Una giornata su un repo con
    entrambi; si tiene chi dà PR giudicabili con meno messaggi.

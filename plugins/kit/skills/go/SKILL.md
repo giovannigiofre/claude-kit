@@ -24,8 +24,8 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
    Resolve conflicts now, so what gets checked is what will merge.
 4. **Test it the way a user meets it.** Run the gate through
    `python3 ${CLAUDE_SKILL_DIR}/../../hooks/scripts/gate.py verify` (it runs kit.json `verify`
-   and records the tree it passed on; without that record the guard refuses the PR), else the
-   project's tests, lint, build. Then exercise the change: run the CLI, call the API, load the
+   and records the tree it passed on, for the Evidence section), else the project's tests,
+   lint, build. Then exercise the change: run the CLI, call the API, load the
    page (a project `verify` skill, or an older `e2e` one, says how). Save proof under
    `.claude/evidence/<branch>/` and write one line per scenario: `<scenario> | pass/fail |
    <evidence file>`. A test that mocks the changed path, or reading the code, is not evidence.
@@ -40,12 +40,10 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
    modules, auth, money, migrations, data deletion, public API), how much the evidence covers,
    how hard it is to roll back. Branch first if on the default branch. Stage only the files this
    work changed (no secrets, `.env`, large data or `.claude/evidence/`), commit as the repo's
-   configured git user with a message that says why (no AI co-author lines or footers), run the
-   gate again if anything changed since (the record must match the committed tree), push and
-   `gh pr create` (unless `no-pr`) with sections **Intent**, **Changes**,
+   configured git user with a message that says why (no AI co-author lines or footers), push
+   and `gh pr create` (unless `no-pr`) with sections **Intent**, **Changes**,
    **Evidence**, **Fixed along the way**, **Risk**, **Open**; attach screenshots and logs with
-   `--attach <file>` (gh 2.99+) rather than naming paths on this machine. Follow the repo's
-   commit and PR conventions.
+   `--attach <file>` (gh 2.99+). Follow the repo's commit and PR conventions.
 7. **Keep CI green** (unless `no-babysit`). With the Claude GitHub App on the repo,
    `/autofix-pr` watches the PR from the cloud. Otherwise watch `gh pr checks <PR> --watch`; on a
    failure read the log (`gh run view <id> --log-failed`), fix the root cause, re-run step 4 for

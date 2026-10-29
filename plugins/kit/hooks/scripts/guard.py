@@ -33,29 +33,9 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    claude.ai session link), a commit made under an AI git identity, or git's
                    identity set to one, by git, gh or a GitHub MCP tool;
                    guard.attribution = "allow" turns this rule off
-  commit-secret    git add or commit of a file that holds credentials (.env and .env.*, except
-                   .example/.sample/.template/.dist; private keys; keystores; service-account
-                   and credentials JSON; .netrc, .pypirc, .git-credentials), named or swept
-                   in by `git add -A`, `.` or a folder; gitignore it or add files by name
-  deploy           a command that changes a live environment outside the repository is asked
-                   about (denied in a headless run): deploys and production flags (vercel
-                   --prod, wrangler deploy, gcloud run deploy, firebase/fly/netlify deploy,
-                   kubectl apply, helm, terraform apply, pulumi up), remote database changes
-                   (supabase db push, --linked, prisma migrate deploy, wrangler d1 --remote),
-                   secrets and env changes on a platform, cloud deletes, publishes (npm,
-                   cargo, twine, docker push, gh release), gh repo delete and gh api DELETE,
-                   also behind npx, pnpm dlx, uv run or python -m.
-                   guard.deploy: "ask" (default) | "allow" | "deny"
-  push-elsewhere   a push to a remote other than origin is asked about (a fork, a URL)
   project          kit.json guard.denyCommands / guard.askCommands: the project's own rules,
                    each {"pattern": "<regex over the command>", "reason": "..."}; /kit:learn
                    writes one when a lesson deserves a check instead of a sentence
-  pr               `gh pr create` (and the GitHub MCP tool) in a project whose kit.json has
-                   `verify`: the body must carry the sections a reader judges a PR by
-                   (Intent, Evidence, Risk by default) and the gate must have passed, through
-                   gate.py, on exactly the tree the PR carries; a draft or --web PR is let
-                   through. kit.json: {"pr": {"sections": [...], "gate": "verify"}} or
-                   {"pr": "off"}. A body that names a path on this machine is refused too.
 
 Multi-line commands, subshells, braces, if/for/while bodies, $(...) and backticks, sh -c and
 `cd` within one command are followed; quoted text over several lines (a commit message) and
@@ -64,7 +44,7 @@ here-document bodies are arguments, not commands.
 Active when the project has .claude/kit.json (unless its "guard" is "off"), or everywhere when
 ~/.claude/kit.json says "guard": "on". Options, under "guard" in either file:
   {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40,
-   "allowCommands": ["^rm -rf /opt/my-build$"], "attribution": "block", "deploy": "ask",
+   "allowCommands": ["^rm -rf /opt/my-build$"], "attribution": "block",
    "denyCommands": [{"pattern": "^npm install(?! --frozen)", "reason": "use pnpm here"}], "askCommands": []}
 
 Before each Bash command in a project with kit.json it also notes which files are already
@@ -89,7 +69,6 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import gate  # noqa: E402
 import kitlib  # noqa: E402
 
 SHELLS = {"sh", "bash", "zsh", "dash", "fish", "ksh"}
@@ -712,11 +691,6 @@ def check_interpreter(argv):
     return None
 
 
-def set_upstream_remote(rest):
-    """`git push -u origin HEAD` names origin as a flag value in some shapes; never mind which."""
-    return "origin" if "origin" in rest else None
-
-
 def check_git(argv, cwd, opts):
     args = argv[1:]
     while args and args[0] in ("-C", "-c", "--git-dir", "--work-tree"):
@@ -736,17 +710,11 @@ def check_git(argv, cwd, opts):
         positional = [a for a in rest if not a.startswith("-")]
         refspecs = positional[1:] if len(positional) > 1 else []
         current = git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
-        elsewhere = positional[:1] and positional[0] != "origin"
-        if elsewhere and not (set_upstream_remote(rest) == "origin"):
-            elsewhere = ("ask", "push-elsewhere", f"push to '{positional[0]}', not origin: a fork or another "
-                                                  "repository needs the user's go-ahead")
-        else:
-            elsewhere = None
         if not refspecs:
             if current in branches:
                 return ("deny", "push-protected",
                         f"push from '{current}', a protected branch: work on a branch and open a PR")
-            return elsewhere
+            return None
         delete = "--delete" in rest or "-d" in rest
         for spec in refspecs:
             plus = spec.startswith("+")
@@ -759,17 +727,11 @@ def check_git(argv, cwd, opts):
                 if force or plus:
                     return ("deny", "push-protected", f"force push to the protected branch '{dst}'")
                 return ("deny", "push-protected", f"push to the protected branch '{dst}': open a PR instead")
-        return elsewhere
+        return None
 
     def has_changes(untracked=False):
         return bool(git(cwd, "status", "--porcelain", "--untracked-files=" + ("all" if untracked else "no")))
 
-    if sub == "add":
-        return check_staged_secrets(rest, cwd)
-    if sub == "commit":
-        named = [a for a in rest if not a.startswith("-") and a != "--" and expand(a, cwd) is not UNKNOWN
-                 and Path(expand(a, cwd)).is_file()]
-        return check_staged_secrets(named, cwd) if named else None
 
     if sub == "clean":
         if any(re.match(r"^-[a-zA-Z]*[xX]", a) for a in rest):
@@ -885,330 +847,6 @@ def check_github_tool(tool_input):
     return None
 
 
-PROGRAM_RUNNERS = {"npx", "pnpx", "bunx", "uvx"}
-RUNNER_SUBCOMMANDS = {"npm": ("exec", "x"), "pnpm": ("dlx", "exec"), "yarn": ("dlx", "exec"), "bun": ("x",),
-                      "uv": ("run",), "poetry": ("run",), "pipenv": ("run",), "rye": ("run",), "hatch": ("run",),
-                      "pipx": ("run",)}
-RUNNER_VALUE_FLAGS = {"-p", "--package", "--with", "--python", "-c", "--call", "--spec", "-P", "--filter",
-                      "-C", "--dir", "--project", "--env", "--extra"}
-
-
-def unwrap_runner(argv):
-    """The program a runner starts: `npx wrangler deploy`, `pnpm dlx supabase db push`,
-    `uv run alembic upgrade head`, `python -m twine upload`; the runner's own flags dropped. The
-    argv as given when there is no runner, or nothing left after it."""
-    name, rest = Path(argv[0]).name, argv[1:]
-    if name in INTERPRETERS and len(rest) >= 2 and rest[0] == "-m":
-        return rest[1:]
-    if name in PROGRAM_RUNNERS:
-        pass
-    elif name in RUNNER_SUBCOMMANDS and rest and rest[0] in RUNNER_SUBCOMMANDS[name]:
-        rest = rest[1:]
-    else:
-        return argv
-    skip = False
-    for i, a in enumerate(rest):
-        if skip:
-            skip = False
-        elif a in RUNNER_VALUE_FLAGS:
-            skip = True
-        elif not a.startswith("-"):
-            # `supabase@latest`, `@scope/cli@2`: the package, without its version
-            program = a[:a.rfind("@")] if a.rfind("@") > 0 else a
-            return [program or a] + rest[i + 1:]
-    return argv
-
-
-REMOTE_NOTE = ("threads need the user's go-ahead for deploys, remote migrations, platform secrets, publishes "
-               "and cloud deletes; guard.deploy in .claude/kit.json: ask (default), allow or deny")
-AWS_WRITE = re.compile(r"^(delete|terminate|update|put|create|deploy|modify|remove|publish|invoke|stop|reboot|"
-                       r"run|start|set|upload|restore|copy|import|register|deregister|attach|detach|associate|"
-                       r"disassociate|tag|untag|rollback|execute|cancel|reset|enable|disable|apply|promote|"
-                       r"replace|send|reject|accept|release|abort|purge)\b")
-CLOUD_WRITE = {"deploy", "delete", "update", "patch", "execute", "create", "add", "submit", "remove", "set-iam-policy",
-               "add-iam-policy-binding", "remove-iam-policy-binding", "import", "restore", "start", "stop", "resize",
-               "scale", "purge", "restart"}
-PUBLISHERS = {"npm": ("publish", "unpublish", "deprecate", "dist-tag", "access", "owner"), "pnpm": ("publish",),
-              "yarn": ("publish", "npm"), "bun": ("publish",), "cargo": ("publish", "yank", "owner"),
-              "gem": ("push", "yank"), "poetry": ("publish",), "twine": ("upload",), "uv": ("publish",),
-              "flit": ("publish",), "hatch": ("publish",), "maturin": ("publish", "upload"), "mvn": ("deploy",),
-              "gradle": ("publish",), "dotnet": ("nuget",)}
-
-
-def remote_change(argv):
-    """What a command would change outside the repository (a live environment, a registry, a
-    cloud resource), in a few words, or None. Reads, previews, local emulators and dry runs
-    are not changes."""
-    name, args = Path(argv[0]).name, argv[1:]
-    words = [a for a in args if not a.startswith("-")]
-    flags = {a.split("=", 1)[0] for a in args if a.startswith("-")}
-
-    def sub(*prefix):
-        return tuple(words[:len(prefix)]) == prefix
-
-    def first(*names):
-        return bool(words) and words[0] in names
-
-    label = f"{name} " + " ".join(words[:2])
-    if name == "supabase":
-        if sub("db", "push") and "--dry-run" not in flags:
-            return label
-        if (sub("db", "reset") or sub("migration", "up") or sub("migration", "repair")) and "--linked" in flags:
-            return label + " --linked"
-        if sub("functions", "deploy") or sub("functions", "delete") or sub("secrets", "set") or \
-                sub("secrets", "unset") or sub("projects", "delete") or sub("branches", "delete") or \
-                sub("branches", "create") or sub("config", "push"):
-            return label
-    elif name == "vercel":
-        if "--prod" in flags or "--production" in flags:
-            return "vercel --prod"
-        if first("promote", "rollback", "rm", "remove", "redeploy") or sub("env", "add") or sub("env", "rm") or \
-                sub("env", "remove") or sub("alias", "set") or sub("alias", "rm") or sub("domains", "add") or \
-                sub("domains", "rm") or sub("project", "rm") or sub("dns", "add") or sub("dns", "rm"):
-            return label
-    elif name == "wrangler":
-        if first("deploy", "publish", "delete") or sub("versions", "deploy") or sub("pages", "deploy") or \
-                sub("pages", "publish") or sub("secret", "put") or sub("secret", "delete") or sub("secret", "bulk") or \
-                sub("r2", "object", "delete") or sub("r2", "bucket", "delete") or sub("queues", "delete") or \
-                sub("vectorize", "delete") or sub("hyperdrive", "delete") or sub("pages", "project", "delete"):
-            return label
-        if first("d1", "kv", "kv:key", "kv:namespace", "kv:bulk") and "--remote" in flags and \
-                any(w in ("execute", "apply", "put", "delete", "bulk") for w in words[1:4]):
-            return label + " --remote"
-    elif name == "gcloud":
-        if not first("config", "auth", "components", "topic", "help", "info", "version", "init") and \
-                any(w in CLOUD_WRITE for w in words):
-            return "gcloud " + " ".join(words[:3])
-    elif name == "gsutil":
-        if first("rm", "rb", "mv", "cp", "rsync", "setmeta", "acl", "iam", "defacl", "lifecycle", "versioning",
-                 "cors", "retention"):
-            return label
-    elif name == "aws":
-        if first("s3") and len(words) > 1 and words[1] in ("rm", "rb", "mv", "cp", "sync"):
-            return label
-        if not first("configure", "help", "sts", "sso", "login", "logout") and any(AWS_WRITE.match(w) for w in words):
-            return "aws " + " ".join(words[:2])
-    elif name == "az":
-        if not first("login", "logout", "account", "configure", "version", "upgrade", "find", "feedback") and \
-                any(w in ("create", "delete", "update", "deploy", "start", "stop", "restart", "purge", "import") for w in words):
-            return "az " + " ".join(words[:3])
-    elif name == "firebase":
-        if "deploy" in words or any(w.endswith((":delete", ":remove", ":disable", ":set", ":unset")) for w in words):
-            return label
-    elif name in ("fly", "flyctl"):
-        if first("deploy", "scale", "destroy") or (first("secrets") and words[1:2] and words[1] in ("set", "unset", "import", "deploy")) or \
-                (first("apps", "volumes", "machines", "machine", "ips", "certs") and words[1:2] and
-                 words[1] in ("destroy", "delete", "release", "kill", "stop", "remove", "update", "clone", "run")):
-            return label
-    elif name == "railway":
-        if first("up", "redeploy", "down", "delete") or (first("variables") and "--set" in flags):
-            return label
-    elif name == "heroku":
-        if any(re.match(r"^(config:set|config:unset|releases:rollback|ps:scale|ps:restart|apps:destroy|addons:(create|destroy)|"
-                        r"pg:reset|pg:push|run|maintenance:on|domains:(add|remove)|labs:)", w) for w in words):
-            return label
-    elif name == "netlify":
-        if ("deploy" in words and ("--prod" in flags or "--prod-if-unlocked" in flags)) or \
-                first("env:set", "env:unset", "sites:delete", "rollback"):
-            return label
-    elif name == "kubectl":
-        if first("apply", "delete", "scale", "patch", "replace", "drain", "cordon", "uncordon", "taint", "edit", "set",
-                 "create", "expose", "run", "label", "annotate", "exec") or \
-                (first("rollout") and words[1:2] and words[1] not in ("status", "history")):
-            return label
-    elif name == "helm":
-        if first("install", "upgrade", "uninstall", "rollback", "delete"):
-            return label
-    elif name in ("terraform", "tofu"):
-        if first("apply", "destroy", "import", "taint", "untaint") or \
-                (first("state") and words[1:2] and words[1] in ("rm", "mv", "push", "replace-provider")) or \
-                (first("workspace") and words[1:2] == ["delete"]):
-            return label
-    elif name == "pulumi":
-        if first("up", "destroy", "refresh", "import", "cancel") or (first("stack") and words[1:2] == ["rm"]):
-            return label
-    elif name == "docker":
-        if first("push") or sub("image", "push"):
-            return label
-    elif name in ("sam", "serverless", "sls", "cdk", "amplify", "copilot"):
-        if first("deploy", "delete", "destroy", "remove", "publish", "push"):
-            return label
-    elif name == "prisma":
-        if sub("migrate", "deploy") or (sub("db", "push") and ("--accept-data-loss" in flags or "--force-reset" in flags)):
-            return label
-    elif name == "gh":
-        if sub("repo", "delete") or sub("repo", "archive") or sub("release", "create") or sub("release", "delete") or \
-                sub("release", "upload") or sub("secret", "set") or sub("secret", "delete") or \
-                sub("variable", "set") or sub("variable", "delete"):
-            return label
-        if first("api") and any(a.upper() == "DELETE" for a in args):
-            return "gh api DELETE"
-        if sub("repo", "create") or sub("repo", "fork"):
-            return label + " (evidence belongs in the PR, `gh pr create --attach <file>`, not in a new repository)"
-    elif name in PUBLISHERS:
-        if first(*PUBLISHERS[name]) and "--dry-run" not in flags:
-            return label
-    return None
-
-
-def check_deploy(argv, opts):
-    mode = opts.get("deploy", "ask")
-    if mode == "allow":
-        return None
-    what = remote_change(argv)
-    if not what:
-        return None
-    return ("deny" if mode == "deny" else "ask", "deploy",
-            f"'{what}' changes a live environment outside the repository; {REMOTE_NOTE}")
-
-
-SECRET_NAME_EXEMPT = (".example", ".sample", ".template", ".dist", ".pub", ".md", ".txt")
-
-
-def secret_file(path):
-    """Why a file must not be committed, in a few words, or None. By name, and for .pem/.key by
-    what the file holds (a certificate chain is fine, a private key is not)."""
-    low = Path(path).name.lower()
-    if low.endswith(SECRET_NAME_EXEMPT):
-        return None
-    if low == ".env" or low.startswith(".env."):
-        return "an env file"
-    if re.match(r"^id_(rsa|dsa|ecdsa|ed25519)(\.|$)", low):
-        return "an ssh private key"
-    if low.endswith((".p12", ".pfx", ".jks", ".keystore")):
-        return "a keystore"
-    if low in (".netrc", ".pypirc", ".git-credentials", "credentials.json") or \
-            re.search(r"service[-_]?account.*\.json$|^client_secret.*\.json$", low):
-        return "a credentials file"
-    if low.endswith((".pem", ".key")):
-        try:
-            head = Path(path).read_bytes()[:8192].decode("utf-8", "replace")
-        except OSError:
-            return None
-        return "a private key" if "PRIVATE KEY" in head else None
-    return None
-
-
-def check_staged_secrets(args, cwd):
-    """`git add` (and `git commit <path>`): a credential file named, or swept in from a folder."""
-    flags = [a for a in args if a.startswith("-")]
-    paths = [a for a in args if not a.startswith("-") and a != "--"]
-    sweep = any(f in ("-A", "--all", "--no-ignore-removal") or re.fullmatch(r"-[a-zA-Z]*A[a-zA-Z]*", f) for f in flags)
-    if not paths and not sweep:
-        return None
-    for word in paths:
-        target = expand(word, cwd)
-        if target is UNKNOWN:
-            continue
-        if Path(target).is_dir():
-            continue
-        why = secret_file(target)
-        if why:
-            return ("deny", "commit-secret", f"'{word}' is {why}: keep it out of git (.gitignore), or allow this "
-                                             "once with guard.allowCommands")
-    folders = [w for w in paths if expand(w, cwd) is not UNKNOWN and Path(expand(w, cwd)).is_dir()]
-    if sweep and not paths:
-        folders = [kitlib.git_out(cwd, "rev-parse", "--show-toplevel") or str(cwd)]
-    for folder in folders:
-        listing = kitlib.git_out(cwd, "ls-files", "--others", "--exclude-standard", "--", folder)
-        for rel in listing.splitlines():
-            why = secret_file(Path(cwd) / rel)
-            if why:
-                return ("deny", "commit-secret", f"`git add {folder if folder != folders[0] or paths else '-A'}` "
-                                                 f"would stage '{rel}', {why}: gitignore it, or add files by name")
-    return None
-
-
-PR_SECTIONS = ("Intent", "Evidence", "Risk")
-
-
-def pr_config(root):
-    """How a PR is checked in this project, or None: kit.json `pr` ({"sections": [...], "gate":
-    "verify"|"check"|false}); on by default where kit.json has `verify`; "off" turns it off."""
-    config, _ = kitlib.load_config(root)
-    if not isinstance(config, dict):
-        return None
-    pr = config.get("pr")
-    if pr in ("off", False) or (pr is None and not config.get("verify")):
-        return None
-    pr = pr if isinstance(pr, dict) else {}
-    sections = pr.get("sections", list(PR_SECTIONS))
-    gate_name = pr.get("gate", "verify" if config.get("verify") else "check")
-    if gate_name not in ("verify", "check") or not config.get(gate_name):
-        gate_name = None
-    return {"sections": [str(x) for x in sections] if isinstance(sections, list) else [], "gate": gate_name}
-
-
-def missing_sections(texts, sections):
-    found = set()
-    for text in texts:
-        text = text.replace("\\n", "\n")  # a body written with literal \n still has its headings
-        for name in sections:
-            # a heading at a line start, or right after the quote that opens --body "..."
-            if re.search(r"(?im)(?:^|[\"'=])[ \t]*(?:#+[ \t]*)?(?:\*\*|__)?" + re.escape(name) + r"(?:\*\*|__)?[ \t]*(?::|$)", text) \
-                    or re.search(r"(?i)(?<![a-z])" + re.escape(name) + r"(?:\*\*|__)?[ \t]*:", text):
-                found.add(name)
-    return [name for name in sections if name not in found]
-
-
-def local_paths(texts, root):
-    """Paths on this machine named in a PR body: the checkout, a worktree, the home folder."""
-    hm = str(home())
-    found = set()
-    for text in texts:
-        for m in re.finditer(r"(?<![\w./-])(?:" + re.escape(str(root)) + r"|" + re.escape(hm) + r"|/Users/[\w.-]+|/home/[\w.-]+|/tmp/[\w.-]+)(?:/[\w.@+-]+)*", text):
-            found.add(m.group(0))
-    return sorted(found)
-
-
-def pr_problems(root, body_texts, has_body, head=None, body_files=()):
-    cfg = pr_config(root)
-    if not cfg:
-        return None
-    problems = []
-    paths = local_paths(body_texts, root)
-    if paths:
-        problems.append("the PR body names a path on this machine (" + ", ".join(paths[:3]) +
-                        "): use repo-relative paths; a worktree or home path is noise to the reader and leaks the environment")
-    if cfg["sections"]:
-        missing = missing_sections(body_texts, cfg["sections"]) if has_body else list(cfg["sections"])
-        if missing:
-            problems.append("the PR body lacks " + ", ".join(missing) + " (kit.json pr.sections: the reader judges "
-                            "the PR by its intent, the evidence from running it, and its risk, not by the diff)")
-    if cfg["gate"]:
-        current = kitlib.git_out(root, "rev-parse", "--abbrev-ref", "HEAD")
-        other = head if head and head != current else None
-        exclude = [rel for rel in (kitlib.relpath(root, f) for f in body_files) if rel]
-        ok, why = gate.status(root, cfg["gate"], branch=other, head_ref=other, exclude=exclude)
-        if not ok:
-            script = Path(__file__).resolve().parent / "gate.py"
-            problems.append(f"{why}; run `python3 {script} {cfg['gate']}` on the final tree, then open the PR")
-    return ("deny", "pr", "; ".join(problems)) if problems else None
-
-
-def check_pr(argv, cwd, root, command):
-    args = argv[1:]
-    if args[:2] != ["pr", "create"]:
-        return None
-    rest = args[2:]
-    if any(a in ("-w", "--web", "-d", "--draft") for a in rest):
-        return None
-    has_body = any(a in ("-b", "--body", "-F", "--body-file") or a.startswith(("--body=", "--body-file=")) for a in rest)
-    head = next((a.split("=", 1)[1] for a in rest if a.startswith("--head=")), None)
-    if head is None and any(a in ("-H", "--head") for a in rest[:-1]):
-        head = rest[max(i for i, a in enumerate(rest[:-1]) if a in ("-H", "--head")) + 1]
-    text, body_files = command, []
-    for i, a in enumerate(rest):  # the body file's own path is not part of the body, nor of the work
-        path = rest[i + 1] if a in ("-F", "--body-file") and i + 1 < len(rest) else \
-            a.split("=", 1)[1] if a.startswith("--body-file=") else None
-        if path and path != "-":
-            text = text.replace(path, "")
-            target = expand(path, cwd)
-            if target is not UNKNOWN:
-                body_files.append(target)
-    return pr_problems(root, [text] + message_files(rest, cwd), has_body, head, body_files)
-
-
 def check_system(argv, cwd, root):
     name = Path(argv[0]).name
     if name in ("sudo", "su", "doas"):
@@ -1319,7 +957,6 @@ def check_bash(command, cwd, root, opts):
         argv = seg["argv"] if seg.get("nested") else [with_vars(a, known) for a in seg["argv"]]
         if not argv:
             continue
-        argv = unwrap_runner(argv)
         name = Path(argv[0]).name
         if name in ("cd", "pushd", "popd"):
             args = [a for a in argv[1:] if a not in ("-L", "-P", "-e", "-@", "--")]
@@ -1341,11 +978,9 @@ def check_bash(command, cwd, root, opts):
         if seg["piped_from"] and (name in SHELLS or name in INTERPRETERS) and \
                 Path(seg["piped_from"][0]).name in DOWNLOADERS:
             return ("deny", "pipe-to-shell", f"'{seg['piped_from'][0]} ... | {name}' runs downloaded code")
-        checks = [check_secrets(argv, cwd), check_deploy(argv, opts)]
+        checks = [check_secrets(argv, cwd)]
         if name in ("git", "gh") and opts.get("attribution") != "allow":
             checks.append(check_attribution(argv, cwd, command))
-        if name == "gh":
-            checks.append(check_pr(argv, cwd, root, command))
         if name in ("rm", "find"):
             check = check_rm if name == "rm" else check_find
             found = check(argv, cwd, repos)
@@ -1433,12 +1068,8 @@ def main():
             found = ("deny", "secrets", "globs a credential store")
     elif tool in ("Agent", "Task"):
         found = check_agents(data, opts)
-    elif tool.startswith("mcp__") and "github" in tool.lower():
-        if opts.get("attribution") != "allow":
-            found = check_github_tool(tool_input)
-        if not found and tool.endswith("create_pull_request") and not tool_input.get("draft"):
-            body = tool_input.get("body")
-            found = pr_problems(root, [str(body or "")], bool(body), tool_input.get("head"))
+    elif tool.startswith("mcp__") and "github" in tool.lower() and opts.get("attribution") != "allow":
+        found = check_github_tool(tool_input)
     if not found:
         return 0
     decision, rule, why = found

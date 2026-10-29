@@ -24,7 +24,7 @@ the model can't do alone, re-checked when a new model lands.
 | Something broke | describe it | `kit:investigate`: evidence (asks you once, with exact export steps), reproduction, hypotheses, a regression-tested fix |
 | UI or LLM work | describe it | the kit asks "Use Kit UI / Kit LLM for this?" and installs that plugin for the project on yes |
 | First PR in a project | answer once | "Do I merge PRs once they're green, or do you always review them first?"; the answer is saved in `kit.json` (`lead.merge`) |
-| Finishing by hand | `/kit:go` | PR with intent, live evidence, what was fixed, risk; keeps CI green; merges if the project allows it. No PR opens without those sections and a `verify` recorded on the exact tree it carries |
+| Finishing by hand | `/kit:go` | PR with intent, live evidence (the gate run is recorded on the exact tree), what was fixed, risk; keeps CI green; merges if the project allows it |
 | Evening | "tonight keep doing X until Y" | `kit:overnight`: a fresh session per small step, a commit only when the gate passes, caps or none |
 | Weekly | `/kit:learn sweep` | turns repeated corrections into checks or rules, and prunes instructions that no longer help (at most 4 changes, each approved) |
 
@@ -68,10 +68,8 @@ notification where Claude Code offers one. Mode per project (`/kit-mode`): **Lig
 
  Hooks in every project with .claude/kit.json (silent when all is well):
    PreToolUse   protect  blocks edits to protected paths
-                guard    blocks irreversible or credential-leaking commands and commits of .env or
-                         key files, in any permission mode; asks before a deploy, a remote
-                         migration, a publish or a cloud delete; refuses a PR whose body lacks
-                         Intent / Evidence / Risk or whose tree no recorded `verify` covers
+                guard    blocks irreversible or credential-leaking commands, in any permission
+                         mode, plus the project's own guard.denyCommands / askCommands
    PermissionRequest     the project's own `check` and `verify` run without a prompt
    PostToolUse  on_edit  runs the formatter/validator for the edited file, feeds errors back
                 bash_edits  the same for files a shell command changed (sed, a heredoc), plus
@@ -107,7 +105,7 @@ notification where Claude Code offers one. Mode per project (`/kit-mode`): **Lig
 | `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
 | `kit:implementer` | A thread: one item from brief to PR in its own worktree, effort medium |
 | `kit:verifier` | A fresh-context review against the intent, with a per-project memory of pitfalls |
-| Hooks + mod | `protect`, `guard`, `on_edit`, `bash_edits`, `permission`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop`, the lesson ledger `lessons.py`, `gate.py` (runs `check` or `verify` and records the tree it passed on: the evidence a PR needs); the mod (`kit.tsx`: modes, safety, status line with threads waiting for you, a native notification when the board gains work for you) |
+| Hooks + mod | `protect`, `guard`, `on_edit`, `bash_edits`, `permission`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop`, the lesson ledger `lessons.py`, `gate.py` (runs `check` or `verify` and records the tree it passed on: the evidence a PR body cites); the mod (`kit.tsx`: modes, safety, status line with threads waiting for you, a native notification when the board gains work for you) |
 
 **Domain plugins** (project scope, offered by `kit:extras` when a task needs them):
 
@@ -177,18 +175,9 @@ project.
   `sudo`, `curl … | sh`, and reading `~/.ssh`, `~/.aws`, gh, docker or kube config and the
   keychain. It also keeps you the only author: it blocks a commit, PR, issue or comment that
   credits an AI (`Co-Authored-By: Claude`, "Generated with Claude Code", a session link), through
-  git, `gh` or the GitHub MCP tools, and a commit made under an AI git identity. It blocks
-  `git add` or `commit` of `.env*`, private keys, keystores and credential JSON (named, or swept
-  in by `-A`/`.`), asks before anything that changes a live environment (`vercel --prod`,
-  `wrangler deploy`, `supabase db push`, `gcloud run deploy`, `terraform apply`, `npm publish`,
-  `gh repo create`, `gh api DELETE`..., also behind `npx` or `uv run`; `guard.deploy` in
-  kit.json: ask, allow or deny) or pushes to a remote other than origin, and applies the
-  project's own `guard.denyCommands` / `askCommands` rules. It reads shell text, so it is best
-  effort.
-- **A PR is judgeable or it does not open.** In a project with `verify`, `gh pr create` (and the
-  GitHub MCP tool) needs Intent, Evidence and Risk in the body, no path from this machine, and a
-  `verify` run recorded by `gate.py` on exactly the tree the PR carries; otherwise the guard says
-  what to run. `"pr": "off"` in kit.json turns it off.
+  git, `gh` or the GitHub MCP tools, and a commit made under an AI git identity. A project can
+  add its own rules (`guard.denyCommands` / `askCommands`: a regex over the command and the
+  reason). It reads shell text, so it is best effort.
 - **Sandbox** (overnight runs, unfamiliar repos): the same guard plus Claude Code's Bash sandbox
   in `.claude/settings.local.json` (writes in the project and temp, network to GitHub, package
   registries and the Anthropic API, credential folders unreadable). `kit:overnight` passes it to

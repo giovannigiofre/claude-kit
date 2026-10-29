@@ -361,159 +361,19 @@ def main():
         failed += 1
         print('FAIL guard.attribution = "allow" turns the rule off')
 
-    # deploy: a command that changes a live environment asks (allow / deny per kit.json)
-    h9, r9 = setup()
-    deploys = [
-        ("supabase db push", "ask"), ("supabase db push --dry-run", "allow"), ("supabase db reset", "allow"),
-        ("supabase db reset --linked", "ask"), ("supabase functions deploy hello", "ask"), ("supabase start", "allow"),
-        ("vercel", "allow"), ("vercel --prod", "ask"), ("vercel deploy --prod", "ask"), ("vercel env pull", "allow"),
-        ("vercel env add KEY production", "ask"), ("wrangler deploy", "ask"), ("wrangler dev", "allow"),
-        ("wrangler d1 execute db --local --command 'select 1'", "allow"),
-        ("wrangler d1 execute db --remote --command 'select 1'", "ask"), ("npx wrangler deploy", "ask"),
-        ("pnpm dlx supabase db push", "ask"), ("npx -y supabase@latest db push", "ask"), ("pnpm run deploy", "allow"),
-        ("gcloud run deploy api --source .", "ask"), ("gcloud run services describe api", "allow"),
-        ("gcloud config set project x", "allow"), ("gsutil ls gs://b", "allow"), ("gsutil rm -r gs://b/x", "ask"),
-        ("aws s3 ls", "allow"), ("aws s3 sync . s3://b --delete", "ask"), ("aws lambda update-function-code --function-name f", "ask"),
-        ("aws sts get-caller-identity", "allow"), ("terraform plan", "allow"), ("terraform apply -auto-approve", "ask"),
-        ("kubectl get pods", "allow"), ("kubectl apply -f k.yaml", "ask"), ("kubectl rollout status deploy/x", "allow"),
-        ("helm upgrade --install x ./chart", "ask"), ("docker build -t x .", "allow"), ("docker push x", "ask"),
-        ("npm publish", "ask"), ("npm publish --dry-run", "allow"), ("npm test", "allow"), ("cargo publish", "ask"),
-        ("python3 -m twine upload dist/*", "ask"), ("uv run twine upload dist/*", "ask"), ("uv publish", "ask"),
-        ("gh pr view 1", "allow"), ("gh release create v1", "ask"), ("gh repo delete o/r --yes", "ask"),
-        ("gh api -X DELETE repos/o/r/x", "ask"), ("gh api repos/o/r/pulls", "allow"), ("gh secret set K", "ask"),
-        ("prisma migrate deploy", "ask"), ("prisma migrate dev", "allow"), ("firebase deploy --only hosting", "ask"),
-        ("fly deploy", "ask"), ("fly status", "allow"), ("netlify deploy", "allow"), ("netlify deploy --prod", "ask"),
-    ]
-    for command, want in deploys:
-        got = verdict(h9, r9, command)
-        if got != want:
-            failed += 1
-            print(f"FAIL deploy {want} expected, got {got}: {command!r}")
-    h10, r10 = setup({"guard": {"deploy": "deny"}})
-    if verdict(h10, r10, "vercel --prod") != "block":
-        failed += 1
-        print("FAIL guard.deploy = deny blocks")
-    h11, r11 = setup({"guard": {"deploy": "allow"}})
-    if verdict(h11, r11, "vercel --prod") != "allow":
-        failed += 1
-        print("FAIL guard.deploy = allow lets it through")
-
-    # commit-secret: credential files never reach git, named or swept in
-    h12, r12 = setup()
-    (r12 / ".env").write_text("API_KEY=abc123def456\n")
-    (r12 / ".env.example").write_text("API_KEY=\n")
-    (r12 / "ca.pem").write_text("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
-    (r12 / "server.key").write_text("-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n")
-    (r12 / "src").mkdir()
-    (r12 / "src" / "service-account.json").write_text("{}")
-    (r12 / "src" / "app.py").write_text("x\n")
-    secrets = [
-        ("git add .env", "block"), ("git add .env.example", "allow"), ("git add ca.pem", "allow"),
-        ("git add server.key", "block"), ("git add src/app.py", "allow"), ("git add src/", "block"),
-        ("git add -A", "block"), ("git add .", "block"), ("git add -u", "allow"), ("git commit -m x -- .env", "block"),
-        ("git commit -m 'load .env at start'", "allow"), ("git add a.txt", "allow"),
-    ]
-    for command, want in secrets:
-        got = verdict(h12, r12, command)
-        if got != want:
-            failed += 1
-            print(f"FAIL commit-secret {want} expected, got {got}: {command!r}")
-    (r12 / ".gitignore").write_text(".env\nserver.key\nsrc/service-account.json\n")
-    if verdict(h12, r12, "git add -A") != "allow":
-        failed += 1
-        print("FAIL once ignored, git add -A is fine")
-
-    # pr: no PR without the sections and a verify that passed on exactly this tree
-    h13, r13 = setup({"verify": "test -f a.txt"})
-    subprocess.run(["git", "-C", str(r13), "add", "-A"], check=True)  # kit.json is committed in a real project
-    subprocess.run(["git", "-C", str(r13), "commit", "-qm", "kit"], check=True)
-    body = "## Intent\nfix\n## Evidence\nran it\n## Risk\nlow"
-    good = f'gh pr create --title t --body "{body}"'
-    if verdict(h13, r13, good) != "block":
-        failed += 1
-        print("FAIL a PR before verify ran must be blocked")
-    out = subprocess.run([sys.executable, str(SCRIPT.parent / "gate.py"), "verify"], cwd=str(r13),
-                         capture_output=True, text=True, env=dict(os.environ, HOME=str(h13)))
-    if "passed" not in out.stdout:
-        failed += 1
-        print(f"FAIL gate verify should pass here: {out.stdout} {out.stderr}")
-    prs = [
-        (good, "allow"),
-        ('gh pr create --title t --body "Intent: x. Evidence: y. Risk: low"', "allow"),
-        ('gh pr create --title t --body "## Intent\nfix"', "block"),
-        ("gh pr create --fill", "block"), ("gh pr create --title t --body x --draft", "allow"),
-        ("gh pr create --web", "allow"), ("gh pr list", "allow"),
-        (f"gh pr create --title t --body \"$(cat <<'EOF'\n{body}\nEOF\n)\"", "allow"),
-    ]
-    for command, want in prs:
-        got = verdict(h13, r13, command)
-        if got != want:
-            failed += 1
-            print(f"FAIL pr {want} expected, got {got}: {command!r}")
-    _, _, err = call(h13, r13, "Bash", {"command": 'gh pr create --title t --body "## Intent\nfix"'})
-    if "lacks Evidence, Risk" not in err:
-        failed += 1
-        print(f"FAIL the deny names the missing sections: {err[:200]}")
-    (r13 / "a.txt").write_text("changed\n")
-    code, _, err = call(h13, r13, "Bash", {"command": good})
-    if code != 2 or "differs from HEAD" not in err:
-        failed += 1
-        print(f"FAIL a dirty tree after verify blocks the PR: {code} {err[:160]}")
-    subprocess.run(["git", "-C", str(r13), "commit", "-qam", "change"], check=True)
-    code, _, err = call(h13, r13, "Bash", {"command": good})
-    if code != 2 or "another tree" not in err or "gate.py verify" not in err:
-        failed += 1
-        print(f"FAIL a commit after verify blocks the PR and says what to run: {code} {err[:200]}")
-    code, _, _ = call(h13, r13, "mcp__github__create_pull_request", {"title": "t", "body": "Intent: x", "head": "feat/x", "base": "main"})
-    if code != 2:
-        failed += 1
-        print("FAIL the GitHub MCP PR tool is checked too")
-    h14, r14 = setup({"verify": "true", "pr": "off"})
-    if verdict(h14, r14, "gh pr create --fill") != "allow":
-        failed += 1
-        print('FAIL "pr": "off" turns the PR check off')
-    if verdict(home, repo, "gh pr create --fill") != "allow":
-        failed += 1
-        print("FAIL without verify in kit.json the PR check stays off")
-
-    # project rules, a push elsewhere, a new repository, local paths in a PR body
-    h15, r15 = setup({"verify": "true", "guard": {"denyCommands": [{"pattern": "^npm install\\b", "reason": "use pnpm"}],
-                                                   "askCommands": ["^make release"]}})
-    subprocess.run(["git", "-C", str(r15), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(r15), "commit", "-qm", "kit"], check=True)
-    subprocess.run(["git", "-C", str(r15), "remote", "add", "origin", "https://example.invalid/o/r.git"], check=True)
-    subprocess.run(["git", "-C", str(r15), "remote", "add", "fork", "https://example.invalid/me/r.git"], check=True)
+    # project rules: the project's own deny and ask patterns, each with its reason
+    h15, r15 = setup({"guard": {"denyCommands": [{"pattern": "^npm install\\b", "reason": "use pnpm"}],
+                                 "askCommands": ["^make release"]}})
     _, _, err = call(h15, r15, "Bash", {"command": "npm install left-pad"})
-    extra = [
-        ("npm install left-pad", "block"), ("pnpm install", "allow"), ("make release", "ask"), ("make test", "allow"),
-        ("git push origin feat/x", "allow"), ("git push -u origin feat/x", "allow"), ("git push", "allow"),
-        ("git push fork feat/x", "ask"), ("git push https://example.invalid/x/y.git feat/x", "ask"),
-        ("gh repo create me/evidence --public", "ask"),
-    ]
-    for command, want in extra:
+    for command, want in (("npm install left-pad", "block"), ("pnpm install", "allow"), ("make release", "ask"),
+                          ("make test", "allow"), ("git push origin feat/x", "allow")):
         got = verdict(h15, r15, command)
         if got != want:
             failed += 1
-            print(f"FAIL project/push {want} expected, got {got}: {command!r}")
+            print(f"FAIL project rule {want} expected, got {got}: {command!r}")
     if "use pnpm" not in err or "denyCommands" not in err:
         failed += 1
         print(f"FAIL a project rule's reason is told: {err[:160]}")
-    subprocess.run([sys.executable, str(SCRIPT.parent / "gate.py"), "verify"], cwd=str(r15), capture_output=True,
-                   env=dict(os.environ, HOME=str(h15)))
-    leaky = f'gh pr create --title t --body "Intent: x. Evidence: see {r15}/.claude/evidence/x.png. Risk: low"'
-    code, _, err = call(h15, r15, "Bash", {"command": leaky})
-    if code != 2 or "path on this machine" not in err:
-        failed += 1
-        print(f"FAIL a machine path in the PR body is refused: {code} {err[:160]}")
-    clean = 'gh pr create --title t --body "Intent: x. Evidence: .claude/evidence/x.png. Risk: low"'
-    if verdict(h15, r15, clean) != "allow":
-        failed += 1
-        print("FAIL a repo-relative evidence path is fine")
-    bodyfile = r15 / "body.md"
-    bodyfile.write_text("Intent: x\nEvidence: ran\nRisk: low\n")
-    if verdict(h15, r15, f"gh pr create --title t --body-file {bodyfile}") != "allow":
-        failed += 1
-        print("FAIL the body file's own path is not a path in the body")
 
     print("guard: all good" if not failed else f"guard: {failed} failures")
     return 1 if failed else 0

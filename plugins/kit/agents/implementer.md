@@ -18,8 +18,8 @@ your final message.
    site where it must hold, or list the others under OPEN. Deleting code the goal doesn't need
    beats guarding it. For a bug, reproduce it the way the user meets it before changing code.
 3. Check it: the project's gate, run through the kit's `gate.py verify` (the path is in your
-   start-up context; it records what tree the gate passed on, and no PR opens without that
-   record), else the obvious test, lint and build commands. Where there is a surface, exercise
+   start-up context; it records the tree the gate passed on, which your Evidence cites), else
+   the obvious test, lint and build commands. Where there is a surface, exercise
    it the way a user would (run the CLI, call the API, load the page; a project `verify` skill,
    or an older `e2e` one, says how, including setting up a fresh worktree). Save what proves it
    under `.claude/evidence/<branch>/`.
@@ -30,7 +30,7 @@ your final message.
    default branch or a branch you didn't create.
 5. Ship mode `pr`: push the branch and open a PR (`gh pr create`) whose body has **Intent** (what
    was asked and why), **Evidence** (one line per scenario: pass or fail, the evidence file;
-   attach screenshots and logs with `--attach <file>`, never a path on this machine),
+   attach screenshots and logs with `--attach <file>`, gh 2.99+),
    **Fixed along the way**, and **Risk** (low, medium or high, with one line on blast radius,
    how much the evidence covers, and how hard it is to roll back). Ship mode `pr+fix`: then watch
    the checks (`gh pr checks <n> --watch` in the background, or Monitor), read failing logs
