@@ -11,20 +11,20 @@ reported and left to the person.
 ```markdown
 # Maintenance loop for <project>
 
-Each round, in this order; stop as soon as there is nothing to do:
+Each round, in this order. Stop as soon as there is nothing left to do.
 
-1. Work left open in this conversation: finish it first.
-2. The current branch's PR (`gh pr view --json number,state,mergeable,statusCheckRollup,reviews`):
-   - CI red: read the failed job's log (`gh run view <id> --log-failed`), fix the cause, run
-     `python3 "<kit>/hooks/scripts/gate.py" verify`, push. At most 3 rounds on the same
-     failure; then a comment on the PR saying what fails and why you did not fix it.
-   - Review comments: apply the mechanical ones and answer each; a product or design question
-     goes to <user> in a comment, you do not decide it.
-   - Conflict with <base>: sync as /kit:go does (rebase a branch only you push to, merge a
-     shared one), resolve, gate, push.
-   - Green, nothing open: say so in one line and stop. Never merge.
-3. Cleanup: nothing left behind (`git status`), worktrees of merged PRs removed.
+1. Finish any work still open in this conversation.
+2. Tend the current branch's PR (`gh pr view --json number,state,mergeable,statusCheckRollup,reviews`):
+   - CI red: read the failed job's log (`gh run view <id> --log-failed`), fix the root cause,
+     run `python3 "<kit>/hooks/scripts/gate.py" verify`, push. After 3 rounds on the same
+     failure, stop and leave one comment on the PR: what fails and why you did not fix it.
+   - Review comments: apply the mechanical ones and reply on each thread. A product or design
+     question goes to <user> as a comment; do not decide it yourself.
+   - Conflict with <base>: sync the way /kit:go does (rebase a branch only you push to, merge a
+     shared one), resolve, run the gate, push.
+   - Green with nothing open: say so in one line and stop. Never merge.
+3. Clean up: nothing left behind (`git status`); worktrees of merged PRs removed.
 
-Touch no other PR, open no new one, deploy nothing. Reply in one line: what changed, or
-"nothing" (then write nothing else).
+Do not touch other PRs, open new ones, or deploy anything. Reply in one line: what changed,
+or "nothing", and nothing more.
 ```
