@@ -40,9 +40,13 @@ caps, write them in the command and say they are your assumption:
    Ctrl-C. Fine on a subscription the user is happy to spend; say plainly that nothing caps it.
 
 Other knobs: `--max-tokens` (input + cache-write + output), `--iteration-usd` (cap per
-iteration), `--max-failures` (default 3), `--effort` (`medium` is a good default for small steps;
-raise it only where a run shows it helps), `--permission-mode auto` (headless sessions cannot
-answer permission prompts; without allow rules or auto mode most iterations fail).
+iteration), `--max-turns` (per iteration), `--max-failures` (default 3), `--effort` (`medium` is a
+good default for small steps; raise it only where a run shows it helps), `--fallback-model` (when
+the main model is overloaded), `--permission-mode` (default `auto`: a headless session cannot
+answer a prompt, so anything that would ask is denied whatever the mode). A Fable or Mythos
+model bills usage credits without asking in headless runs: the runner refuses `--model fable`
+unless `--allow-credits` is given. `--no-unattended-note` drops the kit's note about unattended
+runs from the system prompt, to measure whether the model still needs it.
 
 ## 3. Check before launching
 

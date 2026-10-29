@@ -8,6 +8,8 @@ Checks, over every plugin in plugins/:
   - each description fits the listing (<= 1024 chars) and parses as a plain YAML scalar;
   - SKILL.md files stay short (details go to files next to them, loaded on demand);
   - no shouted rules (MUST, NEVER, CRITICAL, IMPORTANT, ALWAYS) outside code blocks;
+  - no request for the model's reasoning ("show your reasoning", "think out loud", "think step by
+    step"): the current models decline those (reasoning_extraction) and the kit never needed them;
   - the core plugin has no hook that runs on every prompt or every tool call;
   - the lessons the SubagentStart hook hands a thread stay within SUBAGENT_LESSONS chars, and the
     ones SessionStart adds (with the kit's news lines) within SESSION_LESSONS;
@@ -33,6 +35,9 @@ MAX_SKILL_LINES = 150
 MAX_AGENT_LINES = 80
 MAX_REFERENCE_LINES = 200
 SHOUTED = re.compile(r"\b(MUST|NEVER|CRITICAL|IMPORTANT|ALWAYS)\b")
+# a quoted mention ("think step by step" named as an anti-pattern) is not a request
+REASONING = re.compile(r"(?<![\"'`(])\b(?:(?:show|write|share|explain|print)(?: out| me)? (?:your|its|the) "
+                       r"(?:reasoning|thinking|thought process|chain of thought)|think (?:out loud|aloud|step[ -]by[ -]step))\b", re.I)
 REFERENCE = re.compile(r"(?<![\w/.-])(kit(?:-ui|-llm)?):([a-z][a-z0-9-]*)")
 # files that describe the past (removed pieces are named there on purpose)
 HISTORY = {"CATALOG.md", "proposta-kit-1.0.md"}
@@ -87,6 +92,11 @@ def main():
             if path.name != "SKILL.md" and path.read_text(encoding="utf-8").count("\n") > MAX_REFERENCE_LINES:
                 problems.append(f"{path.relative_to(ROOT)}: over {MAX_REFERENCE_LINES} lines")
 
+    for path in sorted(PLUGINS.glob("*/hooks/**/*.py")):
+        if "tests" in path.parts:
+            continue
+        for m in REASONING.finditer(path.read_text(encoding="utf-8")):
+            problems.append(f"{path.relative_to(ROOT)}: asks for the model's reasoning ('{m.group(0)}')")
     core_hooks = json.loads((PLUGINS / "kit" / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
     if "UserPromptSubmit" in core_hooks:
         problems.append("plugins/kit/hooks/hooks.json: a UserPromptSubmit hook adds work and text to every prompt")
@@ -113,6 +123,8 @@ def main():
         if "skills" in path.parts or "agents" in path.parts:
             for m in SHOUTED.finditer(without_code(text)):
                 problems.append(f"{rel}: shouted '{m.group(1)}'; say it calmly and give the reason")
+            for m in REASONING.finditer(without_code(text)):
+                problems.append(f"{rel}: asks for the model's reasoning ('{m.group(0)}'); ask for the result and its evidence")
         for m in REFERENCE.finditer(text):
             plugin, name = m.group(1), m.group(2)
             if name not in names.get(plugin, set()):

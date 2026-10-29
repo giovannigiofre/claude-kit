@@ -361,6 +361,20 @@ def main():
         failed += 1
         print('FAIL guard.attribution = "allow" turns the rule off')
 
+    # project rules: the project's own deny and ask patterns, each with its reason
+    h15, r15 = setup({"guard": {"denyCommands": [{"pattern": "^npm install\\b", "reason": "use pnpm"}],
+                                 "askCommands": ["^make release"]}})
+    _, _, err = call(h15, r15, "Bash", {"command": "npm install left-pad"})
+    for command, want in (("npm install left-pad", "block"), ("pnpm install", "allow"), ("make release", "ask"),
+                          ("make test", "allow"), ("git push origin feat/x", "allow")):
+        got = verdict(h15, r15, command)
+        if got != want:
+            failed += 1
+            print(f"FAIL project rule {want} expected, got {got}: {command!r}")
+    if "use pnpm" not in err or "denyCommands" not in err:
+        failed += 1
+        print(f"FAIL a project rule's reason is told: {err[:160]}")
+
     print("guard: all good" if not failed else f"guard: {failed} failures")
     return 1 if failed else 0
 

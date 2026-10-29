@@ -140,6 +140,78 @@ def relpath(root, file_path):
         return None
 
 
+def git_out(cwd, *args, timeout=30, strip=True):
+    """stdout of a git command, stripped unless strip=False (a porcelain status starts with a
+    space that matters); "" on any failure."""
+    try:
+        out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=timeout)
+        if out.returncode != 0:
+            return ""
+        return out.stdout.strip() if strip else out.stdout
+    except Exception:
+        return ""
+
+
+def default_branch(root):
+    """The branch work merges into: the remote's HEAD, else main or master when one exists."""
+    head = git_out(root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+    if head.startswith("origin/"):
+        return head
+    for name in ("origin/main", "origin/master", "main", "master"):
+        if git_out(root, "rev-parse", "--verify", "--quiet", name + "^{commit}"):
+            return name
+    return None
+
+
+def changed_files(root, limit=400):
+    """Files this work touched, relative to the checkout root: committed on this branch since it
+    left the default branch, plus modified and untracked (not ignored) files in the tree. Deleted
+    files are left out, so the list can be handed to a linter or a test runner as is. On the
+    default branch itself, or without one, only the uncommitted files. Sorted; at most `limit`."""
+    files = set()
+    base = default_branch(root)
+    head = git_out(root, "rev-parse", "--verify", "--quiet", "HEAD")
+    merge_base = git_out(root, "merge-base", "HEAD", base) if base and head else ""
+    if merge_base and merge_base != head:
+        for line in git_out(root, "diff", "--name-only", "--diff-filter=ACMR", merge_base, "HEAD").splitlines():
+            files.add(line)
+    for line in git_out(root, "diff", "--name-only", "--diff-filter=ACMR", "HEAD" if head else "--cached").splitlines():
+        files.add(line)
+    for line in git_out(root, "ls-files", "--others", "--exclude-standard").splitlines():
+        files.add(line)
+    present = [f for f in sorted(files) if f and (Path(root) / f).is_file()]
+    return present[:limit]
+
+
+def changed_env(root):
+    """Environment for a gate command: KIT_CHANGED_FILES (shell-quoted, space-separated, relative
+    paths) and KIT_CHANGED_COUNT, so `check` can be diff-aware (`ruff check $KIT_CHANGED_FILES`)."""
+    import shlex
+    files = changed_files(root)
+    return {"KIT_CHANGED_FILES": " ".join(shlex.quote(f) for f in files), "KIT_CHANGED_COUNT": str(len(files))}
+
+
+def dirty_snapshot(root, limit=5000):
+    """{relative path: mtime_ns} of every modified or untracked (not ignored) file in the
+    checkout, so a later hook can tell which files a shell command changed. Deleted files are
+    left out. At most `limit` entries; {} outside git."""
+    out = git_out(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", strip=False)
+    files = {}
+    for entry in out.split("\0"):
+        if len(entry) < 4 or entry[:2] in ("D ", " D", "DD"):
+            continue
+        rel = entry[3:]
+        if " -> " in rel:  # a rename: the new name is what exists now
+            rel = rel.split(" -> ", 1)[1]
+        try:
+            files[rel] = os.stat(Path(root) / rel).st_mtime_ns
+        except OSError:
+            continue
+        if len(files) >= limit:
+            break
+    return files
+
+
 def run_shell(cmd, cwd, env_extra=None, timeout=600):
     env = dict(os.environ)
     env.update(env_extra or {})

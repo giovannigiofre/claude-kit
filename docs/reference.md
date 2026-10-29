@@ -15,7 +15,8 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
     {"glob": "data/raw/**", "mode": "no-overwrite", "reason": "raw files are immutable"},
     {"glob": "vendor/**", "mode": "read-only", "reason": "vendored code"}
   ],
-  "guard": {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40, "allowCommands": []},
+  "guard": {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40, "allowCommands": [],
+            "denyCommands": [{"pattern": "^npm install\\b", "reason": "pnpm only here"}], "askCommands": []},
   "llm": "on",
   "learn": {"model": true},
   "author": "Giovanni Giofré <99892523+giovannigiofre@users.noreply.github.com>",
@@ -37,11 +38,18 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   `$REL` the path relative to the repo. `**` matches across directories, `*` within one.
 - `protect`: `read-only` blocks every edit; `no-overwrite` allows new files and blocks edits to
   existing ones.
-- The Stop hook runs `check` only when the working tree changed since the last passing check,
-  so question-and-answer turns cost nothing. After `maxStopRetries` failures in a row it lets
-  Claude stop, and Claude must report the failure.
+- The Stop hook runs `check` only when the tree's content (uncommitted and untracked files
+  included) changed since the last passing check, so question-and-answer turns cost nothing.
+  After `maxStopRetries` failures in a row it lets Claude stop, and Claude must report the
+  failure. The command runs with `KIT_CHANGED_FILES` (the files this branch touched since it
+  left the default branch, plus uncommitted ones; shell-quoted, space-separated; `echo
+  "$KIT_CHANGED_FILES" | xargs -r ruff check` keeps names with spaces whole), `KIT_CHANGED_COUNT`
+  and `KIT_GATE` in its environment, so `check` can look only at what changed. `gate.py` passes
+  the same.
 - `guard`: on by default in a project with `kit.json`; `"off"` turns it off. `protectedBranches`
-  defaults to main, master and the remote's default branch. `agentsAsk` / `agentsDeny` are an
+  defaults to main, master and the remote's default branch. `denyCommands` / `askCommands`: the
+  project's own rules, `{"pattern": "<regex over the whole command>", "reason": "..."}` each
+  (a plain string is a pattern); `/kit:learn` writes one when a lesson is "never run X here". `agentsAsk` / `agentsDeny` are an
   optional per-session cap on subagents (ask past one, refuse past the other); the native
   `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` caps how many run at once. `allowCommands`: regexes the
   guard lets through. `attribution` (default `"block"`): blocks AI credits in commit messages, PR,
@@ -77,8 +85,10 @@ offers this rule (with `attribution` off) once per machine at session start and 
 ```
 
 Also per project, committed: `CLAUDE.md` (the project's rules, which win over the kit),
-`.claude/skills/e2e/SKILL.md` (how to exercise the app), `.claude/review-decisions.md` (findings
-you declined, so reviews don't raise them again). Gitignored: `.claude/evidence/`,
+`.claude/skills/verify/SKILL.md` (how to run and exercise the app; Claude Code runs a skill of
+that name before each commit), `.claude/loop.md` (what a bare `/loop` does for this project's
+PR: fix CI, answer reviews, sync with the base; it never merges), `.claude/review-decisions.md`
+(findings you declined, so reviews don't raise them again). Gitignored: `.claude/evidence/`,
 `.claude/overnight/`, `.claude/lead/`.
 
 ### Auto mode environment, per repo
@@ -140,6 +150,45 @@ At session start in a kit project the hook only rebuilds from the stored blocks 
 `claude` command, nothing read from the repo), so a reset or hand-edited settings file gets the
 lines back; it is silent when nothing changed. With no blocks it takes no lock and writes nothing
 unless settings.json still has `[kit auto-mode]` lines, which it then removes. Check the result with `claude auto-mode config`.
+
+## The gate record
+
+`hooks/scripts/gate.py` runs a gate and keeps the result as evidence:
+
+```bash
+python3 <kit>/hooks/scripts/gate.py verify [--timeout N]   # runs kit.json verify, prints its output, exits with its code
+python3 <kit>/hooks/scripts/gate.py check
+python3 <kit>/hooks/scripts/gate.py status [verify|check]  # does the last record cover the tree as it is now? (exit 0 / 1)
+```
+
+The record, `.claude/evidence/<branch>/gate-<name>.json`, holds the command, exit code, duration,
+the hash of the tree it ran on (committed and uncommitted content, ignored files left out, so a
+commit of the same content keeps the hash), whether the gate itself changed files (a formatter),
+and the last 25 lines of output: a gate that ran is a claim until something records what it ran
+on, and this is what the PR's Evidence section and the verifier cite. Nothing blocks on it.
+Threads and the verifier are told the exact command at start (SubagentStart) and `/kit:go` runs
+it in step 4. `.claude/evidence/` is added to `.git/info/exclude` when the project does not
+ignore it. The Stop hook uses the same hash to know whether anything changed since its last
+passing check.
+
+## Edits made through the shell
+
+In auto mode Claude is told to change files with `sed`, heredocs and short scripts rather than
+the Edit tool, so a hook on `Write|Edit` never sees those edits. Before each Bash command in a
+kit project the guard notes which files are modified or untracked and their mtimes; after it,
+`bash_edits.py` (PostToolUse, matcher Bash) compares. A file the command changed gets the
+`onEdit` commands for its glob, and a protected one is reported (read-only: any change;
+no-overwrite: a change to a file that existed before) with the way to restore it; the hook
+reverts nothing itself. A command that changed more than 40 files is reported, not checked.
+Cost: one `git status` before and after each shell command.
+
+## Permission prompts
+
+`permission.py` (PermissionRequest, matcher Bash) allows, without a prompt, a command that is
+exactly kit.json `check` or `verify`, or the kit's own `gate.py`, `lessons.py` or
+`compact_logs.py` by their real path. Nothing else is touched: the guard has already judged the
+command, and the permission system decides the rest. `/fewer-permission-prompts` (built in)
+writes a broader read-only allowlist to project settings if you want one.
 
 ## Lessons
 
@@ -242,7 +291,10 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
 
   Status: `queued`, `working`, `review`, `needs-you`, `landing`, `done`, `parked`. The status line
   counts the `review` items (`N ready`) and the NEEDS YOU questions (`N need you`), re-reading
-  the board every 15 seconds.
+  the board every 15 seconds, and the threads stopped on a question or a permission (`N
+  waiting`, from the engine's agent list). When a tick finds more ready items or questions than
+  the last one, the mod sends one native notification (`$.ui.notify`, Claude Code 2.1.295+;
+  silently skipped where the engine lacks it).
 - **Safety**: `/kit-safety host|sandbox`. Sandbox writes the kit's block into
   `.claude/settings.local.json`; check it with `/sandbox`, add hosts under
   `sandbox.network.allowedDomains`. Where the sandbox can't start, commands run unsandboxed with
@@ -255,8 +307,16 @@ The mod needs Claude Code with mods (2.1.287+). Without it, the skills and hooks
 
 ```
 python3 <kit>/skills/overnight/scripts/overnight.py "<objective>" --stop-when "<condition>" \
-  --worktree ../app-overnight --max-iterations 40 --max-usd 25 --permission-mode auto --effort medium
+  --worktree ../app-overnight --max-iterations 40 --max-usd 25 --effort medium [--fallback-model sonnet] [--max-turns 60]
 ```
+
+Each iteration runs `claude -p` in permission mode `auto` unless `--permission-mode` says
+otherwise, with `--permission-prompts none` (a headless session cannot answer a prompt: anything
+that would ask is denied at once; since Claude Code 2.1.302 `-p` would otherwise start in the
+manual mode). A Fable or Mythos model bills usage credits without asking in `-p`, so the runner
+refuses `--model fable` unless `--allow-credits` is given. `--no-unattended-note` drops the
+kit's note about unattended runs from the system prompt (to measure whether a model still
+needs it); `--dry-run` prints the exact agent command.
 
 Each iteration is a fresh `claude -p` that makes one small change; the runner runs the gate and
 commits it, or resets. It stops on the stop condition, a cap, a `blocked` report, or 3 failed
@@ -278,6 +338,10 @@ Self-checks (no tokens):
 ```bash
 python3 tests/test_budget.py
 python3 plugins/kit/hooks/tests/test_guard.py
+python3 plugins/kit/hooks/tests/test_gate.py
+python3 plugins/kit/hooks/tests/test_stop_check.py
+python3 plugins/kit/hooks/tests/test_bash_edits.py
+python3 plugins/kit/hooks/tests/test_permission.py
 python3 plugins/kit/hooks/tests/test_session_start.py
 python3 plugins/kit/hooks/tests/test_subagent_start.py
 python3 plugins/kit/hooks/tests/test_lessons.py
@@ -299,7 +363,10 @@ echo '{"cwd":"'$PWD'","tool_input":{"file_path":"'$PWD'/src/x.py"}}' \
 ### Evals
 
 They spend real tokens; `--max-cost-usd` caps the estimate. Each runs the same case with and
-without the plugin; look at which cases flip, not only the mean, and run more than once.
+without the plugin (`--ablation with-without`); look at which cases flip, not only the mean, and
+run at least 3 times per arm (`--runs 3`): the 2026 harness studies put rerun noise at 2-6
+points, more than most single components move. Pin `--model` so two kits are compared on the
+same model.
 
 | Plugin | Case | Checks |
 |---|---|---|

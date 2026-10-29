@@ -36,8 +36,14 @@ def main():
         subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "t1", str(tree)], check=True)
         assert run(tree, config) == "", "no kit.json: nothing"
         (repo / ".claude").mkdir()
+        (repo / ".claude" / "kit.json").write_text('{}')
+        assert run(tree, config) == "", "no gate, no memory files: nothing, and no error"
         (repo / ".claude" / "kit.json").write_text('{"check": "true"}')
-        assert run(tree, config) == "", "no memory files: nothing, and no error"
+        gate_only = run(tree, config)
+        assert gate_only.startswith("kit: run the project's gate with `python3 ") and "gate.py\" check`" in gate_only \
+            and gate_only.count("\n") == 0, gate_only
+        (repo / ".claude" / "kit.json").write_text('{"check": "true", "verify": "make test"}')
+        assert "gate.py\" verify` (kit.json `verify`: `make test`)" in run(tree, config), "verify wins over check"
 
         pitfalls = repo / ".claude" / "agent-memory" / "kit-verifier" / "MEMORY.md"
         pitfalls.parent.mkdir(parents=True)
@@ -48,7 +54,9 @@ def main():
         memory.write_text("- [Lean tests](feedback_lean-tests.md) — one test per behaviour\n"
                           "- [Deploy notes](project_deploy.md) — not a preference\n")
 
-        assert "one test per behaviour" in run(tree, config), "the hook imports the memories and delivers them"
+        delivered = run(tree, config)
+        assert "one test per behaviour" in delivered, "the hook imports the memories and delivers them"
+        assert delivered.startswith("kit: run the project's gate"), "the gate line comes first"
         text = subagent_start.lessons(tree, config)  # the fallback reading, from a worktree: the main checkout's
         assert len(text) <= subagent_start.MAX_CHARS, len(text)
         assert "- feedback_lean-tests.md: one test per behaviour" in text and "pitfall_39.md" in text, text

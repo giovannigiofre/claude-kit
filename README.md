@@ -5,8 +5,9 @@ for each piece of work, every thread works in its own worktree and ends with a P
 without reading the diff, and deterministic hooks keep the quality gates on. It is a git repo
 installed once as a plugin marketplace, and it works in every project.
 
-Design rule, from the research in [docs/proposta-kit-1.0.md](docs/proposta-kit-1.0.md): **few
-instructions, deterministic checks, native features first.** Current models verify their own
+Design rule, from the research in [docs/proposta-kit-1.0.md](docs/proposta-kit-1.0.md) and
+[docs/proposta-kit-2.0.md](docs/proposta-kit-2.0.md): **few instructions, deterministic checks,
+native features first.** Current models verify their own
 work and follow instructions literally, so generic rules and mandated process cost tokens and can
 lower quality; tests, gates and hooks don't. Every piece of the kit is an assumption about what
 the model can't do alone, re-checked when a new model lands.
@@ -17,13 +18,13 @@ the model can't do alone, re-checked when a new model lands.
 
 | When | Type | What happens |
 |---|---|---|
-| Once per project | `/kit:init` | writes `.claude/kit.json` (check, verify, formatters, protected paths), an e2e skill that says how to exercise the app, and proposes safety and permissions |
+| Once per project | `/kit:init` | writes `.claude/kit.json` (check, verify, formatters, protected paths), a `verify` skill that says how to exercise the app, a `loop.md` that tells the native `/loop` how to tend a PR (never merging), and proposes safety and permissions |
 | All day | just talk | in a project with `kit.json`, loop mode is on by default: every message goes to the coordinator (`kit:lead`), which answers, starts a thread or steers one, in at most four lines |
 | A messy idea | just write it | the coordinator (or `kit:shape`) asks 2-3 multiple-choice rounds and writes a brief with a checkable DONE WHEN |
 | Something broke | describe it | `kit:investigate`: evidence (asks you once, with exact export steps), reproduction, hypotheses, a regression-tested fix |
 | UI or LLM work | describe it | the kit asks "Use Kit UI / Kit LLM for this?" and installs that plugin for the project on yes |
 | First PR in a project | answer once | "Do I merge PRs once they're green, or do you always review them first?"; the answer is saved in `kit.json` (`lead.merge`) |
-| Finishing by hand | `/kit:go` | PR with intent, live evidence, what was fixed, risk; keeps CI green; merges if the project allows it |
+| Finishing by hand | `/kit:go` | PR with intent, live evidence (the gate run is recorded on the exact tree), what was fixed, risk; keeps CI green; merges if the project allows it |
 | Evening | "tonight keep doing X until Y" | `kit:overnight`: a fresh session per small step, a commit only when the gate passes, caps or none |
 | Weekly | `/kit:learn sweep` | turns repeated corrections into checks or rules, and prunes instructions that no longer help (at most 4 changes, each approved) |
 
@@ -43,8 +44,10 @@ reviewed, not-high-risk PRs. Medium- or high-risk work gets a review by
 `kit:verifier` in a fresh context before it reaches you. When a thread finishes while you're away,
 the coordinator sends a notification (desktop, or phone with Remote Control).
 
-**The status line.** `kit: loop · host · $1.20 · 2 running · 1 overnight · 1 ready · 1 need you`,
-read again every 15 seconds. Mode per project (`/kit-mode`): **Light** (a normal session) or
+**The status line.** `kit: loop · host · $1.20 · 2 running · 1 waiting · 1 overnight · 1 ready ·
+1 need you`, read again every 15 seconds (`waiting`: a thread stopped on a question or a
+permission). When the board gains a ready item or a question, the kit sends one native
+notification where Claude Code offers one. Mode per project (`/kit-mode`): **Light** (a normal session) or
 **Loop** (every typed message goes to the coordinator; the default in a project with
 `kit.json`). Safety per project (`/kit-safety`): **Host** or **Sandbox**.
 
@@ -65,9 +68,14 @@ read again every 15 seconds. Mode per project (`/kit-mode`): **Light** (a normal
 
  Hooks in every project with .claude/kit.json (silent when all is well):
    PreToolUse   protect  blocks edits to protected paths
-                guard    blocks irreversible or credential-leaking commands, in any permission mode
+                guard    blocks irreversible or credential-leaking commands, in any permission
+                         mode, plus the project's own guard.denyCommands / askCommands
+   PermissionRequest     the project's own `check` and `verify` run without a prompt
    PostToolUse  on_edit  runs the formatter/validator for the edited file, feeds errors back
-   Stop         check    runs the fast `check`; on failure Claude keeps fixing (max 3 tries)
+                bash_edits  the same for files a shell command changed (sed, a heredoc), plus
+                         protect after the fact
+   Stop         check    runs the fast `check` (with KIT_CHANGED_FILES, so it can be diff-aware)
+                         when the tree's content changed; on failure Claude keeps fixing (max 3)
    SessionStart          lists the project's gates; after a compaction, re-injects the board;
                          says once when a newer kit is installed than the one loaded (restart)
    SubagentStart         gives each kit:implementer and kit:verifier this repo's lessons from the
@@ -97,7 +105,7 @@ read again every 15 seconds. Mode per project (`/kit-mode`): **Light** (a normal
 | `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
 | `kit:implementer` | A thread: one item from brief to PR in its own worktree, effort medium |
 | `kit:verifier` | A fresh-context review against the intent, with a per-project memory of pitfalls |
-| Hooks + mod | `protect`, `guard`, `on_edit`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop`, the lesson ledger `lessons.py`; the mod (`kit.tsx`: modes, safety, status line) |
+| Hooks + mod | `protect`, `guard`, `on_edit`, `bash_edits`, `permission`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop`, the lesson ledger `lessons.py`, `gate.py` (runs `check` or `verify` and records the tree it passed on: the evidence a PR body cites); the mod (`kit.tsx`: modes, safety, status line with threads waiting for you, a native notification when the board gains work for you) |
 
 **Domain plugins** (project scope, offered by `kit:extras` when a task needs them):
 
@@ -167,8 +175,9 @@ project.
   `sudo`, `curl … | sh`, and reading `~/.ssh`, `~/.aws`, gh, docker or kube config and the
   keychain. It also keeps you the only author: it blocks a commit, PR, issue or comment that
   credits an AI (`Co-Authored-By: Claude`, "Generated with Claude Code", a session link), through
-  git, `gh` or the GitHub MCP tools, and a commit made under an AI git identity. It reads shell
-  text, so it is best effort.
+  git, `gh` or the GitHub MCP tools, and a commit made under an AI git identity. A project can
+  add its own rules (`guard.denyCommands` / `askCommands`: a regex over the command and the
+  reason). It reads shell text, so it is best effort.
 - **Sandbox** (overnight runs, unfamiliar repos): the same guard plus Claude Code's Bash sandbox
   in `.claude/settings.local.json` (writes in the project and temp, network to GitHub, package
   registries and the Anthropic API, credential folders unreadable). `kit:overnight` passes it to
@@ -180,13 +189,15 @@ project.
 - Keep it generic; anything project-specific goes in that project's `kit.json` or skills. Domain
   knowledge goes in a domain plugin that `kit:extras` offers.
 - `python3 tests/test_budget.py` must pass: always-on description budgets per plugin, short
-  SKILL.md files, no shouted rules, no per-prompt or every-tool hooks in core, and every
-  `kit:` reference resolving. Raise a budget only with a reason.
+  SKILL.md files, no shouted rules, no request for the model's reasoning, no per-prompt or
+  every-tool hooks in core, and every `kit:` reference resolving. Raise a budget only with a
+  reason.
 - Prefer a check a machine runs (a hook, a script, a test) over a sentence. Explain the why
   instead of commanding; don't tell the model to verify or plan, give it something to run.
 - Hooks and scripts use the Python 3.9+ standard library only.
-- **When a new model lands:** run `/doctor prompt-audit` on the plugins, re-run the kit's evals
-  with and without the kit, and delete what no longer changes the result.
+- **When a new model lands:** run `/doctor prompt-audit` and `/skill-doctor` on the plugins,
+  re-run the kit's evals with and without the kit (at least 3 runs per arm: rerun noise alone is
+  2-6 points), and delete what no longer changes the result.
 
 Tests and evals: [docs/reference.md#develop](docs/reference.md#develop).
 
@@ -194,7 +205,9 @@ Tests and evals: [docs/reference.md#develop](docs/reference.md#develop).
 
 - Research behind this version (Anthropic's guides for Opus 5 and 5.5, the Claude Code team,
   measured studies of context files and instruction following, practitioners' loops):
-  [docs/proposta-kit-1.0.md](docs/proposta-kit-1.0.md).
+  [docs/proposta-kit-1.0.md](docs/proposta-kit-1.0.md); for 2.0 (Fable 5.1, Claude Code
+  2.1.312, the 2026 studies on agent PRs, harness overhead and code decay, the owner's stack):
+  [docs/proposta-kit-2.0.md](docs/proposta-kit-2.0.md).
 - Boris Cherny: verification as the main lever, `/go`, loops that do the prompting:
   https://x.com/bcherny/status/2044847858634064115, https://x.com/bcherny/status/2038454341884154269
 - Claude Code docs, Projects (the model for `kit:lead`): https://code.claude.com/docs/en/claude-projects

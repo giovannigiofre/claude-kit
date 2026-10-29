@@ -33,6 +33,9 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    claude.ai session link), a commit made under an AI git identity, or git's
                    identity set to one, by git, gh or a GitHub MCP tool;
                    guard.attribution = "allow" turns this rule off
+  project          kit.json guard.denyCommands / guard.askCommands: the project's own rules,
+                   each {"pattern": "<regex over the command>", "reason": "..."}; /kit:learn
+                   writes one when a lesson deserves a check instead of a sentence
 
 Multi-line commands, subshells, braces, if/for/while bodies, $(...) and backticks, sh -c and
 `cd` within one command are followed; quoted text over several lines (a commit message) and
@@ -41,7 +44,14 @@ here-document bodies are arguments, not commands.
 Active when the project has .claude/kit.json (unless its "guard" is "off"), or everywhere when
 ~/.claude/kit.json says "guard": "on". Options, under "guard" in either file:
   {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40,
-   "allowCommands": ["^rm -rf /opt/my-build$"], "attribution": "block"}
+   "allowCommands": ["^rm -rf /opt/my-build$"], "attribution": "block",
+   "denyCommands": [{"pattern": "^npm install(?! --frozen)", "reason": "use pnpm here"}], "askCommands": []}
+
+Before each Bash command in a project with kit.json it also notes which files are already
+modified and when (bash_edits.py, PostToolUse, compares and runs protect and onEdit on what
+the command changed), so an edit made with sed or a heredoc gets the same checks as one made
+with the Edit tool.
+
 
 Each denial is counted in the kit's lesson ledger (lessons.py) by its shape, once per session.
 """
@@ -722,6 +732,7 @@ def check_git(argv, cwd, opts):
     def has_changes(untracked=False):
         return bool(git(cwd, "status", "--porcelain", "--untracked-files=" + ("all" if untracked else "no")))
 
+
     if sub == "clean":
         if any(re.match(r"^-[a-zA-Z]*[xX]", a) for a in rest):
             return ("deny", "discard-work", "git clean -x/-X deletes ignored files such as .env and local data")
@@ -911,6 +922,15 @@ def check_bash(command, cwd, root, opts):
                 return None
         except re.error:
             continue
+    for decision, key in (("deny", "denyCommands"), ("ask", "askCommands")):
+        for rule in opts.get(key) or []:
+            pattern = rule.get("pattern") if isinstance(rule, dict) else rule
+            reason = (rule.get("reason") if isinstance(rule, dict) else "") or "a rule of this project"
+            try:
+                if pattern and re.search(pattern, command):
+                    return (decision, "project", f"{reason} (kit.json guard.{key})")
+            except re.error:
+                continue
     if re.search(r":\(\)\s*\{\s*:\|:&\s*\};\s*:", command):
         return ("deny", "system", "fork bomb")
     if re.search(r">\s*/dev/(sd|disk|nvme|hd)", command):
@@ -995,6 +1015,17 @@ def check_agents(data, opts):
     return None
 
 
+def snapshot(root, session):
+    """What is already modified or untracked, and when: bash_edits.py (PostToolUse) compares it
+    with the tree after the command, so an edit made with sed or a heredoc gets protect and
+    onEdit too. Never fails the guard."""
+    try:
+        import time
+        kitlib.save_state(session, "bash-snapshot", {"ts": time.time(), "files": kitlib.dirty_snapshot(root)})
+    except Exception:
+        pass
+
+
 def record_denial(cwd, rule, why, session):
     """Count the denial in the kit's lesson ledger by its shape (quoted words and paths dropped),
     once per session: a second session hitting the same wall gets told up front."""
@@ -1015,6 +1046,8 @@ def main():
     tool_input = data.get("tool_input") or {}
     cwd = Path(data.get("cwd") or os.getcwd())
     root = Path(os.path.normpath(str(kitlib.git_root(cwd) or cwd)))
+    if tool == "Bash" and kitlib.load_config(root)[0]:
+        snapshot(root, data.get("session_id") or "")
     active, opts = settings(root)
     if not active:
         return 0

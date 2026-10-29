@@ -8,6 +8,8 @@
   Claude cannot fix never traps the session; Claude must then report the failure.
 - Each failure is counted in the kit's lesson ledger (lessons.py) by its first error line, once
   per session; the same failure in a second session becomes a lesson.
+- The command gets KIT_CHANGED_FILES (the files this branch touched, shell-quoted) and
+  KIT_CHANGED_COUNT, so a check can look only at them (`ruff check $KIT_CHANGED_FILES`).
 """
 
 import hashlib
@@ -20,6 +22,15 @@ import kitlib  # noqa: E402
 
 
 def tree_fingerprint(root):
+    """What the tree holds now, content included: a new file edited again must run the check
+    again, which a status-and-diff fingerprint misses (untracked content is in neither)."""
+    try:
+        import gate
+        tree = gate.tree_hash(root)
+        if tree:
+            return tree
+    except Exception:
+        pass
     code, status = kitlib.run_shell("git status --porcelain=v1 -uall", root, timeout=30)
     if code != 0:
         return None
@@ -58,7 +69,8 @@ def main():
     fp = tree_fingerprint(root)
     if fp is None or fp == state.get("passed_fp"):
         return 0
-    code, out = kitlib.run_shell(config["check"], root, timeout=int(config.get("checkTimeout", 540)))
+    env = {"KIT_GATE": "check", **kitlib.changed_env(root)}  # a diff-aware check can read the file list
+    code, out = kitlib.run_shell(config["check"], root, env, timeout=int(config.get("checkTimeout", 540)))
     if code == 0:
         kitlib.save_state(session, "stop", {"passed_fp": fp, "fails": 0})
         return 0
