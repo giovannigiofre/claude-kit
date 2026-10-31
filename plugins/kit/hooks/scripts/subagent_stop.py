@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""SubagentStop (kit:verifier): count the verifier's verdict, and turn each FAIL problem into a
+"""SubagentStop (kit:verifier, kit:implementer): file a thread's report and a verifier's verdict under
+the coordinator's item when the brief names one (items.py), count the verifier's verdict, and turn each FAIL problem into a
 candidate lesson in the kit's ledger (lessons.py). The same problem in a later round or review
 makes it active, and so does a PASS after that FAIL (the problem was real and is fixed now; the
 distiller then runs in the background). One seen again after it was delivered to a thread
@@ -157,17 +158,71 @@ def scope_of(*texts):
     return ""
 
 
+def from_transcript_any(path):
+    """(brief, report) for a thread: the first user message and the last SubagentHandback message,
+    else the last assistant text (a thread's report has no VERDICT line)."""
+    brief, handback, said = "", "", ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                message = row.get("message") or {}
+                if row.get("type") == "user" and not brief:
+                    brief = text_of(message.get("content"))
+                elif row.get("type") == "assistant" and isinstance(message.get("content"), list):
+                    for c in message["content"]:
+                        if c.get("type") == "tool_use" and c.get("name") == "SubagentHandback":
+                            handback = str((c.get("input") or {}).get("message") or "")
+                        elif c.get("type") == "text" and c.get("text", "").strip():
+                            said = c["text"]
+    except OSError:
+        pass
+    return brief, handback or said
+
+
+def file_report(root, brief, report, agent_type):
+    """A thread briefed with `ITEM: <id>` gets its report filed under the item (REPORT.md for a
+    kit:implementer, VERDICT.md for a kit:verifier), with one LOG line: the mailbox the
+    coordinator and the user read on disk. Silent when the brief names no item."""
+    try:
+        import items
+        item_id = items.find_id(brief)
+        if not item_id or not items.find(root, item_id):
+            return
+        if agent_type.endswith("verifier"):
+            m = re.search(r"^\W*VERDICT:\s*([A-Z_]+(?:\s+scope=\S+)?)", report, re.M)
+            items.write(root, item_id, "VERDICT.md", report, "verdict", m.group(1) if m else "no verdict line")
+        else:
+            status = re.search(r"^\W*STATUS:\s*(\w+)", report, re.M)
+            decisions = len(re.findall(r"^\s*(?:-\s*)?DECISION:", report, re.M))
+            note = (status.group(1) if status else "no status line") + (f", {decisions} decision(s)" if decisions else "")
+            items.write(root, item_id, "REPORT.md", report, "reported", note)
+    except Exception:
+        pass
+
+
 def main():
     data = kitlib.read_input()
     root = kitlib.project_root(data)
     config, _ = kitlib.load_config(root)
     if not config:
         return 0
+    agent_type = str(data.get("agent_type") or "")
     report = data.get("last_assistant_message") or ""
     brief = ""
+    if not agent_type.endswith("verifier"):  # a thread: file its report, nothing else to parse
+        if data.get("agent_transcript_path"):
+            brief, handed = from_transcript_any(data["agent_transcript_path"])
+            report = report or handed
+        file_report(root, brief, report, agent_type)
+        return 0
     if data.get("agent_transcript_path"):
         brief, handed = from_transcript(data["agent_transcript_path"])
         report = report if HAS_VERDICT.search(report) else handed
+    file_report(root, brief, report, agent_type)
     verdict, problems = parse(report)
     if not verdict:
         return 0

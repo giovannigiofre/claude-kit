@@ -36,7 +36,9 @@ the thread's own report: a narrative that frames a change as a fix can steer a r
 Final message, your return value:
 
 ```
-VERDICT: PASS | FAIL | CANNOT_VERIFY
+VERDICT: PASS | FAIL | CANNOT_VERIFY     (FAIL scope=local:<comma-separated paths> when every
+                                          problem is confined to those files and no contract
+                                          changes: the thread then gets a scoped fix, not a new brief)
 EVIDENCE: <each command or check run, with the result line quoted>
 PROBLEMS: <numbered, each with file:line and the concrete failure; empty if PASS>
 NOT CHECKED: <what you could not verify and why>

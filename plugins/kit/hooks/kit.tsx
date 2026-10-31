@@ -1,8 +1,10 @@
 // The kit's one hooks module: light/loop mode, host/sandbox safety and a status line entry.
 //
-// - Mode, per project: `light` (a normal session; the lead only when asked) or `loop` (every
-//   prompt goes to the coordinator, kit:lead). Stored in $.store. Without a choice: the personal
-//   default in ~/.claude/kit.json ({"mode": "light"} or "loop"), else loop in a project that has
+// - Mode, per project: `light` (a normal session; the lead only when asked), `loop` (every
+//   prompt goes to the coordinator, kit:lead) or `ask` (a discussion about the repository: read
+//   and reason, change no code; documentation may be edited; /kit:handoff sends the outcome where
+//   the work gets done). Stored in $.store. Without a choice: the personal default in
+//   ~/.claude/kit.json ({"mode": "light"} or "loop"), else loop in a project that has
 //   .claude/kit.json and light elsewhere.
 // - Safety, per project: `host` (no OS sandbox; the kit's guard hook still blocks the
 //   irreversible actions) or `sandbox` (Claude Code's Bash sandbox, written by the kit into
@@ -12,7 +14,8 @@
 //   seconds; one native notification when the board gains a ready item or a question.
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-type KitMode = 'light' | 'loop'
+type KitMode = 'light' | 'loop' | 'ask'
+const MODES: KitMode[] = ['light', 'loop', 'ask']
 type KitSafety = 'host' | 'sandbox'
 
 const SANDBOX = {
@@ -39,6 +42,12 @@ const SANDBOX = {
 const LOOP_CONTEXT =
   'Kit loop mode: you are this project\'s coordinator. Handle this message with the kit:lead ' +
   'skill (load it first if this conversation has not, or if its rules are gone after a compaction).'
+
+const ASK_CONTEXT =
+  'Kit ask mode: this session is a discussion about the repository. Explore, explain, reason and ' +
+  'propose; change no code. Documentation files (Markdown, docs/) may be edited when the user asks. ' +
+  'When something worth doing emerges, offer /kit:handoff: it turns the conclusion into a brief ' +
+  'and hands it to the coordinator, another session or a new background session.'
 
 const OFF_CONTEXT =
   'Kit loop mode was just switched off. Stop coordinating: delete the cron jobs you created for ' +
@@ -97,7 +106,7 @@ async function userKit($: $): Promise<any> {
 
 async function getMode($: $, root: string): Promise<KitMode> {
   const stored = await $.store.get(`mode:${root}`)
-  if (stored === 'loop' || stored === 'light') return stored
+  if (MODES.includes(stored as KitMode)) return stored as KitMode
   const user = await userKit($)
   if (user && (user.mode === 'loop' || user.mode === 'light')) return user.mode
   // a project that opted into the kit talks to the coordinator unless someone chose otherwise
@@ -107,12 +116,12 @@ async function getMode($: $, root: string): Promise<KitMode> {
 async function setMode($: $, root: string, mode: KitMode): Promise<string> {
   const before = await getMode($, root)
   await $.store.set(`mode:${root}`, mode)
-  if (before === 'loop' && mode === 'light') await $.store.set(`loopOff:${root}`, true)
+  if (before === 'loop' && mode !== 'loop') await $.store.set(`loopOff:${root}`, true)
   if (mode === 'loop') await $.store.delete(`loopOff:${root}`)
   await refreshStatus($)
-  return mode === 'loop'
-    ? 'Loop mode on: from your next message you talk to the coordinator (kit:lead); it starts a thread for each piece of work.'
-    : 'Light mode on: a normal session. The coordinator stops its loops at your next message; /kit:lead still works when you ask.'
+  if (mode === 'loop') return 'Loop mode on: from your next message you talk to the coordinator (kit:lead); it starts a thread for each piece of work.'
+  if (mode === 'ask') return 'Ask mode on: a discussion about this repository. Claude reads and reasons, changes no code (documentation may be edited when you ask); /kit:handoff turns a conclusion into a brief for the coordinator, another session or a new background session.'
+  return 'Light mode on: a normal session. The coordinator stops its loops at your next message; /kit:lead still works when you ask.'
 }
 
 async function getSafety($: $, root: string): Promise<{ safety: KitSafety; from: 'kit' | 'settings' | 'none' }> {
@@ -293,7 +302,7 @@ async function refreshStatus($: $): Promise<void> {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'kit-mode', description: 'Kit mode for this project: light or loop', argumentHint: '[light|loop]' })
+    await $.command.register({ name: 'kit-mode', description: 'Kit mode for this project: light, loop or ask', argumentHint: '[light|loop|ask]' })
     await $.command.register({ name: 'kit-safety', description: 'Kit safety for this project: host or sandbox', argumentHint: '[host|sandbox]' })
     const result = await next(e)
     // panes outlive a module reload, and the kit has none since 1.2.0: close what an older one left
@@ -322,8 +331,8 @@ export const register: Register = on => {
   on('command.run', { command: 'kit-mode' }, async ($, e) => {
     const root = await projectRoot($)
     const arg = e.args.trim().toLowerCase()
-    if (arg === 'light' || arg === 'loop') return { text: await setMode($, root, arg) }
-    return { text: `Kit mode for this project: ${await getMode($, root)}. Use /kit-mode light or /kit-mode loop.` }
+    if (MODES.includes(arg as KitMode)) return { text: await setMode($, root, arg as KitMode) }
+    return { text: `Kit mode for this project: ${await getMode($, root)}. Use /kit-mode light, loop or ask.` }
   })
 
   on('command.run', { command: 'kit-safety' }, async ($, e) => {
@@ -345,7 +354,9 @@ export const register: Register = on => {
         extra.push(OFF_CONTEXT)
         await $.store.delete(`loopOff:${root}`)
       }
-      if ((await getMode($, root)) === 'loop') extra.push(LOOP_CONTEXT)
+      const mode = await getMode($, root)
+      if (mode === 'loop') extra.push(LOOP_CONTEXT)
+      if (mode === 'ask') extra.push(ASK_CONTEXT)
       if (extra.length) return next({ ...e, context: [...(e.context ?? []), ...extra] })
     } catch {
       // never block a prompt over the kit

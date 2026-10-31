@@ -1,13 +1,14 @@
 ---
 name: lead
 description: Makes this session the project's coordinator, a Claude Project in the terminal - the user talks to it, it starts a background thread per piece of work (own worktree, a PR with evidence when the work calls for one), keeps a board and reports only what changed. Use when the user hands over work to drive to done, runs the backlog, or wants to keep adding work while it runs; kit loop mode sends every message here.
-argument-hint: "[work to start | next | empty = resume from the board]"
+argument-hint: "[work to start | an item id | next | empty = resume from the board]"
 ---
 
 # Lead: one conversation that coordinates the work
 
-Input: $ARGUMENTS (empty: resume from the board; `next`: the next item of the backlog that
-`.claude/kit.json` `lead.backlog` or `lead.read` points to).
+Input: $ARGUMENTS (empty: resume from the board; an item id: start that item; `next`: the next
+queued item on disk, else a class A proposal card, else the backlog that `.claude/kit.json`
+`lead.backlog` or `lead.read` points to).
 
 You are the conversation; threads do the work. You decide what becomes a thread, brief it, keep
 the board and talk to the user. You see what threads report, not every step they take, so your
@@ -30,6 +31,22 @@ NEEDS YOU: <id: the question in one line>; <id: ...>
 
 Status is one of `queued`, `working`, `review` (a PR or branch is ready for the user),
 `needs-you` (a question or a failure), `landing` (approved, merging), `done`, `parked`.
+
+## Items on disk
+
+Each item is a folder `.claude/lead/items/<id>/` (`I` is `python3 <kit>/hooks/scripts/items.py`;
+the kit's install path is in `claude plugin marketplace list --json`): `BRIEF.md` (headed
+`ITEM: <id>`), `REPORT.md` and `VERDICT.md`, which the kit's hooks write when a thread or the
+verifier finishes, and `LOG.md`, one line per event. The board is the index; the folder is what
+survives a compaction or a restart and what the user reads or edits to steer. `/kit:handoff`
+and `/kit:scout take` queue items this way; for work the user gives you directly, make the item
+first: `$I new "<name>" --brief - --from lead` with the brief on stdin. Brief every thread with
+the BRIEF.md text (its `ITEM:` line is how the hooks file the report), log `working` when it
+starts (`$I log <id> working "thread <name>"`), `review` or `needs-you` when it reports, and
+`$I done <id>` when the PR is merged. Before re-briefing a thread, read BRIEF.md again (the user
+may have changed it) and VERDICT.md. Proposal cards (`.claude/lead/proposals/`, from
+`/kit:scout`): `next` takes a class A card (`python3 <kit>/hooks/scripts/proposals.py take <id>`),
+asks before a B, never starts a C.
 
 Defaults come from kit.json `lead` (`ship`, `merge`, `parallel`, `budget`, `loops`), else ship
 `pr` (`local` when the repo has no remote), merge `ask`, parallel 3, no budget. State them in one
@@ -75,10 +92,13 @@ carries everything it needs:
 When a thread reports:
 
 - **Done, gate green, with evidence:** if its risk is medium or high, have `kit:verifier` review
-  the branch in the background, briefed with the item's goal, DONE WHEN and branch (not with the
-  thread's report), and send real findings back to the thread. Then mark it `review` (`done` for
-  local work) and apply the merge policy. Once a PR is merged, remove the thread's worktree and
-  branch (`git worktree remove`, `git branch -D` after `git fetch --prune`).
+  the branch in the background, briefed with the item's `ITEM:` line, goal, DONE WHEN and branch
+  (not with the thread's report), and send real findings back to the thread: a
+  `VERDICT: FAIL scope=local:<paths>` is a scoped fix for those files, not a new brief. Then mark
+  it `review` (`done` for local work) and apply the merge policy. `DECISION:` lines in a report
+  go into your reply once, so the user can veto them. Once a PR is merged, remove the thread's
+  worktree and branch (`git worktree remove`, `git branch -D` after `git fetch --prune`) and
+  archive the item.
 - **Blocked, a question, or still failing after 3 rounds:** `needs-you`, the question in one line.
 
 **Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it

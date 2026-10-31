@@ -60,6 +60,26 @@ test('light mode adds nothing; loop mode hands every prompt to the coordinator; 
   expect(seen.at(-1) ?? []).toEqual([])
 })
 
+test('ask mode adds the discussion line; leaving it adds nothing; leaving loop still says stop once', async ($, on) => {
+  world(on)
+  const seen = promptCatcher(on)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  const on1 = await $.command.run({ command: 'kit-mode', args: 'ask' } as any)
+  expect(JSON.stringify(on1)).toContain('Ask mode on')
+  await $.prompt.submit({ text: 'how does auth work here?' } as any)
+  expect((seen.at(-1) ?? []).join(' ')).toContain('discussion about the repository')
+  expect((seen.at(-1) ?? []).join(' ')).not.toContain('coordinator (kit:lead)')
+  await $.command.run({ command: 'kit-mode', args: 'light' } as any)
+  await $.prompt.submit({ text: 'thanks' } as any)
+  expect(seen.at(-1) ?? []).toEqual([])
+  await $.command.run({ command: 'kit-mode', args: 'loop' } as any)
+  await $.command.run({ command: 'kit-mode', args: 'ask' } as any)
+  await $.prompt.submit({ text: 'why is this slow?' } as any)
+  const text = (seen.at(-1) ?? []).join(' ')
+  expect(text).toContain('switched off')
+  expect(text).toContain('discussion about the repository')
+})
+
 test('loop mode never reaches headless or scheduled prompts', async ($, on) => {
   world(on, { '/home/u/.claude/kit.json': JSON.stringify({ mode: 'loop' }) })
   const seen = promptCatcher(on)
