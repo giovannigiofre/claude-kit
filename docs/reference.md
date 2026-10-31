@@ -151,6 +151,46 @@ At session start in a kit project the hook only rebuilds from the stored blocks 
 lines back; it is silent when nothing changed. With no blocks it takes no lock and writes nothing
 unless settings.json still has `[kit auto-mode]` lines, which it then removes. Check the result with `claude auto-mode config`.
 
+## Items and proposal cards
+
+`hooks/scripts/items.py`: each coordinator item is a folder, the mailbox between you, the
+coordinator, its threads and the verifier (state in files you can `cat`, edit to steer, and
+resume from; the source of the idea is in CATALOG.md).
+
+```
+.claude/lead/items/<id>/BRIEF.md     headed `ITEM: <id>`; the goal, DONE WHEN, scope; edit it to steer the next round
+.claude/lead/items/<id>/REPORT.md    the thread's final report (written by the SubagentStop hook, kit:implementer)
+.claude/lead/items/<id>/VERDICT.md   the verifier's report (SubagentStop, kit:verifier)
+.claude/lead/items/<id>/LOG.md       one line per event: queued, working, reported, verdict, review, done
+.claude/lead/items/done/<id>/        archived
+```
+
+```bash
+python3 <kit>/hooks/scripts/items.py new "<name>" --brief - --from lead|handoff   # id and folder printed
+python3 <kit>/hooks/scripts/items.py list [--status queued]
+python3 <kit>/hooks/scripts/items.py log <id> <status> [note]
+python3 <kit>/hooks/scripts/items.py show <id>
+python3 <kit>/hooks/scripts/items.py done <id>
+```
+
+A thread briefed with the BRIEF.md text carries the `ITEM:` line; when it finishes, the hook
+files its report under the item (`reported | done, 2 decision(s)` in the LOG); when the
+verifier finishes, its verdict (`verdict | FAIL scope=local:src/x.py`). The lead reads
+BRIEF.md again before re-briefing (you may have edited it) and VERDICT.md; a
+`FAIL scope=local:<paths>` becomes a scoped fix sent to the thread, not a new brief. `DECISION:`
+lines in a report are the thread's judgment calls, shown to you once so you can veto them.
+`.claude/lead/` is added to `.git/info/exclude` when the project does not ignore it.
+
+`hooks/scripts/proposals.py`: candidate work found by read-only explorers (`/kit:scout`), one
+card per finding in `.claude/lead/proposals/<id>.md` (frontmatter: id, fingerprint, origin,
+class, confidence, created, evidence; body: Suggestion, Rationale). The fingerprint is the
+sha256 of the normalized `origin|summary|rationale`, so a re-run never duplicates a card; a
+summary that is already an item is skipped, and so is anything that looks like a secret.
+Classes: A mechanical and reversible (the coordinator's `next` takes it), B needs judgment
+(it asks), C a human decision (never started by an agent). `take <id>` turns a card into a
+queued item and retires the card; `retire [--days 30]` archives cards older than that or whose
+origin file is gone.
+
 ## The gate record
 
 `hooks/scripts/gate.py` runs a gate and keeps the result as evidence:
@@ -277,9 +317,21 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
 - **Light**: a normal session. `/kit:lead <work>` starts the coordinator when you want it.
 - **Loop**: every message you type (terminal or Remote Control) gets one line of context sending
   it to the coordinator; headless runs, scheduled prompts and notifications never do. `/kit-mode
-  loop|light`. Without a choice for the project, the personal default in
+  loop|light|ask`. Without a choice for the project, the personal default in
   `~/.claude/kit.json` (`{"mode": "light"}` or `"loop"`) applies, else loop in a project with
   `.claude/kit.json` and light elsewhere.
+- **Ask**: a discussion about the repository. Every typed message gets one line of context:
+  explore, explain, reason and propose; change no code; documentation (Markdown, `docs/`) may be
+  edited when you ask; offer `/kit:handoff` when something worth doing emerges. It is an
+  instruction, not a block: the guard keeps protecting the irreversible things, nothing else is
+  refused. `/kit:handoff [lead | session <name> | bg | save | card]` writes the brief
+  (`kit:shape`'s format plus PLACES and DECISIONS), saves it as an item
+  (`.claude/lead/items/<id>/BRIEF.md`) and sends it: to this session's coordinator (queued; it
+  starts at the next message in loop mode), to another open session on this machine
+  (cross-session `SendMessage`; it arrives as a message from a peer and that session confirms with
+  you first; the receiving session's `crossSessionInbound` setting must accept), to a new
+  background session (`claude --bg --name <id>`, then `claude attach <id>` or `claude agents`),
+  or nowhere (`save`); `card` makes a proposal card instead, for an idea with no checkable done.
 - **Board** (`.claude/lead/board.md`):
 
   ```
@@ -342,6 +394,8 @@ python3 plugins/kit/hooks/tests/test_gate.py
 python3 plugins/kit/hooks/tests/test_stop_check.py
 python3 plugins/kit/hooks/tests/test_bash_edits.py
 python3 plugins/kit/hooks/tests/test_permission.py
+python3 plugins/kit/hooks/tests/test_items.py
+python3 plugins/kit/hooks/tests/test_proposals.py
 python3 plugins/kit/hooks/tests/test_session_start.py
 python3 plugins/kit/hooks/tests/test_subagent_start.py
 python3 plugins/kit/hooks/tests/test_lessons.py
