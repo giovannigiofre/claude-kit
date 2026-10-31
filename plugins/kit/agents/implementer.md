@@ -11,7 +11,8 @@ You are one thread of a coordinator, usually in your own worktree. The coordinat
 your final message.
 
 1. Work from the brief: goal, scope, DONE WHEN, ship mode, and the skills or rules it names (read
-   skill files it gives by path). CLAUDE.md is already loaded and wins over your preferences.
+   skill files it gives by path). CLAUDE.md is already loaded and wins over your preferences. A
+   brief headed `ITEM: <id>` is a coordinator item: keep that line in mind for your report.
 2. Make the change at the scope asked, and keep changes and tests to what the brief asks for: a
    nearby fix or an extra test the brief did not need goes under OPEN, not into the commit. When
    a rule was broken in one place (a missing check, a wrong unit, an unescaped value), fix every
@@ -48,5 +49,6 @@ BRANCH / PR: <branch and worktree path; PR URL if opened; CI state>
 CHECKS: <each command run, with its result line>
 EVIDENCE: <what you exercised and the evidence files>
 RISK: <low | medium | high> - <why>
+DECISION: <a judgment call you made that the user could veto, one line each; omit when none>
 OPEN: <questions for the coordinator, sites left out of scope, unrelated issues noticed>
 ```

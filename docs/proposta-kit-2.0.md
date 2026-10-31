@@ -228,6 +228,31 @@ in più per thread (circa 60 token) con il comando del gate.
 
 ---
 
+## 4b. Kit 1.5: lo stile mailbox di trio-agent-loop (31 ottobre)
+
+L'utente ha portato [albiol2004/trio-agent-loop](https://github.com/albiol2004/trio-agent-loop)
+(MIT) e ha chiesto cosa prenderne. Di buono: lo stato vive in file che si leggono con `cat`, si
+modificano per sterzare e si riprendono; la prima riga del verdetto è leggibile da una macchina
+e uno `scope=local` manda una riparazione mirata invece di ripianificare; le scelte di giudizio
+sono righe `DECISION:` che l'utente può vetare; gli scout di `trio-bridge` scrivono schede di
+proposta deduplicate per classe. Da non prendere: prompt da centinaia di righe, due Opus a
+iterazione, dashboard e driver per dieci harness. Costruiti, approvati prima dall'utente:
+
+- **A. Mailbox per item** (`items.py`, hook SubagentStop anche per `kit:implementer`):
+  `.claude/lead/items/<id>/` con BRIEF, REPORT, VERDICT e LOG; gli hook riempiono REPORT e
+  VERDICT quando thread e verifier finiscono; il verifier può dire `FAIL scope=local:<file>`;
+  l'implementer segna `DECISION:`; il lead rilegge BRIEF prima di ribriffare e archivia a PR
+  mergiata.
+- **B. Modalità discussione e handoff** (`/kit-mode ask`, `/kit:handoff`): solo istruzione
+  (scelta dell'utente), documentazione modificabile, codice no; l'handoff scrive il brief come
+  item e lo manda al coordinatore, a una sessione aperta (messaggistica tra sessioni), a una
+  sessione nuova in background (`claude --bg`), o lo salva; `card` fa una scheda.
+- **C. Schede di proposta** (`/kit:scout`, `proposals.py`): esploratori in sola lettura,
+  schede con impronta sha256 e classe A/B/C, `take` che le trasforma in item, ritiro per età.
+
+Costo sempre caricato: zero (le due skill sono solo da tastiera; la riga di contesto di ask
+mode arriva solo in quella modalità).
+
 ## 5. Da decidere (in ordine di impatto)
 
 Decisioni già prese dall'utente il 29 ottobre: guard come in 1.3 (niente regole su deploy,

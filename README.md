@@ -21,6 +21,8 @@ the model can't do alone, re-checked when a new model lands.
 | Once per project | `/kit:init` | writes `.claude/kit.json` (check, verify, formatters, protected paths), a `verify` skill that says how to exercise the app, a `loop.md` that tells the native `/loop` how to tend a PR (never merging), and proposes safety and permissions |
 | All day | just talk | in a project with `kit.json`, loop mode is on by default: every message goes to the coordinator (`kit:lead`), which answers, starts a thread or steers one, in at most four lines |
 | A messy idea | just write it | the coordinator (or `kit:shape`) asks 2-3 multiple-choice rounds and writes a brief with a checkable DONE WHEN |
+| Thinking it through first | `/kit-mode ask` | a discussion about the repo: Claude reads and reasons, changes no code (docs may be edited); `/kit:handoff` turns the conclusion into a brief and sends it to the coordinator, another open session or a new background session |
+| Finding work | `/kit:scout` | read-only explorers write deduplicated proposal cards (A mechanical, B needs judgment, C human-only) into `.claude/lead/proposals/`; `next` takes the A cards |
 | Something broke | describe it | `kit:investigate`: evidence (asks you once, with exact export steps), reproduction, hypotheses, a regression-tested fix |
 | UI or LLM work | describe it | the kit asks "Use Kit UI / Kit LLM for this?" and installs that plugin for the project on yes |
 | First PR in a project | answer once | "Do I merge PRs once they're green, or do you always review them first?"; the answer is saved in `kit.json` (`lead.merge`) |
@@ -36,7 +38,11 @@ mobile today). One conversation routes each message: a question is answered in p
 becomes a thread (`kit:implementer` in its own worktree, in the background), a follow-up goes to
 the thread already working in that area. The board (`.claude/lead/board.md`) holds every item as
 `working`, `review` (ready for you), `needs-you`, `done`; it survives compaction and restarts, and
-comes back into context after a compaction. Threads run the project's gate, exercise the change,
+comes back into context after a compaction. Each item is also a folder on disk
+(`.claude/lead/items/<id>/`: `BRIEF.md` you can edit to steer, `REPORT.md` and `VERDICT.md`
+written by the hooks when a thread and the verifier finish, `LOG.md` one line per event), so you
+can `cat` what the agents said at any time, from any session (mailbox idea from
+albiol2004/trio-agent-loop, MIT). Threads run the project's gate, exercise the change,
 and per the ship mode commit, open a PR, and fix CI; on their own branches they may rebase and
 force-push as the work needs. Every commit and PR is yours: `kit.json` `author` sets your git
 identity, and nothing credits an AI. Who merges is per project: you, or the coordinator for green,
@@ -47,9 +53,10 @@ the coordinator sends a notification (desktop, or phone with Remote Control).
 **The status line.** `kit: loop · host · $1.20 · 2 running · 1 waiting · 1 overnight · 1 ready ·
 1 need you`, read again every 15 seconds (`waiting`: a thread stopped on a question or a
 permission). When the board gains a ready item or a question, the kit sends one native
-notification where Claude Code offers one. Mode per project (`/kit-mode`): **Light** (a normal session) or
-**Loop** (every typed message goes to the coordinator; the default in a project with
-`kit.json`). Safety per project (`/kit-safety`): **Host** or **Sandbox**.
+notification where Claude Code offers one. Mode per project (`/kit-mode`): **Light** (a normal
+session), **Loop** (every typed message goes to the coordinator; the default in a project with
+`kit.json`) or **Ask** (a discussion: read and reason, no code changes, docs may be edited).
+Safety per project (`/kit-safety`): **Host** or **Sandbox**.
 
 ---
 
@@ -99,13 +106,15 @@ notification where Claude Code offers one. Mode per project (`/kit-mode`): **Lig
 | `kit:investigate` | Root-cause debugging for any failure; `scripts/compact_logs.py` reads big log exports and diffs a failing run against a working one |
 | `kit:overnight` | Launches `scripts/overnight.py`: fresh `claude -p` per step, commit on a green gate, reset otherwise, notes as memory, optional caps, resumes early stops |
 | `kit:extras` | Offers `kit-ui` or `kit-llm` when a task needs one the project lacks |
+| `/kit:handoff` | A discussion's conclusion becomes a brief (an item on disk) sent to the coordinator, an open session, a new background session, or kept as a proposal card |
+| `/kit:scout` | Read-only explorers write deduplicated proposal cards; `take <id>` queues one as an item |
 | `/kit:go` | Intent → sync → test like a user → `/code-review` → `/simplify` → risk → PR → CI green |
 | `/kit:init` | Sets up a project (kit.json, e2e skill, safety, permissions) |
 | `/kit:learn` | Tidies the lesson ledger (merge, retire shipped fixes, proposals to retire or harden, undo); `promote` turns a lesson seen across repos into a kit PR; corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
 | `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
 | `kit:implementer` | A thread: one item from brief to PR in its own worktree, effort medium |
 | `kit:verifier` | A fresh-context review against the intent, with a per-project memory of pitfalls |
-| Hooks + mod | `protect`, `guard`, `on_edit`, `bash_edits`, `permission`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop`, the lesson ledger `lessons.py`, `gate.py` (runs `check` or `verify` and records the tree it passed on: the evidence a PR body cites); the mod (`kit.tsx`: modes, safety, status line with threads waiting for you, a native notification when the board gains work for you) |
+| Hooks + mod | `protect`, `guard`, `on_edit`, `bash_edits`, `permission`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop` (files each thread's report and each verdict under its item), the lesson ledger `lessons.py`, `gate.py` (runs `check` or `verify` and records the tree it passed on: the evidence a PR body cites), `items.py` and `proposals.py` (the coordinator's items and proposal cards on disk); the mod (`kit.tsx`: modes light / loop / ask, safety, status line with threads waiting for you, a native notification when the board gains work for you) |
 
 **Domain plugins** (project scope, offered by `kit:extras` when a task needs them):
 
