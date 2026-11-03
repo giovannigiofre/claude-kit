@@ -315,21 +315,32 @@ async function refreshStatus($: $): Promise<void> {
 // only makes the watchdog quieter). Every map is pruned to the work in flight and bounded.
 const threadsSeen = new Map<string, { outputFile?: string; startedAt: number; expectMs?: number }>()
 const activity = new Map<string, number>() // 'main' or a thread's id -> its last action
-const jobs = new Map<string, { id: string; owner?: string; label: string; startedAt: number; timeoutMs?: number }>()
+const jobs = new Map<string, { id: string; owner?: string; label: string; startedAt: number; timeoutMs?: number; endsAt?: number }>()
 const strikes = new Map<string, Strike>()
 const permissions = new Map<string, PermissionWait>()
 const nudged = new Set<string>() // threads subagent_stop.py told to hand their report back
 const failures = new Map<string, { attempts: number; at: number }>() // 'main' or a thread -> API failures in a row
 const JOB_MAX_AGE_MS = 24 * 3600_000
 const NO_REPORT_MARK = 'kit: no report reached your caller'
+// Set where the tick starts: wakes are prompts, so a headless run (claude -p) gets none.
+let interactive = false
+// The main session's turn that a wake started: what it does is the watchdog's echo, not the
+// person's or the coordinator's own activity, so it neither clears a stall nor restarts its count.
+let wakeTurn = false
 
 // A prompt of the kit's own, its own turn once the session is idle. Sent from a timer, never
 // awaited inside the hook that saw the stall: a stop or a tool call must not wait on that turn.
 async function wake($: $, text: string): Promise<void> {
+  if (!interactive) return
   $.clock.after(0, () => {
+    wakeTurn = true
     // a session that cannot take a prompt now: the next stall wakes it again
-    void $.prompt.submit({ text }).catch(() => undefined)
+    void $.prompt.submit({ text }).catch(() => { wakeTurn = false })
   })
+}
+
+function noteActivity(who: string, at: number): void {
+  if (who !== 'main' || !wakeTurn) activity.set(who, at)
 }
 
 async function nameOf($: $, id: string): Promise<string> {
@@ -364,7 +375,9 @@ async function watchTick($: $): Promise<void> {
   const live = new Set(threads.filter(t => ['running', 'pending', 'waiting'].includes(t.status)).map(t => t.id))
   for (const id of [...threadsSeen.keys()]) if (!live.has(id)) threadsSeen.delete(id)
   for (const id of [...activity.keys()]) if (id !== 'main' && !live.has(id)) activity.delete(id)
-  for (const [id, j] of [...jobs]) if ((j.owner && !live.has(j.owner)) || now - j.startedAt > JOB_MAX_AGE_MS) jobs.delete(id)
+  for (const [id, j] of [...jobs]) {
+    if ((j.owner && !live.has(j.owner)) || now - j.startedAt > JOB_MAX_AGE_MS || (j.endsAt && now > j.endsAt)) jobs.delete(id)
+  }
   const list: Job[] = [...jobs.values()].map(j => ({ id: j.id, owner: j.owner, label: j.label, startedAt: j.startedAt,
     // "(server)" in a command's description: meant to keep running, so it has no deadline
     deadlineMs: /\(server\)/i.test(j.label) ? 0 : j.timeoutMs ?? w.bashDeadlineMin * 60_000 }))
@@ -378,7 +391,7 @@ async function watchTick($: $): Promise<void> {
 // that its caller acted.
 async function noteTool($: $, e: any, r: any): Promise<void> {
   const now = await $.clock.now()
-  activity.set(e.agentId ?? 'main', now)
+  noteActivity(e.agentId ?? 'main', now)
   const res = r && !r.deny && !r.isError ? r.result : undefined
   if ((e.tool === 'Agent' || e.tool === 'Task') && res && res.status === 'async_launched' && res.agentId) {
     threadsSeen.set(res.agentId, { outputFile: res.outputFile, startedAt: now, expectMs: expectedMs(String(e.prompt ?? '')) })
@@ -390,6 +403,12 @@ async function noteTool($: $, e: any, r: any): Promise<void> {
     jobs.set(res.backgroundTaskId, { id: res.backgroundTaskId, owner: e.agentId, label, startedAt: now,
       timeoutMs: typeof e.timeout === 'number' && e.timeout > 0 ? e.timeout : undefined })
     bound(jobs)
+  } else if (e.tool === 'Monitor' && res && res.taskId) {
+    // its owner waits on it and Claude Code ends it at timeout_ms (default 5 min): a job until then
+    const ms = typeof e.timeout_ms === 'number' && e.timeout_ms > 0 ? Math.min(e.timeout_ms, 3_600_000) : 300_000
+    jobs.set(String(res.taskId), { id: String(res.taskId), owner: e.agentId, label: String(e.description || 'Monitor').slice(0, 80),
+      startedAt: now, timeoutMs: ms, endsAt: now + ms })
+    bound(jobs)
   } else if (e.tool === 'TaskStop' || e.tool === 'KillShell') {
     jobs.delete(String(e.task_id ?? e.shell_id ?? ''))
   }
@@ -399,7 +418,7 @@ async function noteTool($: $, e: any, r: any): Promise<void> {
 // not in it ended. Only its own are pruned, since the list may hold only that agent's tasks.
 function pruneJobs(tasks: any, owner?: string): void {
   if (!Array.isArray(tasks)) return
-  const running = new Set(tasks.filter(t => t && t.type === 'shell').map(t => String(t.id)))
+  const running = new Set(tasks.filter(t => t && t.id).map(t => String(t.id)))
   for (const [id, j] of [...jobs]) if (j.owner === owner && !running.has(id)) jobs.delete(id)
 }
 
@@ -449,6 +468,7 @@ export const register: Register = on => {
     // one tick per module, even when session.start runs again (resume, /clear). The watchdog
     // rides on it, so a headless run has none: there Claude Code's own background time limit applies
     if (tick) tick.cancel()
+    interactive = true
     tick = $.clock.every(15000, () => {
       void refreshStatus($).catch(() => undefined)
       void watchTick($).catch(() => undefined)
@@ -457,7 +477,7 @@ export const register: Register = on => {
   })
 
   // The watchdog's facts. Each hook passes its event on unchanged and never fails it.
-  for (const tool of ['Agent', 'Task', 'Bash', 'TaskStop', 'KillShell']) {
+  for (const tool of ['Agent', 'Task', 'Bash', 'Monitor', 'TaskStop', 'KillShell']) {
     on('tool.call', { tool }, async ($, e: any, next) => {
       const r = await next(e)
       await noteTool($, e, r).catch(() => undefined)
@@ -508,8 +528,10 @@ export const register: Register = on => {
 
   // a thread waiting on a permission prompt: noted, never answered (the prompt stays the person's)
   on('classic.PermissionRequest', async ($, e: any, next) => {
+    const r: any = await next(e)
     try {
-      if (e.agent_id) {
+      // a hook beneath that answered it (an auto-allow) leaves no prompt for the person
+      if (e.agent_id && !r?.decision) {
         const input = e.tool_input ?? {}
         const detail = String(input.command ?? input.file_path ?? input.url ?? '').slice(0, 120)
         permissions.set(String(e.agent_id), { tool: String(e.tool_name ?? ''), detail, since: await $.clock.now() })
@@ -518,14 +540,16 @@ export const register: Register = on => {
     } catch {
       // noted or not, the request goes on
     }
-    return next(e)
+    return r
   })
 
   on('turn.complete', async ($, e: any, next) => {
     const r = await next(e)
     try {
       const who = e.agentId ? String(e.agentId) : 'main'
-      activity.set(who, await $.clock.now())
+      const own = who === 'main' && wakeTurn
+      if (who === 'main') wakeTurn = false  // first, so a throw below cannot leave it set
+      if (!own) activity.set(who, await $.clock.now())
       if (e.reason === 'answer') failures.delete(who)
     } catch {
       // nothing to note

@@ -159,7 +159,7 @@ export function permissionWaits(now: number, waits: Map<string, PermissionWait>,
 // rate limit); `person` does not (a login, a usage limit or quota, billing, an invalid request).
 export function failureKind(error: string, details = ''): 'retry' | 'person' {
   if (/usage limit|hit your (\w+ )?limit|quota|credit|billing|\bresets?\b/i.test(details)) return 'person'
-  return ['rate_limit', 'overloaded', 'server_error', 'unknown'].includes(error) ? 'retry' : 'person'
+  return ['rate_limit', 'overloaded', 'server_error', 'unknown', 'max_output_tokens'].includes(error) ? 'retry' : 'person'
 }
 
 export const CONTINUE_NOTE =

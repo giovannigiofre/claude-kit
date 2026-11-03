@@ -58,10 +58,12 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   (name "Claude", an `anthropic.com` email); `"allow"` turns that rule off. Pair it with
   `"attribution": {"commit": "", "pr": "", "sessionUrl": false}` in `settings.json`, so Claude
   doesn't write the credits in the first place. `{"guard": "on"}` in `~/.claude/kit.json` guards projects without a
-  `kit.json` too. The guard's `wait` rule refuses a foreground wait (sleep over 10 s, a
-  while/until loop that sleeps, `gh run watch`, `gh pr checks --watch`) and names the way out:
-  `run_in_background`, the Monitor tool, the completion notice. A background command, a command
-  ended with `&` and a long Bash `timeout` pass.
+  `kit.json` too. The guard's `wait` rule refuses a foreground wait (sleep over
+  `sleepMaxSec`, 60 by default, a while/until loop that sleeps while it polls, `gh run watch`,
+  `gh pr checks --watch`) and names the way out: `run_in_background`, the Monitor tool, the
+  completion notice. A Monitor command, a background command, one ended with `&`, a `while read`
+  loop, a long Bash `timeout` and a command `allowCommands` names pass; `"waits": false` turns
+  the rule off.
 - `watchdog`: the thresholds of the stall watchdog (see [Stalls](#stalls)), in minutes; `0`
   turns that check off, a value that is not a number keeps the default.
 - `learn`: `{"model": false}` keeps the lesson distiller to its no-token passes (see Lessons).
@@ -234,17 +236,18 @@ Nothing in Claude Code tells the coordinator that a thread went quiet. The kit's
 its 15 s tick (interactive sessions only) and wakes the coordinator with a prompt of its own:
 
 - a running thread whose transcript has not moved for `silentMin` (20), skipped while it waits
-  on its own subagent or background command;
+  on its own subagent, background command or Monitor (a Monitor counts until its `timeout_ms`);
 - a thread past the duration its brief expected: an `EXPECT: 90m` (or `2h`) line in the brief;
 - a background command past its deadline (its Bash `timeout`, else `bashDeadlineMin`, 30) while
   its owner has been quiet for `silentMin`. A command whose description holds `(server)` is
   meant to keep running and has none.
 
 Each stall wakes at 1x, 2x and 4x its threshold, and the third wake also sends a native
-notification; activity starts it over. A thread waiting `permissionMin` (2) on a permission
-prompt notifies the person; the prompt is never answered for them. A turn that failed on the API
+notification, and it stays quiet until real activity starts it over: the turn a wake itself
+starts does not count. A thread waiting `permissionMin` (2) on a permission
+prompt notifies the person (not one a hook answered first); the prompt is never answered for them. A turn that failed on the API
 gets a "continue" nudge after 15, 30 and 60 s when the error clears on its own (overloaded, a
-server error, a short rate limit) and a notification plus a NEEDS YOU wake when it does not (a
+server error, a short rate limit, `max_output_tokens`) and a notification plus a NEEDS YOU wake when it does not (a
 login, a usage limit). A thread that ends without its report reaching the coordinator (a refused
 or missing `SubagentHandback`) is told once by `subagent_stop.py` to send it; if it stops again
 without one, the coordinator is woken to SendMessage it. The facts live in memory, bounded to

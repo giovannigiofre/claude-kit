@@ -182,10 +182,14 @@ def main():
         ("sleep 5 && curl -s localhost:3000", {}, False),
         ("npm run dev &", {}, False),
         ("while read f; do wc -l \"$f\"; done < list; sleep 2", {}, False),  # the sleep is after the loop
+        ("while read -r f; do convert \"$f\" out/; sleep 0.2; done < files", {}, False),  # throttling, no poll
+        ("npm run dev > dev.log 2>&1 & sleep 15; curl -s localhost:3000", {}, False),  # start, then hit
         ("git commit -m 'sleep 600 while we wait'", {}, False),
         ("npm test", {"timeout": 600000}, False),  # a long timeout is a cap, not a wait
+        # Monitor is the way out the refusal names: its until-loop is never a wait
+        ("until gh pr checks 12 | grep -qv pending; do sleep 30; done", {"tool": "Monitor", "timeout_ms": 1800000}, False),
     ]:
-        code, _, err = call(home, repo, "Bash", {"command": command, **extra})
+        code, _, err = call(home, repo, extra.pop("tool", "Bash"), {"command": command, **extra})
         if (code == 2) != blocked or (blocked and "run_in_background" not in err):
             failed += 1
             print(f"FAIL wait {'block' if blocked else 'allow'}: {command!r} {extra} -> exit {code} {err.strip()[:120]}")

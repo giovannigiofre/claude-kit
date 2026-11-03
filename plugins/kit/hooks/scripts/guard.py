@@ -34,8 +34,10 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    identity set to one, by git, gh or a GitHub MCP tool;
                    guard.attribution = "allow" turns this rule off
   wait             a foreground wait that holds the turn (and, in a thread, its caller): sleep
-                   over 10 s, a while/until loop that sleeps, gh run watch or gh pr checks
-                   --watch; never a command run in the background or ended with &
+                   over 60 s (guard.sleepMaxSec), a while/until loop that sleeps while it polls
+                   (not `while read`), gh run watch or gh pr checks --watch; never a Monitor
+                   command, one run in the background or ended with &, or one allowCommands
+                   names; guard.waits = false turns this rule off
   project          kit.json guard.denyCommands / guard.askCommands: the project's own rules,
                    each {"pattern": "<regex over the command>", "reason": "..."}; /kit:learn
                    writes one when a lesson deserves a check instead of a sentence
@@ -47,7 +49,7 @@ here-document bodies are arguments, not commands.
 Active when the project has .claude/kit.json (unless its "guard" is "off"), or everywhere when
 ~/.claude/kit.json says "guard": "on". Options, under "guard" in either file:
   {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40,
-   "allowCommands": ["^rm -rf /opt/my-build$"], "attribution": "block",
+   "allowCommands": ["^rm -rf /opt/my-build$"], "attribution": "block", "waits": true, "sleepMaxSec": 60,
    "denyCommands": [{"pattern": "^npm install(?! --frozen)", "reason": "use pnpm here"}], "askCommands": []}
 
 Before each Bash command in a project with kit.json it also notes which files are already
@@ -919,12 +921,8 @@ def check_secrets(argv, cwd):
 
 
 def check_bash(command, cwd, root, opts):
-    for pattern in opts.get("allowCommands") or []:
-        try:
-            if re.search(pattern, command):
-                return None
-        except re.error:
-            continue
+    if allowed(command, opts):
+        return None
     for decision, key in (("deny", "denyCommands"), ("ask", "askCommands")):
         for rule in opts.get(key) or []:
             pattern = rule.get("pattern") if isinstance(rule, dict) else rule
@@ -1004,7 +1002,7 @@ def check_bash(command, cwd, root, opts):
     return asked
 
 
-SLEEP_MAX_SEC = 10
+SLEEP_MAX_SEC = 60  # start-then-hit (`npm run dev & sleep 15; curl ...`) is fine; K8's waits ran minutes
 UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 WAIT_FIX = ("run it with run_in_background and let its completion notice wake you, or watch it with the "
             "Monitor tool (an until-loop condition) when you need to act on a line of its output; for CI, "
@@ -1023,22 +1021,46 @@ def sleep_seconds(args):
     return total
 
 
-def check_wait(command, tool_input):
+def allowed(command, opts):
+    for pattern in opts.get("allowCommands") or []:
+        try:
+            if re.search(pattern, command):
+                return True
+        except re.error:
+            continue
+    return False
+
+
+# shell words only where a command can start, so out/done.flag or --while-x are no keyword
+KW = r"(?<![\w/.$-]){}(?![\w/.-])"
+LOOP = re.compile(r"{}\s+((?:(?!{})[\s\S])*?)(?:[;\n]\s*|\s){}((?:(?!{})[\s\S])*?){}".format(
+    r"(?:" + KW.format("while") + "|" + KW.format("until") + ")", KW.format("do"), KW.format("do"),
+    KW.format("done"), KW.format("done")))
+
+
+def check_wait(command, tool_input, opts=None):
     """A foreground wait: the turn blocks on it, the caller sees no progress, and nothing tells
     anyone when it hangs. In the background the same wait costs nothing. A long Bash `timeout` is
     not a wait: most calls that set one end in seconds."""
-    if tool_input.get("run_in_background"):
+    opts = opts or {}
+    if tool_input.get("run_in_background") or opts.get("waits") is False or allowed(command, opts):
         return None
+    limit = opts.get("sleepMaxSec")
+    limit = limit if isinstance(limit, (int, float)) and not isinstance(limit, bool) and limit >= 0 else SLEEP_MAX_SEC
     code = "\n".join(logical_lines(command.replace("\\\n", " ")))
     mask = quote_mask(code)
     # quoted text is an argument, never the wait itself
     bare = "".join(c if mask[i] == " " else " " for i, c in enumerate(code))
     if re.search(r"(?:^|[;&|]\s*|\s)&\s*$", bare.rstrip()) and not re.search(r"&&\s*$", bare.rstrip()):
         return None
-    # a `sleep` run as a command inside the loop's own body (before its `done`)
-    if re.search(r"\b(?:while|until)\b(?:(?!\bdone\b)[\s\S])*?\bdo\b"
-                 r"(?:(?:(?!\bdone\b)[\s\S])*?(?:[;&|\n]|\bthen\b|\bdo\b))?\s*sleep(?=\s|;|$)", bare):
-        return ("deny", "wait", "a loop that sleeps until something changes (polling in the foreground)")
+    # a `sleep` run as a command in the loop's own body, the loop polling some state: `while read`
+    # walks its input and a sleep there only throttles it
+    for m in LOOP.finditer(bare):
+        cond, body = m.group(1).strip(), m.group(2)
+        if re.match(r"(?:\w+=\S*\s+)*read\b", cond):
+            continue
+        if re.search(r"(?:^|[;&|\n]|" + KW.format("then") + "|" + KW.format("else") + r")\s*sleep(?=\s|;|$)", " " + body):
+            return ("deny", "wait", "a loop that sleeps until something changes (polling in the foreground)")
     # `sleep 600 &` runs in the background: not a wait
     for seg in segments(re.sub(r"\bsleep\s+[^;&|\n]*&(?!&)", ";", command)):
         argv = seg["argv"]
@@ -1047,7 +1069,7 @@ def check_wait(command, tool_input):
         name = Path(argv[0]).name
         if name == "sleep":
             secs = sleep_seconds(argv[1:])
-            if secs is not None and secs > SLEEP_MAX_SEC:
+            if secs is not None and secs > limit:
                 return ("deny", "wait", f"sleep {' '.join(argv[1:])} in the foreground")
         elif name == "gh" and argv[1:3] == ["run", "watch"]:
             return ("deny", "wait", "gh run watch in the foreground")
@@ -1107,9 +1129,15 @@ def main():
     if not active:
         return 0
     found = None
-    if tool == "Bash":
+    if tool in ("Bash", "Monitor"):
+        # A Monitor command is the way out of a wait, never one. Since 2.1.314 a hook matched on
+        # Bash also runs for Monitor's command, and it then arrives as tool_name "Bash" with only
+        # command and description; the transcript does not hold the call yet. Live probe on
+        # 2.1.317: once the matcher names Monitor the hook runs once, as tool_name "Monitor"
+        # with its timeout_ms, so hooks.json names Monitor and the tool name is the discriminator.
+        monitor = tool == "Monitor"
         try:
-            found = check_wait(str(tool_input.get("command") or ""), tool_input)
+            found = None if monitor else check_wait(str(tool_input.get("command") or ""), tool_input, opts)
         except Exception:  # the wait rule never stops a command on its own failure
             found = None
         try:

@@ -48,7 +48,7 @@
         ]
       },
       {
-        "matcher": "^(Bash|Read|Grep|Glob|Agent|Task|mcp__.*[Gg]it[Hh]ub.*)$",
+        "matcher": "^(Bash|Monitor|Read|Grep|Glob|Agent|Task|mcp__.*[Gg]it[Hh]ub.*)$",
         "hooks": [
           {
             "type": "command",

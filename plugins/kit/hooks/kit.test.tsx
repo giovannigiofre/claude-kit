@@ -301,3 +301,46 @@ test('a transient API failure gets a continue nudge after 15 s; a login failure 
   expect(texts.length).toBe(1)
   expect(notices.join(' ')).toContain('needs you (authentication_failed)')
 })
+
+test('the watchdog\'s own wake turn is not activity: a forgotten background command wakes three times, then notifies once', async ($, on) => {
+  const { clock } = world(on)
+  const texts = wakes(on)
+  const notices: string[] = []
+  on('ui.notify', (_, e: any) => {
+    notices.push(e.text)
+    return { value: { isSent: true, channel: 'terminal' } }
+  })
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { backgroundTaskId: 'b1' } }))
+  on('turn.complete', (_, e: any) => ({ text: e.answer }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', description: 'Start the dev server', run_in_background: true } as any)
+  for (let i = 0; i < 8 * 60; i++) {
+    const before = texts.length
+    await clock.advance(60_000)
+    // each wake is a turn of the main session: it reads the output and answers
+    if (texts.length > before) await ($ as any).turn.complete({ answer: 'still running', durationMs: 1, isAborted: false, reason: 'answer' })
+  }
+  expect(texts.length).toBe(3)
+  expect(notices.length).toBe(1)
+})
+
+test('a permission request a hook beneath answered is no prompt: no "waited for your permission" push', async ($, on) => {
+  const agents = [{ id: 'a1', description: 'K10', type: 'kit:implementer', status: 'running' }]
+  const { clock } = world(on, {}, agents)
+  const notices: string[] = []
+  on('ui.notify', (_, e: any) => {
+    notices.push(e.text)
+    return { value: { isSent: true, channel: 'terminal' } }
+  })
+  let decision: any = { behavior: 'allow' }
+  on('classic.PermissionRequest', () => (decision ? { decision } : {}))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  const ask = () => ($ as any).classic.PermissionRequest({ agent_id: 'a1', tool_name: 'Bash', tool_input: { command: 'python3 gate.py verify' } })
+  await ask()
+  await clock.advance(3 * 60_000)
+  expect(notices).toEqual([])
+  decision = undefined
+  await ask()
+  await clock.advance(3 * 60_000)
+  expect(notices.length).toBe(1)
+})
