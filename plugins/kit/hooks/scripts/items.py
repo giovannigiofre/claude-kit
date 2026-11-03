@@ -271,21 +271,38 @@ def save_evidence(path, main):
         return False
 
 
+def names_worktree(folder, branch, paths):
+    """Whether an item's BRIEF, LOG or REPORT records this branch or worktree path (a report's
+    BRANCH / PR line does)."""
+    text = ""
+    for name in ("BRIEF.md", "LOG.md", "REPORT.md"):
+        try:
+            text += (folder / name).read_text(encoding="utf-8", errors="replace") + "\n"
+        except OSError:
+            continue
+    edge = r"(?<![\w/.-]){}(?![\w/-]|\.\w)"
+    return any(re.search(edge.format(re.escape(t)), text) for t in {branch, *paths} if t)
+
+
 def thread_item(path, branch, main, items_root):
-    """(owned, open item id or None): whether the worktree is a kit thread's (under .claude/worktrees/,
-    named <repo>-<id>, or matching an item), and the not-yet-done item it belongs to."""
-    path, main = Path(path).resolve(), Path(main).resolve()
-    names = {path.name, branch.rsplit("/", 1)[-1]}
+    """(owned, open item id or None). Owned only when a done item names the worktree: it is
+    <repo>-<id> for that id, or the item's files record its branch or path. Location alone is not
+    ownership (a .claude/worktrees/agent-* or a hand-made <repo>-x stays). An open item naming it
+    the same way means its thread may still be working there."""
+    raw, resolved, main = str(path), Path(path).resolve(), Path(main).resolve()
     prefix = main.name + "-"
-    names |= {n[len(prefix):] for n in names if n.startswith(prefix)}
-    names = {n.lower() for n in names if n}
-    open_ids = {p.name for p in items_dir(items_root).iterdir() if p.is_dir() and p.name != "done"} \
-        if items_dir(items_root).is_dir() else set()
-    done_dir = items_dir(items_root) / "done"
-    done_ids = {p.name for p in done_dir.iterdir() if p.is_dir()} if done_dir.is_dir() else set()
-    active = next((n for n in sorted(names) if n in open_ids), None)
-    owned = (main / ".claude" / "worktrees") in path.parents or path.name.startswith(prefix) \
-        or bool(names & (open_ids | done_ids))
+    named = resolved.name[len(prefix):].lower() if resolved.name.startswith(prefix) else None
+    base = items_dir(items_root)
+    done_dir = base / "done"
+    open_items = [p for p in base.iterdir() if p.is_dir() and p.name != "done"] if base.is_dir() else []
+    done_items = [p for p in done_dir.iterdir() if p.is_dir()] if done_dir.is_dir() else []
+    paths = (raw, str(resolved))
+
+    def names_it(folder):
+        return folder.name == named or names_worktree(folder, branch, paths)
+
+    active = next((p.name for p in sorted(open_items) if names_it(p)), None)
+    owned = any(names_it(p) for p in done_items)
     return owned, active
 
 
@@ -297,7 +314,7 @@ def sweep(repo, dry_run=False, items_root=None):
     worktree removal is never forced; the branch goes with -D, since a squash merge leaves it
     unmerged in git's eyes and the PR head check stands in for that. A worktree with no merged PR,
     one with commits after the merge, a stacked PR's, and the one this runs in stay, each listed
-    with its reason. Only kit threads' worktrees are touched (see thread_item), never a long-lived
+    with its reason. Only worktrees a done item names are touched (see thread_item), never a long-lived
     branch, never one whose item is not done yet, and never one a running process has as its
     working directory; when git or the process list cannot be read, the worktree stays.
     Returns [(path, branch, action)]."""
@@ -330,10 +347,10 @@ def sweep(repo, dry_run=False, items_root=None):
             action = "kept: detached HEAD or unreadable"
         elif branch == base or LONG_LIVED.match(branch):
             action = "kept: a long-lived branch"
-        elif not (owned := thread_item(path, branch, main, items_root))[0]:
-            action = "kept: not a kit thread's worktree"
-        elif owned[1]:
+        elif (owned := thread_item(path, branch, main, items_root))[1]:
             action = f"kept: item {owned[1]} is not done yet"
+        elif not owned[0]:
+            action = "kept: no done item names this worktree"
         elif merged.get(branch) != tip:
             action = "kept: no PR merged into " + (base or "the default branch") + " at this tip"
         elif here == Path(path).resolve() or Path(path).resolve() in here.parents:

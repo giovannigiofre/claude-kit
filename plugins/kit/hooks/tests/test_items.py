@@ -131,8 +131,11 @@ def main():
         (repo / ".git" / "info" / "exclude").write_text(".claude/evidence/\n.claude/lead/\nbuild/\n")
         heads = []
 
-        def wt(name, branch=None, commit=True, where=None):
+        def wt(name, branch=None, commit=True, where=None, item=True):
             path = where or tmp / f"repo-{name}"  # the kit's <repo>-<id> naming
+            if item:  # a done item of that id: the worktree is the kit's
+                run(repo, "new", name)
+                run(repo, "done", name)
             g(repo, "worktree", "add", "-q", "-b", branch or name, str(path), "origin/main")
             if commit:
                 g(path, "commit", "-q", "--allow-empty", "-m", name)
@@ -151,9 +154,18 @@ def main():
         (built / "build").mkdir()
         (built / "build" / "notes.md").write_text("hand-written\n")
         develop = wt("develop", branch="develop")  # gitflow's long-lived branch, at a merged PR's head
-        other = wt("other", where=tmp / "elsewhere")  # not the kit's naming, no item
+        other = wt("other", where=tmp / "elsewhere", item=False)  # not the kit's naming, no item
+        experiment = wt("experiment", item=False)  # a hand-made <repo>-x sibling, no item behind it
+        run(repo, "new", "k1")  # an isolation worktree whose thread's item is still open: no done item names it
+        isolated = wt("agent-ab12", branch="worktree-agent-ab12", where=repo / ".claude" / "worktrees" / "agent-ab12",
+                      item=False)
+        run(repo, "new", "k2", "--brief", "-", stdin="BRIEF: x\n")  # a done item whose report records its branch
+        run(repo, "report", "k2", "-", stdin="STATUS: done\nBRANCH / PR: feat/recorded, PR #3\n")
+        run(repo, "done", "k2")
+        recorded = wt("agent-cd34", branch="feat/recorded", where=repo / ".claude" / "worktrees" / "agent-cd34",
+                      item=False)
         run(repo, "new", "k9")
-        opened = wt("k9")  # its item is still open
+        opened = wt("k9", item=False)  # its item is still open
         busy = wt("busy")
         proof = Path(".claude", "evidence", "landed", "run.log")
         (landed / proof).parent.mkdir(parents=True)
@@ -178,13 +190,16 @@ def main():
         check("removed | landed" in out and not landed.exists() and "landed" not in branches,
               f"a clean worktree at a merged PR's head goes, with its branch: {out}")
         check((repo / proof).read_text() == "passed\n", "its evidence is copied to the main checkout")
+        check("removed | feat/recorded" in out and not recorded.exists(), f"a worktree a done item's report records goes: {out}")
         for name, path, reason in [("fresh", fresh, "kept: no PR merged into main at this tip"),
                                    ("dirty", dirty, "kept: uncommitted or untracked files"),
                                    ("hidden", hidden, "kept: uncommitted or untracked files"),
                                    ("lsfail", lsfail, "kept: ignored file not in the main checkout ((git ls-files failed))"),
                                    ("built", built, "kept: ignored file not in the main checkout (build/notes.md)"),
                                    ("develop", develop, "kept: a long-lived branch"),
-                                   ("other", other, "kept: not a kit thread's worktree"),
+                                   ("other", other, "kept: no done item names this worktree"),
+                                   ("experiment", experiment, "kept: no done item names this worktree"),
+                                   ("worktree-agent-ab12", isolated, "kept: no done item names this worktree"),
                                    ("k9", opened, "kept: item k9 is not done yet"),
                                    ("busy", busy, "kept: a running process works in it")]:
             check(f"{reason} | {name} |" in out and path.is_dir(), f"{name} stays ({reason}): {out}")

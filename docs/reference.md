@@ -174,9 +174,12 @@ python3 <kit>/hooks/scripts/items.py done <id>
 python3 <kit>/hooks/scripts/items.py sweep [--repo <dir>] [--dry-run]
 ```
 
-`sweep` touches only kit threads' worktrees (under `.claude/worktrees/`, named `<repo>-<id>`, or
-matching an item), never a long-lived branch (`main`, `develop`, `release*` and the like), never
-one whose item is not `done` yet, and never one a running process has as its working directory.
+`sweep` touches only worktrees a `done` item names: the worktree is `<repo>-<id>` for that item,
+or the item's BRIEF, LOG or REPORT records its branch or path (a report's BRANCH / PR line).
+Location alone is not enough: a `.claude/worktrees/agent-*` or a hand-made `<repo>-x` no done
+item names stays. Run it from the lead's repo, where the items are. It never touches a
+long-lived branch (`main`, `develop`, `release*` and the like), one an open item names, or one a
+running process has as its working directory.
 Of those it removes each one, and its branch, whose work has landed: the branch tip is
 the head of a PR merged into the default branch (`gh pr list --state merged`; a tip that is
 merely in the default branch is not enough, since a thread that has not committed yet sits
