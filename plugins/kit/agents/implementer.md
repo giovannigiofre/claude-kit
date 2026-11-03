@@ -28,7 +28,9 @@ Keep it to the format below, about 25 lines; the detail lives in the PR body and
    the obvious test, lint and build commands. Where there is a surface, exercise
    it the way a user would (run the CLI, call the API, load the page; a project `verify` skill,
    or an older `e2e` one, says how, including setting up a fresh worktree). Save what proves it
-   under `.claude/evidence/<branch>/`.
+   under `.claude/evidence/<branch>/`. A command that takes over a minute runs in the background
+   with a `timeout` for how long it should take (`(server)` in the description of one meant to
+   keep running); keep one watcher per thing you wait on, and wait for its notice, not in a loop.
 4. Commit on your branch with a message that says why (in the main checkout, create the
    branch first). Commits carry the repo's configured git identity, the user's, with no AI
    co-author lines or footers. On the branch you created you may commit, amend, rebase and

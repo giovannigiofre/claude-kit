@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 // The world beneath the kit mod: a repo at /repo, a home at /home/u, files in memory.
-function world(on: On, files: Record<string, string> = {}, agents: any[] = []) {
+function world(on: On, files: Record<string, string> = {}, agents: any[] = [], exitCode = (_argv: string[]) => 0) {
   mock.store(on)
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.env(on, { HOME: '/home/u' })
@@ -10,7 +10,7 @@ function world(on: On, files: Record<string, string> = {}, agents: any[] = []) {
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.surfaces', () => ({ value: ['terminal'] }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, percent: 12 }, rateLimits: [], cost: { usd: 1.5 } } }))
-  on('process.run', () => ({ value: { exitCode: 0, stdout: '/repo\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', (_, e: any) => ({ value: { exitCode: exitCode(e.argv), stdout: '/repo\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.read', (_, e: any) => {
     const text = written[e.path] ?? files[e.path]
     if (text === undefined) return { deny: `ENOENT ${e.path}` }
@@ -184,9 +184,6 @@ test('the status line follows the board on every tick', async ($, on) => {
   expect(lines.at(-1)).not.toContain('need you')
 })
 
-// The notification itself needs an engine whose mods have $.ui.notify (Claude Code 2.1.295+ per
-// its docs); the test runtime of this version has none, so the test checks the line and that a
-// missing notify never breaks the tick.
 test('a thread waiting for an answer counts on the line; a board that gains work for the person keeps the line right', async ($, on) => {
   const files: Record<string, string> = {
     '/repo/.claude/lead/board.md': 'NEEDS YOU: none\nA1 | ship | login | DONE WHEN e2e | working | agent A1 | - | started',
@@ -213,7 +210,7 @@ test('a thread waiting for an answer counts on the line; a board that gains work
   await clock.advance(15000)
   expect(lines.at(-1)).toContain('1 ready · 1 need you')
   expect(notices.length).toBeLessThanOrEqual(1)
-  if (notices.length) expect(notices[0].summary).toBe('kit: 1 ready for review, 1 needs you')
+  if (notices.length) expect(notices[0].text).toContain('kit: 1 ready for review, 1 needs you')
 
   await clock.advance(15000)
   expect(lines.at(-1)).toContain('1 ready · 1 need you')
@@ -230,4 +227,77 @@ test('a pane an older kit left open is closed on session start', async ($, on) =
   })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   expect(open).toEqual([])
+})
+
+// The watchdog's wakes are prompts of the kit's own; the test catches them beneath the plugin.
+function wakes(on: On) {
+  const texts: string[] = []
+  on('prompt.submit', (_, e) => {
+    texts.push(e.text)
+    return { text: e.text }
+  })
+  return texts
+}
+
+test('a background thread that goes silent wakes the coordinator once per stall', async ($, on) => {
+  const agents = [{ id: 'a1', description: 'B2 grid', type: 'kit:implementer', status: 'running' }]
+  const { clock } = world(on, {}, agents)
+  const texts = wakes(on)
+  on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1', outputFile: '/tmp/a1.output' } }))
+  on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 1_000_000, isLink: false } }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Agent', prompt: 'ITEM: B2', description: 'B2 grid', run_in_background: true } as any)
+  await clock.advance(19 * 60_000)
+  expect(texts).toEqual([])
+  await clock.advance(2 * 60_000)
+  expect(texts.length).toBe(1)
+  expect(texts[0]).toContain('thread B2 grid (a1) has written nothing for 20 min')
+  await clock.advance(10 * 60_000)
+  expect(texts.length).toBe(1)
+})
+
+test('a thread nudged for its report that stops again without one wakes the coordinator', async ($, on) => {
+  let missing = 1
+  const { clock } = world(on, {}, [], argv => (argv.includes('--missing') ? missing : 0))
+  const texts = wakes(on)
+  let block: string | undefined = 'kit: no report reached your caller from this run.'
+  on('classic.SubagentStop', () => (block ? { block } : {}))
+  const stop = (active: boolean) => ($ as any).classic.SubagentStop({ agent_id: 'a1', agent_type: 'kit:implementer', stop_hook_active: active, agent_transcript_path: '/t/a1.jsonl' })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await stop(false)
+  block = undefined
+  await stop(true)
+  await clock.advance(1)
+  expect(texts.length).toBe(1)
+  expect(texts[0]).toContain('a1) ended without a report')
+
+  block = 'kit: no report reached your caller from this run.'
+  await stop(false)
+  block = undefined
+  missing = 0
+  await stop(true)
+  await clock.advance(1)
+  expect(texts.length).toBe(1) // it handed back after the nudge: nothing to say
+})
+
+test('a transient API failure gets a continue nudge after 15 s; a login failure notifies the person instead', async ($, on) => {
+  const { clock } = world(on)
+  const texts = wakes(on)
+  const notices: string[] = []
+  on('ui.notify', (_, e: any) => {
+    notices.push(e.text)
+    return { value: { isSent: true, channel: 'terminal' } }
+  })
+  on('classic.StopFailure', () => ({}))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await ($ as any).classic.StopFailure({ error: 'overloaded' })
+  await clock.advance(14_000)
+  expect(texts).toEqual([])
+  await clock.advance(1_000)
+  expect(texts.length).toBe(1)
+  expect(texts[0]).toContain('Do not repeat an external operation that already completed')
+  await ($ as any).classic.StopFailure({ error: 'authentication_failed' })
+  await clock.advance(120_000)
+  expect(texts.length).toBe(1)
+  expect(notices.join(' ')).toContain('needs you (authentication_failed)')
 })

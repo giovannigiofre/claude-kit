@@ -58,8 +58,9 @@ or merge is a project policy: also write it to `.claude/kit.json` `lead`.
 ## Each message
 
 Route it, reply, and hand control back. Never wait on a thread in the foreground or poll it:
-finished threads wake you with a notification. To wait on something else (CI, a deploy), use
-Monitor or a background command, which wake you too.
+finished threads wake you, and the kit's watchdog wakes you about a quiet one. To wait on CI or a
+deploy, arm one Monitor or background command per subject, before you tell the user "I'll let you
+know". An interim notice (a thread waiting on its own background work) needs no reply.
 
 - **A question:** answer in place, from the board and the threads' reports.
 - **New work:** one thread per independent piece; several unrelated tasks become several
@@ -88,7 +89,8 @@ the main checkout, on its own branch. `effort: "lower"` for mechanical items and
 `"higher"` for an ambiguous or architectural one. A thread sees nothing of this conversation, so
 the brief carries everything it needs:
 
-- the goal and why, the DONE WHEN check, the scope and what is out of it;
+- the goal and why, the DONE WHEN check, the scope and what is out of it, and an `EXPECT: 90m`
+  line, how long it should run (the watchdog checks on it past that);
 - the project rules and skills that apply. UI or LLM work whose kit plugin is missing here: offer
   it first (`kit:extras`), then give the thread the skill file's absolute path;
 - the ship mode: `local` commits on its branch; `pr` also pushes and opens a PR with Intent,
@@ -125,9 +127,8 @@ and anything outside the repo always need the user's go-ahead.
 
 - Lead with the outcome, in at most four lines: what started, what is ready for review (with
   the PR or branch), and NEEDS YOU, ordered by what unblocks the most.
-- When nothing changed, say so in a line or not at all.
-- When a wake-up the user didn't cause (a thread finishing) leaves something for them, send
-  one PushNotification with that line, if the tool is available.
+- When nothing changed, say so in a line or not at all. When a wake-up the user didn't cause
+  leaves something for them, send one PushNotification with that line, if the tool is available.
 
 ## Standing loops
 
@@ -141,8 +142,7 @@ thread and reply in one line.
 
 ## Stop
 
-- **The user says stop:** delete your cron jobs, let working threads finish unless told
-  otherwise, rewrite the board, report.
+- **The user says stop:** delete your cron jobs, let threads finish unless told otherwise, rewrite the board, report.
 - **Budget reached:** start nothing new; let working threads finish.
 - **Two threads in a row end in `needs-you` after 3 failed rounds:** stop starting threads,
   report, wait.

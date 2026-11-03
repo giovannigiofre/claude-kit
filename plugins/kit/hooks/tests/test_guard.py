@@ -172,6 +172,23 @@ def main():
             failed += 1
             print(f"FAIL {'block' if blocked else 'allow'}: {command!r} -> exit {code} {err.strip()[:120]}")
 
+    # foreground waits: blocked with the way out named; the same in the background, short sleeps and
+    # quoted text pass
+    for command, extra, blocked in [
+        ("sleep 600", {}, True),
+        ("until gh pr checks 12 | grep -q pass; do sleep 30; done", {}, True),
+        ("gh pr checks 12 --watch", {}, True),
+        ("gh pr checks 12 --watch", {"run_in_background": True}, False),
+        ("sleep 5 && curl -s localhost:3000", {}, False),
+        ("npm run dev &", {}, False),
+        ("git commit -m 'sleep 600 while we wait'", {}, False),
+        ("npm test", {"timeout": 600000}, False),  # a long timeout is a cap, not a wait
+    ]:
+        code, _, err = call(home, repo, "Bash", {"command": command, **extra})
+        if (code == 2) != blocked or (blocked and "run_in_background" not in err):
+            failed += 1
+            print(f"FAIL wait {'block' if blocked else 'allow'}: {command!r} {extra} -> exit {code} {err.strip()[:120]}")
+
     for command, expected in MORE:
         got = verdict(home, repo, command)
         if got != expected:

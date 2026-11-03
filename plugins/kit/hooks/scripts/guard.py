@@ -33,6 +33,9 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    claude.ai session link), a commit made under an AI git identity, or git's
                    identity set to one, by git, gh or a GitHub MCP tool;
                    guard.attribution = "allow" turns this rule off
+  wait             a foreground wait that holds the turn (and, in a thread, its caller): sleep
+                   over 10 s, a while/until loop that sleeps, gh run watch or gh pr checks
+                   --watch; never a command run in the background or ended with &
   project          kit.json guard.denyCommands / guard.askCommands: the project's own rules,
                    each {"pattern": "<regex over the command>", "reason": "..."}; /kit:learn
                    writes one when a lesson deserves a check instead of a sentence
@@ -1001,6 +1004,55 @@ def check_bash(command, cwd, root, opts):
     return asked
 
 
+SLEEP_MAX_SEC = 10
+UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+WAIT_FIX = ("run it with run_in_background and let its completion notice wake you, or watch it with the "
+            "Monitor tool (an until-loop condition) when you need to act on a line of its output; for CI, "
+            "start `gh pr checks <n> --watch` in the background")
+
+
+def sleep_seconds(args):
+    total = 0.0
+    for a in args:
+        m = re.fullmatch(r"(\d+(?:\.\d*)?|\.\d+)([smhd]?)", a)
+        if a in ("inf", "infinity"):
+            return float("inf")
+        if not m:
+            return None  # $DELAY and the like: not judged
+        total += float(m.group(1)) * UNITS[m.group(2) or "s"]
+    return total
+
+
+def check_wait(command, tool_input):
+    """A foreground wait: the turn blocks on it, the caller sees no progress, and nothing tells
+    anyone when it hangs. In the background the same wait costs nothing. A long Bash `timeout` is
+    not a wait: most calls that set one end in seconds."""
+    if tool_input.get("run_in_background"):
+        return None
+    code = "\n".join(logical_lines(command.replace("\\\n", " ")))
+    mask = quote_mask(code)
+    # quoted text is an argument, never the wait itself
+    bare = "".join(c if mask[i] == " " else " " for i, c in enumerate(code))
+    if re.search(r"(?:^|[;&|]\s*|\s)&\s*$", bare.rstrip()) and not re.search(r"&&\s*$", bare.rstrip()):
+        return None
+    if re.search(r"\b(?:while|until)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\b", bare):
+        return ("deny", "wait", "a loop that sleeps until something changes (polling in the foreground)")
+    for seg in segments(command):
+        argv = seg["argv"]
+        if not argv:
+            continue
+        name = Path(argv[0]).name
+        if name == "sleep":
+            secs = sleep_seconds(argv[1:])
+            if secs is not None and secs > SLEEP_MAX_SEC:
+                return ("deny", "wait", f"sleep {' '.join(argv[1:])} in the foreground")
+        elif name == "gh" and argv[1:3] == ["run", "watch"]:
+            return ("deny", "wait", "gh run watch in the foreground")
+        elif name == "gh" and argv[1:3] == ["pr", "checks"] and any(a == "--watch" or a.startswith("--watch=") for a in argv):
+            return ("deny", "wait", "gh pr checks --watch in the foreground")
+    return None
+
+
 def check_agents(data, opts):
     ask, deny = opts.get("agentsAsk"), opts.get("agentsDeny")
     if not isinstance(ask, int) and not isinstance(deny, int):
@@ -1054,7 +1106,11 @@ def main():
     found = None
     if tool == "Bash":
         try:
-            found = check_bash(str(tool_input.get("command") or ""), cwd, root, opts)
+            found = check_wait(str(tool_input.get("command") or ""), tool_input)
+        except Exception:  # the wait rule never stops a command on its own failure
+            found = None
+        try:
+            found = found or check_bash(str(tool_input.get("command") or ""), cwd, root, opts)
         except Exception as error:  # a crash would let the command run unchecked
             found = ("ask", "guard", f"the guard could not judge this command ({type(error).__name__})")
     elif tool in ("Read", "Grep", "Glob"):
@@ -1079,6 +1135,10 @@ def main():
             "permissionDecisionReason": f"kit guard ({rule}): {why}"}}))
         return 0
     record_denial(cwd, rule, why, data.get("session_id") or "")
+    if rule == "wait":
+        print(f"kit guard (wait): {why} holds this turn with no progress and no alarm if it hangs. "
+              f"Instead, {WAIT_FIX}. A short sleep (10 s or less) is fine.", file=sys.stderr)
+        return 2
     print(f"kit guard ({rule}): {why}. Blocked by the kit's guardrails whatever the permission mode. "
           "Find a safer way (work inside the repo, on a branch, through a PR), or ask the user; they "
           "can allow a specific command with guard.allowCommands in .claude/kit.json.", file=sys.stderr)

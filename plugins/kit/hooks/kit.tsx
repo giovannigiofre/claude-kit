@@ -12,7 +12,14 @@
 // - The status line: mode, safety, session cost, threads running and waiting for an answer, live
 //   overnight runs, board items ready for review and questions for the person, re-read every 15
 //   seconds; one native notification when the board gains a ready item or a question.
+// - The stall watchdog, on the same tick (watchdog.ts decides, this module gathers and acts): a
+//   thread silent too long or past its brief's EXPECT, a background command past its deadline, a
+//   thread that ended without a report, a thread waiting on a permission prompt, and a turn that
+//   failed on the API. It wakes the coordinator (a prompt of its own) or notifies the person;
+//   it never approves, stops or retries anything itself, and on any error it stays quiet.
 import type { EngineInterface, Register, Timer } from 'claude-code'
+import { CONTINUE_NOTE, RETRY_DELAYS_MS, bound, expectedMs, failureKind, permissionWaits, stalls, watchConfig } from './watchdog'
+import type { Job, PermissionWait, Strike, Thread } from './watchdog'
 
 type KitMode = 'light' | 'loop' | 'ask'
 const MODES: KitMode[] = ['light', 'loop', 'ask']
@@ -257,9 +264,13 @@ async function notifyBoardChange($: $, before: BoardCounts | null, after: BoardC
   const parts: string[] = []
   if (ready > 0) parts.push(`${ready} ready for review`)
   if (needs > 0) parts.push(`${needs} need${needs === 1 ? 's' : ''} you`)
+  await notify($, `kit: ${parts.join(', ')}. See the board (.claude/lead/board.md) or ask the coordinator.`)
+}
+
+async function notify($: $, text: string): Promise<void> {
   try {
-    // an engine without $.ui.notify (2.1.295+), or without a channel, throws here: the line still shows it
-    await $.ui.notify({ summary: `kit: ${parts.join(', ')}`, detail: 'See the board (.claude/lead/board.md) or ask the coordinator.' })
+    // an engine without $.ui.notify, or without a channel, throws here: the line still shows it
+    await $.ui.notify(text, { title: 'kit' })
   } catch {
     // nothing to do
   }
@@ -300,6 +311,120 @@ async function refreshStatus($: $): Promise<void> {
   $.ui.status(status)
 }
 
+// --- The stall watchdog's facts, in memory for this session (a reload starts them over, which
+// only makes the watchdog quieter). Every map is pruned to the work in flight and bounded.
+const threadsSeen = new Map<string, { outputFile?: string; startedAt: number; expectMs?: number }>()
+const activity = new Map<string, number>() // 'main' or a thread's id -> its last action
+const jobs = new Map<string, { id: string; owner?: string; label: string; startedAt: number; timeoutMs?: number }>()
+const strikes = new Map<string, Strike>()
+const permissions = new Map<string, PermissionWait>()
+const nudged = new Set<string>() // threads subagent_stop.py told to hand their report back
+const failures = new Map<string, { attempts: number; at: number }>() // 'main' or a thread -> API failures in a row
+const JOB_MAX_AGE_MS = 24 * 3600_000
+const NO_REPORT_MARK = 'kit: no report reached your caller'
+
+// A prompt of the kit's own, its own turn once the session is idle. Sent from a timer, never
+// awaited inside the hook that saw the stall: a stop or a tool call must not wait on that turn.
+async function wake($: $, text: string): Promise<void> {
+  $.clock.after(0, () => {
+    // a session that cannot take a prompt now: the next stall wakes it again
+    void $.prompt.submit({ text }).catch(() => undefined)
+  })
+}
+
+async function nameOf($: $, id: string): Promise<string> {
+  try {
+    const a = (await $.agent.list()).find(x => x.id === id) as any
+    if (a) return a.name || a.description || id
+  } catch {
+    // the id is name enough
+  }
+  return id
+}
+
+async function watchTick($: $): Promise<void> {
+  const now = await $.clock.now()
+  const w = watchConfig(await readJson($, `${await projectRoot($)}/.claude/kit.json`))
+  const agents = await $.agent.list()
+  const threads: Thread[] = []
+  for (const a of agents as any[]) {
+    const seen = threadsSeen.get(a.id)
+    let activeAt = activity.get(a.id)
+    if (seen && seen.outputFile) {
+      try {
+        const mtime = (await $.fs.stat(seen.outputFile)).mtimeMs
+        activeAt = Math.max(activeAt ?? 0, mtime)
+      } catch {
+        // no transcript yet: its tool calls are the heartbeat
+      }
+    }
+    threads.push({ id: a.id, name: a.name || a.description || a.id, status: a.status, parentId: a.parentId,
+      activeAt, startedAt: seen?.startedAt, expectMs: seen?.expectMs })
+  }
+  const live = new Set(threads.filter(t => ['running', 'pending', 'waiting'].includes(t.status)).map(t => t.id))
+  for (const id of [...threadsSeen.keys()]) if (!live.has(id)) threadsSeen.delete(id)
+  for (const id of [...activity.keys()]) if (id !== 'main' && !live.has(id)) activity.delete(id)
+  for (const [id, j] of [...jobs]) if ((j.owner && !live.has(j.owner)) || now - j.startedAt > JOB_MAX_AGE_MS) jobs.delete(id)
+  const list: Job[] = [...jobs.values()].map(j => ({ id: j.id, owner: j.owner, label: j.label, startedAt: j.startedAt,
+    // "(server)" in a command's description: meant to keep running, so it has no deadline
+    deadlineMs: /\(server\)/i.test(j.label) ? 0 : j.timeoutMs ?? w.bashDeadlineMin * 60_000 }))
+  const wakes = stalls(now, threads, list, activity, strikes, w)
+  if (wakes.length) await wake($, wakes.map(x => x.text).join('\n\n'))
+  for (const x of wakes) if (x.notify) await notify($, x.text.replace(/^kit watchdog: /, '').split('. ')[0] + '.')
+  for (const p of permissionWaits(now, permissions, threads, w)) await notify($, p.text)
+}
+
+// What a tool call tells the watchdog: a thread or a background command started or stopped, and
+// that its caller acted.
+async function noteTool($: $, e: any, r: any): Promise<void> {
+  const now = await $.clock.now()
+  activity.set(e.agentId ?? 'main', now)
+  const res = r && !r.deny && !r.isError ? r.result : undefined
+  if ((e.tool === 'Agent' || e.tool === 'Task') && res && res.status === 'async_launched' && res.agentId) {
+    threadsSeen.set(res.agentId, { outputFile: res.outputFile, startedAt: now, expectMs: expectedMs(String(e.prompt ?? '')) })
+    bound(threadsSeen)
+  } else if (e.tool === 'Bash' && res && res.backgroundTaskId) {
+    const label = String(e.description || e.command || '').slice(0, 80)
+    // Bash's own `timeout` (ms) is the command's declared deadline; Claude Code applies it to a
+    // background command only in an unattended session, so in the terminal this is the check
+    jobs.set(res.backgroundTaskId, { id: res.backgroundTaskId, owner: e.agentId, label, startedAt: now,
+      timeoutMs: typeof e.timeout === 'number' && e.timeout > 0 ? e.timeout : undefined })
+    bound(jobs)
+  } else if (e.tool === 'TaskStop' || e.tool === 'KillShell') {
+    jobs.delete(String(e.task_id ?? e.shell_id ?? ''))
+  }
+}
+
+// Background work Claude Code still lists as in flight at a stop: the commands not in it ended.
+function pruneJobs(tasks: any): void {
+  if (!Array.isArray(tasks)) return
+  const running = new Set(tasks.filter(t => t && t.type === 'shell').map(t => String(t.id)))
+  for (const id of [...jobs.keys()]) if (!running.has(id)) jobs.delete(id)
+}
+
+// A turn that failed on the API (classic StopFailure). One that clears on its own gets a
+// "continue" after 15, 30 and 60 s; one that needs the person (a login, a usage limit) notifies.
+async function onFailure($: $, who: string, error: string, details: string): Promise<void> {
+  const now = await $.clock.now()
+  const f = failures.get(who) ?? { attempts: 0, at: now }
+  failures.set(who, { attempts: f.attempts + 1, at: now })
+  bound(failures)
+  const name = who === 'main' ? 'this session' : `thread ${await nameOf($, who)} (${who})`
+  if (failureKind(error, details) === 'person' || f.attempts >= RETRY_DELAYS_MS.length) {
+    failures.delete(who)
+    const why = failureKind(error, details) === 'person' ? error : `${error}, ${f.attempts + 1} times in a row`
+    await notify($, `kit: ${name} stopped on an API error that needs you (${why}).`)
+    if (who !== 'main') await wake($, `kit: ${name} stopped on an API error the person must clear (${why}${details ? `: ${details.slice(0, 200)}` : ''}). Put it under NEEDS YOU; do not retry it in a loop.`)
+    return
+  }
+  $.clock.after(RETRY_DELAYS_MS[f.attempts], () => {
+    void (who === 'main'
+      ? wake($, `kit: the last turn failed on a transient API error (${error}). ${CONTINUE_NOTE}`)
+      : wake($, `kit: ${name} stopped on a transient API error (${error}). Resume it with SendMessage: "${CONTINUE_NOTE}"`)
+    ).catch(() => undefined)
+  })
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'kit-mode', description: 'Kit mode for this project: light, loop or ask', argumentHint: '[light|loop|ask]' })
@@ -320,12 +445,87 @@ export const register: Register = on => {
     } catch {
       return result // the status line never blocks a session's start
     }
-    // one tick per module, even when session.start runs again (resume, /clear)
+    // one tick per module, even when session.start runs again (resume, /clear). The watchdog
+    // rides on it, so a headless run has none: there Claude Code's own background time limit applies
     if (tick) tick.cancel()
     tick = $.clock.every(15000, () => {
       void refreshStatus($).catch(() => undefined)
+      void watchTick($).catch(() => undefined)
     })
     return result
+  })
+
+  // The watchdog's facts. Each hook passes its event on unchanged and never fails it.
+  for (const tool of ['Agent', 'Task', 'Bash', 'TaskStop', 'KillShell']) {
+    on('tool.call', { tool }, async ($, e: any, next) => {
+      const r = await next(e)
+      await noteTool($, e, r).catch(() => undefined)
+      return r
+    }).catch(($, e, next) => next(e))
+  }
+
+  on('classic.SubagentStop', async ($, e: any, next) => {
+    const r: any = await next(e)
+    try {
+      const id = String(e.agent_id ?? '')
+      pruneJobs(e.background_tasks)
+      if (typeof r?.block === 'string' && r.block.includes(NO_REPORT_MARK)) {
+        nudged.add(id)
+        bound(nudged as any)
+      } else if (e.stop_hook_active && nudged.delete(id) && e.agent_transcript_path) {
+        // told once and stopping again: ask the same check whether the report went out this time
+        const out = await $.process.run(['python3', `${$.plugin.root}/hooks/scripts/subagent_stop.py`, '--missing', e.agent_transcript_path])
+        if (out.exitCode === 1) {
+          const name = await nameOf($, id)
+          await wake($, `kit: thread ${name} (${id}) ended without a report: its hand-back was refused or never made. ` +
+            `SendMessage it to ask for the report (it can send it with SendMessage to "main"), or resume it if it stopped ` +
+            `mid-work. Do not redo its work.`)
+        }
+      }
+    } catch {
+      // the stop goes on
+    }
+    return r
+  })
+
+  on('classic.Stop', async ($, e: any, next) => {
+    const r = await next(e)
+    pruneJobs(e.background_tasks)
+    return r
+  })
+
+  on('classic.StopFailure', async ($, e: any, next) => {
+    const r = await next(e)
+    await onFailure($, e.agent_id ? String(e.agent_id) : 'main', String(e.error ?? 'unknown'),
+      `${e.error_details ?? ''} ${e.last_assistant_message ?? ''}`.trim()).catch(() => undefined)
+    return r
+  })
+
+  // a thread waiting on a permission prompt: noted, never answered (the prompt stays the person's)
+  on('classic.PermissionRequest', async ($, e: any, next) => {
+    try {
+      if (e.agent_id) {
+        const input = e.tool_input ?? {}
+        const detail = String(input.command ?? input.file_path ?? input.url ?? '').slice(0, 120)
+        permissions.set(String(e.agent_id), { tool: String(e.tool_name ?? ''), detail, since: await $.clock.now() })
+        bound(permissions)
+      }
+    } catch {
+      // noted or not, the request goes on
+    }
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e: any, next) => {
+    const r = await next(e)
+    try {
+      const who = e.agentId ? String(e.agentId) : 'main'
+      activity.set(who, await $.clock.now())
+      if (e.reason === 'answer') failures.delete(who)
+    } catch {
+      // nothing to note
+    }
+    return r
   })
 
   on('command.run', { command: 'kit-mode' }, async ($, e) => {

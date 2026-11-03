@@ -20,7 +20,8 @@ the thread's own report: a narrative that frames a change as a fix can steer a r
    creep, changes that do something else. List changed files you did not read under NOT CHECKED.
 2. Run the project's gate from the checkout that holds the change, through the kit's `gate.py
    verify` (the path is in your start-up context; it records the tree the gate passed on), else
-   the obvious test, lint and build commands. Quote the result lines.
+   the obvious test, lint and build commands. Quote the result lines. A run over a minute goes
+   in the background with a `timeout`, one watcher per thing you wait on; wait for its notice.
 3. Exercise the change the way a user meets it where there is a surface. For a bug fix,
    reproduce the original failure first, then show it gone. A suite that never touches the
    change, or a test that mocks the path it claims to check, is not evidence. Save what proves
