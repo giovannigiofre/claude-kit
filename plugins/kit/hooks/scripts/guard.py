@@ -1035,9 +1035,12 @@ def check_wait(command, tool_input):
     bare = "".join(c if mask[i] == " " else " " for i, c in enumerate(code))
     if re.search(r"(?:^|[;&|]\s*|\s)&\s*$", bare.rstrip()) and not re.search(r"&&\s*$", bare.rstrip()):
         return None
-    if re.search(r"\b(?:while|until)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\b", bare):
+    # a `sleep` run as a command inside the loop's own body (before its `done`)
+    if re.search(r"\b(?:while|until)\b(?:(?!\bdone\b)[\s\S])*?\bdo\b"
+                 r"(?:(?:(?!\bdone\b)[\s\S])*?(?:[;&|\n]|\bthen\b|\bdo\b))?\s*sleep(?=\s|;|$)", bare):
         return ("deny", "wait", "a loop that sleeps until something changes (polling in the foreground)")
-    for seg in segments(command):
+    # `sleep 600 &` runs in the background: not a wait
+    for seg in segments(re.sub(r"\bsleep\s+[^;&|\n]*&(?!&)", ";", command)):
         argv = seg["argv"]
         if not argv:
             continue

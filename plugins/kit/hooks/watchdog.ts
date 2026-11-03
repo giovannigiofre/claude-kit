@@ -84,8 +84,9 @@ export function stalls(now: number, threads: Thread[], jobs: Job[], activity: Ma
 
   for (const t of threads) {
     if (!LIVE.has(t.status)) continue
-    // a thread waiting on its own subagent or background command is the child's to watch
-    if (live.some(c => c.parentId === t.id) || jobs.some(j => j.owner === t.id)) continue
+    // a thread waiting on its own subagent or background command is the child's to watch; a
+    // server it left running (deadline 0) is not something it waits on
+    if (live.some(c => c.parentId === t.id) || jobs.some(j => j.owner === t.id && j.deadlineMs > 0)) continue
     const k = strikes.get(`silent:${t.id}`)?.count ?? 0
     if (w.silentMin > 0 && t.activeAt !== undefined) {
       const quiet = now - t.activeAt

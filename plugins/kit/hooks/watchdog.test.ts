@@ -20,7 +20,7 @@ test('a silent thread wakes the coordinator at 20, 40 and 80 min, the third time
   expect(at(620, moved).length).toBe(1)
 })
 
-test('no wake for a finished thread, one with a live child, or one waiting on its own command', async () => {
+test('no wake for a finished thread, one with a live child, or one waiting on its own command (not a server)', async () => {
   const quiet = { name: 'x', activeAt: T0 }
   const threads = [
     { ...quiet, id: 'done', status: 'completed' },
@@ -30,6 +30,8 @@ test('no wake for a finished thread, one with a live child, or one waiting on it
   ]
   const jobs = [{ id: 'b1', owner: 'owner', label: 'npm test', startedAt: T0 + 50 * MIN, deadlineMs: 120 * MIN }]
   expect(stalls(T0 + 60 * MIN, threads, jobs, new Map(), new Map(), WATCH_DEFAULTS)).toEqual([])
+  const server = [{ ...jobs[0], label: 'next dev (server)', deadlineMs: 0 }] // B2: a dev server does not hide a hang
+  expect(stalls(T0 + 60 * MIN, threads, server, new Map(), new Map(), WATCH_DEFAULTS).map(x => x.subject)).toEqual(['silent:owner'])
 })
 
 test('a background command past its deadline wakes its owner once, unless the owner is still acting; a server never', async () => {

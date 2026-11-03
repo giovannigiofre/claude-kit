@@ -181,6 +181,7 @@ def main():
         ("gh pr checks 12 --watch", {"run_in_background": True}, False),
         ("sleep 5 && curl -s localhost:3000", {}, False),
         ("npm run dev &", {}, False),
+        ("while read f; do wc -l \"$f\"; done < list; sleep 2", {}, False),  # the sleep is after the loop
         ("git commit -m 'sleep 600 while we wait'", {}, False),
         ("npm test", {"timeout": 600000}, False),  # a long timeout is a cap, not a wait
     ]:

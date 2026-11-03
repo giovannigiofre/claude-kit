@@ -395,11 +395,12 @@ async function noteTool($: $, e: any, r: any): Promise<void> {
   }
 }
 
-// Background work Claude Code still lists as in flight at a stop: the commands not in it ended.
-function pruneJobs(tasks: any): void {
+// Background work Claude Code still lists as in flight at a stop: the stopping agent's commands
+// not in it ended. Only its own are pruned, since the list may hold only that agent's tasks.
+function pruneJobs(tasks: any, owner?: string): void {
   if (!Array.isArray(tasks)) return
   const running = new Set(tasks.filter(t => t && t.type === 'shell').map(t => String(t.id)))
-  for (const id of [...jobs.keys()]) if (!running.has(id)) jobs.delete(id)
+  for (const [id, j] of [...jobs]) if (j.owner === owner && !running.has(id)) jobs.delete(id)
 }
 
 // A turn that failed on the API (classic StopFailure). One that clears on its own gets a
@@ -468,7 +469,7 @@ export const register: Register = on => {
     const r: any = await next(e)
     try {
       const id = String(e.agent_id ?? '')
-      pruneJobs(e.background_tasks)
+      pruneJobs(e.background_tasks, id)
       if (typeof r?.block === 'string' && r.block.includes(NO_REPORT_MARK)) {
         nudged.add(id)
         bound(nudged as any)
@@ -490,7 +491,11 @@ export const register: Register = on => {
 
   on('classic.Stop', async ($, e: any, next) => {
     const r = await next(e)
-    pruneJobs(e.background_tasks)
+    try {
+      pruneJobs(e.background_tasks)
+    } catch {
+      // the stop goes on
+    }
     return r
   })
 

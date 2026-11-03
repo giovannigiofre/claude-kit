@@ -135,16 +135,21 @@ def missing_report(path):
     transcript that cannot be read, a foreground subagent (its final text is the report), a run
     the person interrupted and one paused on its own background work are never missing one."""
     try:
-        lines = Path(path).read_text(errors="replace").splitlines()
-    except OSError:
+        return scan_runs(Path(path).read_text(errors="replace").splitlines())
+    except Exception:  # an unreadable or odd transcript: never a false "no report"
         return False
+
+
+def scan_runs(lines):
     is_thread, delivered, calls, pending, tried, stopped = False, False, {}, set(), False, False
     for line in lines:
         try:
             entry = json.loads(line)
         except ValueError:
             continue
-        content = (entry.get("message") or {}).get("content")
+        if not isinstance(entry, dict) or not isinstance(entry.get("message"), dict):
+            continue
+        content = entry["message"].get("content")
         if entry.get("type") == "assistant" and isinstance(content, list):
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "tool_use":
