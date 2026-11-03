@@ -171,28 +171,7 @@ python3 <kit>/hooks/scripts/items.py list [--status queued]
 python3 <kit>/hooks/scripts/items.py log <id> <status> [note]
 python3 <kit>/hooks/scripts/items.py show <id>
 python3 <kit>/hooks/scripts/items.py done <id>
-python3 <kit>/hooks/scripts/items.py sweep [--repo <dir>] [--dry-run]
 ```
-
-`sweep` touches only worktrees a `done` item names: the worktree is `<repo>-<id>` for that item,
-or the item's BRIEF, LOG or REPORT records its branch or path (a report's BRANCH / PR line).
-Location alone is not enough: a `.claude/worktrees/agent-*` or a hand-made `<repo>-x` no done
-item names stays. Run it from the lead's repo, where the items are. It never touches a
-long-lived branch (`main`, `develop`, `release*` and the like), one an open item names, or one a
-running process has as its working directory.
-Of those it removes each one, and its branch, whose work has landed: the branch tip is
-the head of a PR merged into the default branch (`gh pr list --state merged`; a tip that is
-merely in the default branch is not enough, since a thread that has not committed yet sits
-there too), `git status` there is empty (untracked files count), and no ignored file is missing
-from the main checkout (only install and tool folders such as `node_modules`, `.venv`,
-`__pycache__` and `.next` are skipped; `build/` or `dist/` are checked like any other; files
-under `.claude/evidence/` are copied to the main checkout first, so a PR's proof survives). The
-worktree removal is not forced; the branch is deleted with `-D`, because a squash-merged branch
-never looks merged to git. The worktree you run it from stays, and `--dry-run` still fetches but
-changes nothing else. When git or the process list cannot be read, the worktree stays. Every
-other worktree is listed with the reason it stays. Claude Code removes a
-thread's worktree itself only when the thread changed nothing; `--repo` covers threads the lead
-sent to another repo, whose worktrees Claude Code never made.
 
 A thread briefed with the BRIEF.md text carries the `ITEM:` line; when it finishes, the hook
 files its report under the item (`reported | done, 2 decision(s)` in the LOG); when the

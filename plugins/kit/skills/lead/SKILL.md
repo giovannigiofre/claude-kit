@@ -41,9 +41,9 @@ verifier finishes, and `LOG.md`, one line per event. The board is the index; the
 survives a compaction or a restart and what the user reads or edits to steer. `/kit:handoff`
 and `/kit:scout take` queue items this way; for work the user gives you directly, make the item
 first: `$I new "<name>" --brief - --from lead` with the brief on stdin. Brief a thread with the
-`ITEM: <id>` line first (how the hooks file its report), the absolute BRIEF.md path (`$I path <id>`;
-a worktree has no `.claude/lead/`), and only what the file lacks: retyping is output you pay for. Log `working` when it starts (`$I log <id>
-working "thread <name>"`), `review` or `needs-you` when it reports, and
+`ITEM: <id>` line, the absolute BRIEF.md path (`$I path <id>`; a worktree has no `.claude/lead/`)
+and only what the file lacks: retyping is output you pay for. Log `working` when it starts (`$I
+log <id> working "thread <name>"`), `review` or `needs-you` when it reports, and
 `$I done <id>` when the PR is merged. Before re-briefing a thread, read BRIEF.md again (the user
 may have changed it) and VERDICT.md. Proposal cards (`.claude/lead/proposals/`, from
 `/kit:scout`): `next` takes a class A card (`python3 <kit>/hooks/scripts/proposals.py take <id>`),
@@ -102,8 +102,8 @@ When a thread reports:
   context is intact), and the re-review to the same verifier: a `VERDICT: FAIL
   scope=local:<paths>` is a scoped fix for those files, not a new brief. Then mark it `review`
   (`done` for local work) and apply the merge policy. `DECISION:` lines in a report go into your
-  reply once, so the user can veto them. After a merge and `$I done <id>`, `$I sweep` (`--repo
-  <dir>` for another repo) removes kit threads' worktrees and branches whose PR landed, nothing else.
+  reply once, so the user can veto them. Once a PR is merged, remove the thread's worktree and
+  branch (`git worktree remove`, `git branch -D` after `git fetch --prune`) and archive the item.
 - **Blocked, a question, or still failing after 3 rounds:** `needs-you`, the question in one line.
 
 **Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it

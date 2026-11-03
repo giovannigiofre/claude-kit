@@ -116,7 +116,7 @@ Safety per project (`/kit-safety`): **Host** or **Sandbox**.
 | `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
 | `kit:implementer` | A thread: one item from brief to PR in its own worktree (another repo's included), effort medium |
 | `kit:verifier` | A fresh-context review against the intent, with a per-project memory of pitfalls |
-| Hooks + mod | `protect`, `guard`, `on_edit`, `bash_edits`, `permission`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop` (files each thread's report and each verdict under its item), the lesson ledger `lessons.py`, `gate.py` (runs `check` or `verify` and records the tree it passed on: the evidence a PR body cites), `items.py` and `proposals.py` (the coordinator's items and proposal cards on disk; `items.py sweep` removes merged threads' worktrees and branches); the mod (`kit.tsx`: modes light / loop / ask, safety, status line with threads waiting for you, a native notification when the board gains work for you) |
+| Hooks + mod | `protect`, `guard`, `on_edit`, `bash_edits`, `permission`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop` (files each thread's report and each verdict under its item), the lesson ledger `lessons.py`, `gate.py` (runs `check` or `verify` and records the tree it passed on: the evidence a PR body cites), `items.py` and `proposals.py` (the coordinator's items and proposal cards on disk); the mod (`kit.tsx`: modes light / loop / ask, safety, status line with threads waiting for you, a native notification when the board gains work for you) |
 
 **Domain plugins** (project scope, offered by `kit:extras` when a task needs them):
 

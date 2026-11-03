@@ -152,14 +152,6 @@ def git_out(cwd, *args, timeout=30, strip=True):
         return ""
 
 
-def git_ok(cwd, *args, timeout=60):
-    """Whether a git command exits 0."""
-    try:
-        return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, timeout=timeout).returncode == 0
-    except Exception:
-        return False
-
-
 def default_branch(root):
     """The branch work merges into: the remote's HEAD, else main or master when one exists."""
     head = git_out(root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
