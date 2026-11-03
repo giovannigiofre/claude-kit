@@ -19,11 +19,14 @@ carries the id, and the hooks file its report under it. Standard library only.
     python3 items.py report|verdict <id> [FILE|-]
     python3 items.py show|path <id>
     python3 items.py done <id>
+    python3 items.py sweep [--repo DIR] [--dry-run]   remove merged threads' worktrees and branches
 """
 
 import json
+import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -168,6 +171,125 @@ def done(root, item_id):
     return True
 
 
+# ignored folders a worktree can rebuild (installs, caches, build output): never a reason to keep it
+REBUILDABLE = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+               ".next", ".turbo", "dist", "build", "target", "coverage", ".gradle", ".cache"}
+
+
+def merged_heads(repo, base):
+    """{branch: head sha} of the PRs merged into `base` (gh, or $KIT_GH), {} when gh fails."""
+    gh = os.environ.get("KIT_GH") or "gh"
+    try:
+        out = subprocess.run([gh, "pr", "list", "--state", "merged", "--base", base, "--limit", "200",
+                              "--json", "headRefName,headRefOid"], cwd=str(repo), capture_output=True,
+                             text=True, timeout=60)
+        rows = json.loads(out.stdout) if out.returncode == 0 else []
+    except Exception:
+        rows = []
+    return {r.get("headRefName"): r.get("headRefOid") for r in rows if isinstance(r, dict)}
+
+
+EVIDENCE = (".claude", "evidence")  # the threads' evidence folders, saved to the main checkout on removal
+
+
+def evidence_files(path):
+    top = Path(path).joinpath(*EVIDENCE)
+    return [f for f in top.rglob("*") if f.is_file()] if top.is_dir() else []
+
+
+def unsaved_ignored(path, main):
+    """The first ignored file in the worktree `path` that `git worktree remove` would delete and the
+    main checkout does not hold identically (a copied .env is not lost; a local note is), or None.
+    An evidence file the main checkout lacks is not lost: the sweep copies it there first."""
+    out = kitlib.git_out(path, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z",
+                         strip=False)
+    seen = 0
+    for entry in filter(None, out.split("\0")):
+        if any(part in REBUILDABLE for part in Path(entry).parts):
+            continue
+        top = Path(path) / entry
+        files = [top] if top.is_file() else []
+        for folder, dirs, names in os.walk(top) if top.is_dir() else ():
+            dirs[:] = [d for d in dirs if d not in REBUILDABLE]
+            files += [Path(folder) / n for n in names]
+        for f in files:
+            seen += 1
+            rel = f.relative_to(path)
+            twin = Path(main) / rel
+            if seen > 2000:
+                return rel.as_posix()
+            if not twin.exists() and rel.parts[:2] == EVIDENCE:
+                continue
+            if not twin.is_file() or twin.read_bytes() != f.read_bytes():
+                return rel.as_posix()
+    return None
+
+
+def save_evidence(path, main):
+    """Copy the worktree's evidence files the main checkout lacks into it. False if one fails."""
+    try:
+        for f in evidence_files(path):
+            twin = Path(main) / f.relative_to(path)
+            if not twin.exists():
+                twin.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, twin)
+        return True
+    except OSError:
+        return False
+
+
+def sweep(repo, dry_run=False):
+    """Remove each linked worktree, and its branch, whose PR was merged into the default branch with
+    the branch's current tip as its head, and that holds nothing it would lose: no uncommitted or
+    untracked file, and no ignored file the main checkout lacks (rebuildable folders aside; evidence
+    under .claude/evidence/ is copied to the main checkout first). The
+    worktree removal is never forced; the branch goes with -D, since a squash merge leaves it
+    unmerged in git's eyes and the PR head check stands in for that. A worktree with no merged PR,
+    one with commits after the merge, a stacked PR's, and the one this runs in stay, each listed
+    with its reason. Returns [(path, branch, action)]."""
+    repo = Path(repo)
+    kitlib.git_out(repo, "fetch", "--prune", "--quiet", timeout=120)
+    if not dry_run:
+        kitlib.git_out(repo, "worktree", "prune")
+    base = (kitlib.default_branch(repo) or "").replace("origin/", "", 1)
+    merged = merged_heads(repo, base) if base else {}
+    main, rows, entry = None, [], {}
+    for line in kitlib.git_out(repo, "worktree", "list", "--porcelain").splitlines() + [""]:
+        if line.startswith("worktree "):
+            entry = {"path": line[9:].strip()}
+        elif line.startswith("branch refs/heads/"):
+            entry["branch"] = line[18:].strip()
+        elif not line.strip() and entry:
+            if main is None:
+                main = entry["path"]  # the first entry is the main checkout
+            else:
+                rows.append(entry)
+            entry = {}
+    here = Path.cwd().resolve()
+    results = []
+    for wt in rows:
+        path, branch = wt["path"], wt.get("branch")
+        tip = kitlib.git_out(path, "rev-parse", "HEAD")
+        if not branch or not tip:
+            action = "kept: detached HEAD or unreadable"
+        elif merged.get(branch) != tip:
+            action = "kept: no PR merged into " + (base or "the default branch") + " at this tip"
+        elif here == Path(path).resolve() or Path(path).resolve() in here.parents:
+            action = "kept: the current directory"
+        elif kitlib.git_out(path, "status", "--porcelain", strip=False).strip():
+            action = "kept: uncommitted or untracked files"
+        elif (lost := unsaved_ignored(path, main)):
+            action = f"kept: ignored file not in the main checkout ({lost})"
+        elif dry_run:
+            action = "would remove"
+        elif not save_evidence(path, main) or not kitlib.git_ok(main, "worktree", "remove", path):  # no --force: a locked one stays
+            action = "kept: git refused to remove it"
+        else:
+            action = "removed" if kitlib.git_ok(main, "branch", "-D", branch) else "removed; branch kept"
+        results.append((path, branch or "", action))
+    return results
+
+
 def list_items(root, status=None, archived=False):
     base = items_dir(root) / "done" if archived else items_dir(root)
     rows = []
@@ -227,6 +349,19 @@ def main(argv=None):
             print(f"{r['id']} | {r['status'] or '?'} | {r['brief']} | {r['note']}")
         if not rows:
             print("items: none" + (f" with status {status}" if status else ""))
+        return 0
+    if cmd == "sweep":
+        repo = opt("--repo")
+        dry = "--dry-run" in rest
+        target = kitlib.git_root(repo or str(Path.cwd()))
+        if not target:
+            print("items: sweep needs a git repository", file=sys.stderr)
+            return 2
+        rows = sweep(target, dry)
+        for path, branch, action in rows:
+            print(f"{action} | {branch or '-'} | {path}")
+        if not rows:
+            print("items: no linked worktrees")
         return 0
     if cmd in ("log", "report", "verdict", "done", "show", "path"):
         if not rest:

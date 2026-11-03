@@ -114,6 +114,47 @@ def main():
         code, out, err = run(repo, "path", "nope")
         check(code == 1 and "no item" in err, "a missing item is an error")
 
+    with tempfile.TemporaryDirectory() as tmp:  # sweep: only clean worktrees at a merged PR's head go
+        tmp = Path(tmp)
+
+        def g(cwd, *a):
+            return subprocess.run(["git", "-C", str(cwd), *a], check=True, capture_output=True, text=True).stdout.strip()
+
+        g(tmp, "init", "-q", "--bare", "-b", "main", "origin.git")
+        g(tmp, "clone", "-q", str(tmp / "origin.git"), "repo")
+        repo = tmp / "repo"
+        g(repo, "config", "user.email", "t@example.invalid")
+        g(repo, "config", "user.name", "t")
+        g(repo, "commit", "-q", "--allow-empty", "-m", "init")
+        g(repo, "push", "-q", "origin", "HEAD:main")
+        g(repo, "remote", "set-head", "origin", "main")
+        heads = []
+        for name in ("landed", "fresh", "dirty"):
+            g(repo, "worktree", "add", "-q", "-b", name, str(tmp / name), "origin/main")
+            if name != "fresh":  # fresh: a thread that has not committed yet, its tip is main's
+                g(tmp / name, "commit", "-q", "--allow-empty", "-m", name)
+                heads.append({"headRefName": name, "headRefOid": g(tmp / name, "rev-parse", "HEAD")})
+        (tmp / "dirty" / "notes.txt").write_text("unsaved\n")
+        (repo / ".git" / "info" / "exclude").write_text(".claude/evidence/\n")
+        proof = Path(".claude", "evidence", "landed", "run.log")
+        (tmp / "landed" / proof).parent.mkdir(parents=True)
+        (tmp / "landed" / proof).write_text("passed\n")
+        fake_gh = tmp / "gh"  # squash-merged PRs: their heads never reach main
+        fake_gh.write_text(f"#!/bin/sh\necho '{json.dumps(heads)}'\n")
+        fake_gh.chmod(0o755)
+        env = dict(os.environ, KIT_GH=str(fake_gh))
+        code, out, err = run(repo, "sweep", "--dry-run", env=env)
+        check(code == 0 and "would remove | landed" in out and (tmp / "landed").is_dir(), f"dry run: {out} {err}")
+        code, out, _ = run(repo, "sweep", env=env)
+        branches = g(repo, "branch")
+        check("removed | landed" in out and not (tmp / "landed").exists() and "landed" not in branches,
+              f"a clean worktree at a merged PR's head goes, with its branch: {out}")
+        check((repo / proof).read_text() == "passed\n", "its evidence is copied to the main checkout")
+        check("kept: no PR merged into main at this tip | fresh" in out and (tmp / "fresh").is_dir(),
+              f"a worktree with no commits yet stays: {out}")
+        check("kept: uncommitted or untracked files | dirty" in out and (tmp / "dirty" / "notes.txt").exists(),
+              f"untracked files stay: {out}")
+
     print("items: all checks passed" if not failed else f"items: {failed} failures")
     return 1 if failed else 0
 

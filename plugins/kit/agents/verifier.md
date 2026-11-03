@@ -33,7 +33,7 @@ the thread's own report: a narrative that frames a change as a fix can steer a r
    new kind of defect likely to recur, add one line: the pattern, how to detect it, the date.
 6. Don't fix anything.
 
-Final message, your return value:
+Your report (the SubagentHandback message where that tool exists, else your final message):
 
 ```
 VERDICT: PASS | FAIL | CANNOT_VERIFY     (FAIL scope=local:<comma-separated paths> when every

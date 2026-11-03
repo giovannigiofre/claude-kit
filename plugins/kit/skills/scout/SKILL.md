@@ -18,9 +18,9 @@ orchestrator never reads the scanned files, cards are fingerprinted and immutabl
 - **`retire`**: `$P retire` archives cards older than 30 days or whose origin is gone.
 - **Otherwise, a scan** of the area or lens given (empty: the whole project):
 
-1. **Dispatch** one to three Explore agents in the background, in one message, each with a
-   disjoint lens: documentation (stale or contradicting the code), configuration and CI (drift,
-   missing or failing checks), code hygiene (TODO and FIXME clusters, recent changes with no
+1. **Dispatch** one to three Explore agents in the background with `effort: "lower"`, in one
+   message, each with a disjoint lens: documentation (stale or contradicting the code),
+   configuration and CI (drift, missing or failing checks), code hygiene (TODO and FIXME clusters, recent changes with no
    test, `git log -20`). Each brief says: read only, never run a state-changing command; return
    a JSON list of objects `{origin, summary, rationale, evidence, confidence, class}` and
    nothing else: `origin` the file or path, `summary` one sentence naming the concrete problem

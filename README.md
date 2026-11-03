@@ -85,8 +85,10 @@ Safety per project (`/kit-safety`): **Host** or **Sandbox**.
                          when the tree's content changed; on failure Claude keeps fixing (max 3)
    SessionStart          lists the project's gates; after a compaction, re-injects the board;
                          says once when a newer kit is installed than the one loaded (restart)
-   SubagentStart         gives each kit:implementer and kit:verifier this repo's lessons from the
-                         ledger, most repeated and newest first (about 600 tokens max)
+   SubagentStart         gives each kit:implementer and kit:verifier this repo's gate command and
+                         lessons from the ledger, most repeated and newest first (about 600
+                         tokens max); the hook sees only the session's repo, so it names it and a thread sent to another
+                         repo knows the lines are not for it
    SubagentStop          turns a kit:verifier FAIL into candidate lessons; gate failures, guard
                          denials are captured too (no tokens), all into
                          ~/.claude/kit-lessons/, outside every repo (see docs/reference.md)
@@ -112,9 +114,9 @@ Safety per project (`/kit-safety`): **Host** or **Sandbox**.
 | `/kit:init` | Sets up a project (kit.json, e2e skill, safety, permissions) |
 | `/kit:learn` | Tidies the lesson ledger (merge, retire shipped fixes, proposals to retire or harden, undo); `promote` turns a lesson seen across repos into a kit PR; corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
 | `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
-| `kit:implementer` | A thread: one item from brief to PR in its own worktree, effort medium |
+| `kit:implementer` | A thread: one item from brief to PR in its own worktree (another repo's included), effort medium |
 | `kit:verifier` | A fresh-context review against the intent, with a per-project memory of pitfalls |
-| Hooks + mod | `protect`, `guard`, `on_edit`, `bash_edits`, `permission`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop` (files each thread's report and each verdict under its item), the lesson ledger `lessons.py`, `gate.py` (runs `check` or `verify` and records the tree it passed on: the evidence a PR body cites), `items.py` and `proposals.py` (the coordinator's items and proposal cards on disk); the mod (`kit.tsx`: modes light / loop / ask, safety, status line with threads waiting for you, a native notification when the board gains work for you) |
+| Hooks + mod | `protect`, `guard`, `on_edit`, `bash_edits`, `permission`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop` (files each thread's report and each verdict under its item), the lesson ledger `lessons.py`, `gate.py` (runs `check` or `verify` and records the tree it passed on: the evidence a PR body cites), `items.py` and `proposals.py` (the coordinator's items and proposal cards on disk; `items.py sweep` removes merged threads' worktrees and branches); the mod (`kit.tsx`: modes light / loop / ask, safety, status line with threads waiting for you, a native notification when the board gains work for you) |
 
 **Domain plugins** (project scope, offered by `kit:extras` when a task needs them):
 
@@ -124,7 +126,9 @@ Safety per project (`/kit-safety`): **Host** or **Sandbox**.
 | `kit-llm` | `kit-llm:llm-build` (build checklist A-H for code that calls an LLM), `kit-llm:llm-evals` (error analysis, calibrated judges, then prompt optimization or model choice), and a hook that spots LLM code on edit |
 
 **Native features the kit uses instead of its own copies:** `/code-review`, `/simplify`,
-`/goal`, `/loop`, `/autofix-pr`, agent view (`claude agents`), the Workflow tool, auto-compact
+`/goal`, `/loop`, `/autofix-pr`, agent view (`claude agents`), background agents with per-call
+`effort` and `isolation: "worktree"`, SendMessage to resume a thread with its context, Monitor
+and background commands that wake the session, the Workflow tool, auto-compact
 with a `# Compact instructions` section in CLAUDE.md, auto mode, `/doctor prompt-audit`.
 
 ## Install

@@ -64,7 +64,7 @@ def main():
         code, err = run("echo hi")
         check(code == 0 and not err, f"a command that changes nothing is silent: {err}")
 
-        code, err = run("sed -i 's/x = 1/x = 2/' src/app.py")
+        code, err = run("sed -i.bak 's/x = 1/x = 2/' src/app.py && rm src/app.py.bak")  # GNU and BSD sed
         check(code == 0, f"a clean edit through sed passes: {err}")
         check((repo / ".edited").read_text() == "src/app.py\n", "onEdit ran for the edited file")
 

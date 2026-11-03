@@ -138,8 +138,10 @@ def gate_line(cwd):
     if not names:
         return ""
     script = Path(__file__).resolve().parent / "gate.py"
-    return (f"kit: run the project's gate with `python3 \"{script}\" {names[0]}` (kit.json `{names[0]}`: "
-            f"`{str(config[names[0]])[:120]}`); it records the tree the gate passed on, as evidence for the PR.")
+    # the hook sees the session's repo, not the brief: a thread sent to another repo must know this is not its gate
+    return (f"kit: in {main} and its worktrees, run the project's gate with `python3 \"{script}\" {names[0]}` "
+            f"(kit.json `{names[0]}`: `{str(config[names[0]])[:120]}`); it records the tree the gate passed on, "
+            f"as evidence for the PR. Work in another repo: these lines do not apply there.")
 
 
 def compose_within(text, budget):
