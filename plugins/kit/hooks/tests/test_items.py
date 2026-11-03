@@ -114,7 +114,7 @@ def main():
         code, out, err = run(repo, "path", "nope")
         check(code == 1 and "no item" in err, "a missing item is an error")
 
-    with tempfile.TemporaryDirectory() as tmp:  # sweep: only clean worktrees at a merged PR's head go
+    with tempfile.TemporaryDirectory() as tmp:  # sweep: only clean kit-thread worktrees at a merged PR's head go
         tmp = Path(tmp)
 
         def g(cwd, *a):
@@ -128,32 +128,66 @@ def main():
         g(repo, "commit", "-q", "--allow-empty", "-m", "init")
         g(repo, "push", "-q", "origin", "HEAD:main")
         g(repo, "remote", "set-head", "origin", "main")
+        (repo / ".git" / "info" / "exclude").write_text(".claude/evidence/\n.claude/lead/\nbuild/\n")
         heads = []
-        for name in ("landed", "fresh", "dirty"):
-            g(repo, "worktree", "add", "-q", "-b", name, str(tmp / name), "origin/main")
-            if name != "fresh":  # fresh: a thread that has not committed yet, its tip is main's
-                g(tmp / name, "commit", "-q", "--allow-empty", "-m", name)
-                heads.append({"headRefName": name, "headRefOid": g(tmp / name, "rev-parse", "HEAD")})
-        (tmp / "dirty" / "notes.txt").write_text("unsaved\n")
-        (repo / ".git" / "info" / "exclude").write_text(".claude/evidence/\n")
+
+        def wt(name, branch=None, commit=True, where=None):
+            path = where or tmp / f"repo-{name}"  # the kit's <repo>-<id> naming
+            g(repo, "worktree", "add", "-q", "-b", branch or name, str(path), "origin/main")
+            if commit:
+                g(path, "commit", "-q", "--allow-empty", "-m", name)
+                heads.append({"headRefName": branch or name, "headRefOid": g(path, "rev-parse", "HEAD")})
+            return path
+
+        landed = wt("landed")
+        fresh = wt("fresh", commit=False)  # a thread that has not committed yet: its tip is main's
+        dirty = wt("dirty")
+        (dirty / "notes.txt").write_text("unsaved\n")
+        hidden = wt("hidden")  # a repo that hides untracked files from git status
+        g(repo, "config", "status.showUntrackedFiles", "no")
+        (hidden / "notes.txt").write_text("unsaved\n")
+        lsfail = wt("lsfail")
+        built = wt("built")
+        (built / "build").mkdir()
+        (built / "build" / "notes.md").write_text("hand-written\n")
+        develop = wt("develop", branch="develop")  # gitflow's long-lived branch, at a merged PR's head
+        other = wt("other", where=tmp / "elsewhere")  # not the kit's naming, no item
+        run(repo, "new", "k9")
+        opened = wt("k9")  # its item is still open
+        busy = wt("busy")
         proof = Path(".claude", "evidence", "landed", "run.log")
-        (tmp / "landed" / proof).parent.mkdir(parents=True)
-        (tmp / "landed" / proof).write_text("passed\n")
+        (landed / proof).parent.mkdir(parents=True)
+        (landed / proof).write_text("passed\n")
         fake_gh = tmp / "gh"  # squash-merged PRs: their heads never reach main
         fake_gh.write_text(f"#!/bin/sh\necho '{json.dumps(heads)}'\n")
         fake_gh.chmod(0o755)
-        env = dict(os.environ, KIT_GH=str(fake_gh))
+        shim = tmp / "bin"
+        shim.mkdir()
+        real = subprocess.run(["which", "git"], capture_output=True, text=True).stdout.strip()
+        (shim / "git").write_text(f'#!/bin/sh\ncase "$*" in *repo-lsfail*ls-files*) exit 1;; esac\nexec {real} "$@"\n')
+        (shim / "git").chmod(0o755)
+        env = dict(os.environ, KIT_GH=str(fake_gh), PATH=f"{shim}:{os.environ['PATH']}")
         code, out, err = run(repo, "sweep", "--dry-run", env=env)
-        check(code == 0 and "would remove | landed" in out and (tmp / "landed").is_dir(), f"dry run: {out} {err}")
-        code, out, _ = run(repo, "sweep", env=env)
+        check(code == 0 and "would remove | landed" in out and landed.is_dir(), f"dry run: {out} {err}")
+        sleeper = subprocess.Popen(["sleep", "30"], cwd=str(busy))
+        try:
+            code, out, _ = run(repo, "sweep", env=env)
+        finally:
+            sleeper.kill()
         branches = g(repo, "branch")
-        check("removed | landed" in out and not (tmp / "landed").exists() and "landed" not in branches,
+        check("removed | landed" in out and not landed.exists() and "landed" not in branches,
               f"a clean worktree at a merged PR's head goes, with its branch: {out}")
         check((repo / proof).read_text() == "passed\n", "its evidence is copied to the main checkout")
-        check("kept: no PR merged into main at this tip | fresh" in out and (tmp / "fresh").is_dir(),
-              f"a worktree with no commits yet stays: {out}")
-        check("kept: uncommitted or untracked files | dirty" in out and (tmp / "dirty" / "notes.txt").exists(),
-              f"untracked files stay: {out}")
+        for name, path, reason in [("fresh", fresh, "kept: no PR merged into main at this tip"),
+                                   ("dirty", dirty, "kept: uncommitted or untracked files"),
+                                   ("hidden", hidden, "kept: uncommitted or untracked files"),
+                                   ("lsfail", lsfail, "kept: ignored file not in the main checkout ((git ls-files failed))"),
+                                   ("built", built, "kept: ignored file not in the main checkout (build/notes.md)"),
+                                   ("develop", develop, "kept: a long-lived branch"),
+                                   ("other", other, "kept: not a kit thread's worktree"),
+                                   ("k9", opened, "kept: item k9 is not done yet"),
+                                   ("busy", busy, "kept: a running process works in it")]:
+            check(f"{reason} | {name} |" in out and path.is_dir(), f"{name} stays ({reason}): {out}")
 
     print("items: all checks passed" if not failed else f"items: {failed} failures")
     return 1 if failed else 0

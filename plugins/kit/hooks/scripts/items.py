@@ -171,9 +171,41 @@ def done(root, item_id):
     return True
 
 
-# ignored folders a worktree can rebuild (installs, caches, build output): never a reason to keep it
+# ignored folders that only an install or a tool writes, never a person: no reason to keep a worktree.
+# Generic names (build, dist, target, .cache) are not here: a hand-written note can sit in them.
 REBUILDABLE = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
-               ".next", ".turbo", "dist", "build", "target", "coverage", ".gradle", ".cache"}
+               ".next", ".turbo"}
+# branches a sweep never deletes, whatever their PR history (gitflow, release lines)
+LONG_LIVED = re.compile(r"^(main|master|develop|development|dev|trunk|staging|production|release\b.*|hotfix\b.*)$")
+UNKNOWN = object()
+
+
+def git_try(cwd, *args):
+    """stdout of a git command, or None when it fails: a sweep reads a failure as "keep it"."""
+    try:
+        out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=60)
+    except Exception:
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+def busy_dirs():
+    """The working directories of running processes, or UNKNOWN when they cannot be read."""
+    proc = Path("/proc")
+    if (proc / "self" / "cwd").exists():
+        found = set()
+        for p in proc.iterdir():
+            try:
+                found.add(Path(os.readlink(p / "cwd")).resolve())
+            except OSError:
+                continue
+        return found or UNKNOWN
+    try:
+        out = subprocess.run(["lsof", "-a", "-d", "cwd", "-Fn"], capture_output=True, text=True, timeout=30).stdout
+    except Exception:
+        return UNKNOWN
+    found = {Path(line[1:]).resolve() for line in out.splitlines() if line.startswith("n/")}
+    return found or UNKNOWN
 
 
 def merged_heads(repo, base):
@@ -201,8 +233,9 @@ def unsaved_ignored(path, main):
     """The first ignored file in the worktree `path` that `git worktree remove` would delete and the
     main checkout does not hold identically (a copied .env is not lost; a local note is), or None.
     An evidence file the main checkout lacks is not lost: the sweep copies it there first."""
-    out = kitlib.git_out(path, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z",
-                         strip=False)
+    out = git_try(path, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z")
+    if out is None:
+        return "(git ls-files failed)"
     seen = 0
     for entry in filter(None, out.split("\0")):
         if any(part in REBUILDABLE for part in Path(entry).parts):
@@ -238,7 +271,25 @@ def save_evidence(path, main):
         return False
 
 
-def sweep(repo, dry_run=False):
+def thread_item(path, branch, main, items_root):
+    """(owned, open item id or None): whether the worktree is a kit thread's (under .claude/worktrees/,
+    named <repo>-<id>, or matching an item), and the not-yet-done item it belongs to."""
+    path, main = Path(path).resolve(), Path(main).resolve()
+    names = {path.name, branch.rsplit("/", 1)[-1]}
+    prefix = main.name + "-"
+    names |= {n[len(prefix):] for n in names if n.startswith(prefix)}
+    names = {n.lower() for n in names if n}
+    open_ids = {p.name for p in items_dir(items_root).iterdir() if p.is_dir() and p.name != "done"} \
+        if items_dir(items_root).is_dir() else set()
+    done_dir = items_dir(items_root) / "done"
+    done_ids = {p.name for p in done_dir.iterdir() if p.is_dir()} if done_dir.is_dir() else set()
+    active = next((n for n in sorted(names) if n in open_ids), None)
+    owned = (main / ".claude" / "worktrees") in path.parents or path.name.startswith(prefix) \
+        or bool(names & (open_ids | done_ids))
+    return owned, active
+
+
+def sweep(repo, dry_run=False, items_root=None):
     """Remove each linked worktree, and its branch, whose PR was merged into the default branch with
     the branch's current tip as its head, and that holds nothing it would lose: no uncommitted or
     untracked file, and no ignored file the main checkout lacks (rebuildable folders aside; evidence
@@ -246,7 +297,10 @@ def sweep(repo, dry_run=False):
     worktree removal is never forced; the branch goes with -D, since a squash merge leaves it
     unmerged in git's eyes and the PR head check stands in for that. A worktree with no merged PR,
     one with commits after the merge, a stacked PR's, and the one this runs in stay, each listed
-    with its reason. Returns [(path, branch, action)]."""
+    with its reason. Only kit threads' worktrees are touched (see thread_item), never a long-lived
+    branch, never one whose item is not done yet, and never one a running process has as its
+    working directory; when git or the process list cannot be read, the worktree stays.
+    Returns [(path, branch, action)]."""
     repo = Path(repo)
     kitlib.git_out(repo, "fetch", "--prune", "--quiet", timeout=120)
     if not dry_run:
@@ -266,20 +320,33 @@ def sweep(repo, dry_run=False):
                 rows.append(entry)
             entry = {}
     here = Path.cwd().resolve()
+    items_root = items_root or repo
+    busy = None
     results = []
     for wt in rows:
         path, branch = wt["path"], wt.get("branch")
         tip = kitlib.git_out(path, "rev-parse", "HEAD")
         if not branch or not tip:
             action = "kept: detached HEAD or unreadable"
+        elif branch == base or LONG_LIVED.match(branch):
+            action = "kept: a long-lived branch"
+        elif not (owned := thread_item(path, branch, main, items_root))[0]:
+            action = "kept: not a kit thread's worktree"
+        elif owned[1]:
+            action = f"kept: item {owned[1]} is not done yet"
         elif merged.get(branch) != tip:
             action = "kept: no PR merged into " + (base or "the default branch") + " at this tip"
         elif here == Path(path).resolve() or Path(path).resolve() in here.parents:
             action = "kept: the current directory"
-        elif kitlib.git_out(path, "status", "--porcelain", strip=False).strip():
-            action = "kept: uncommitted or untracked files"
+        elif (status := git_try(path, "status", "--porcelain", "--untracked-files=all",
+                                "--ignore-submodules=none")) is None or status.strip():
+            action = "kept: uncommitted or untracked files" if status else "kept: git status failed"
         elif (lost := unsaved_ignored(path, main)):
             action = f"kept: ignored file not in the main checkout ({lost})"
+        elif (busy := busy if busy is not None else busy_dirs()) is UNKNOWN:
+            action = "kept: cannot tell whether a process works in it"
+        elif any(d == Path(path).resolve() or Path(path).resolve() in d.parents for d in busy):
+            action = "kept: a running process works in it"
         elif dry_run:
             action = "would remove"
         elif not save_evidence(path, main) or not kitlib.git_ok(main, "worktree", "remove", path):  # no --force: a locked one stays
@@ -357,7 +424,9 @@ def main(argv=None):
         if not target:
             print("items: sweep needs a git repository", file=sys.stderr)
             return 2
-        rows = sweep(target, dry)
+        here = git_try(Path.cwd(), "worktree", "list", "--porcelain") or ""
+        lead_root = here.splitlines()[0][9:] if here.startswith("worktree ") else target  # the items live there
+        rows = sweep(target, dry, items_root=lead_root)
         for path, branch, action in rows:
             print(f"{action} | {branch or '-'} | {path}")
         if not rows:

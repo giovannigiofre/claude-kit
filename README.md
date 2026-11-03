@@ -87,8 +87,8 @@ Safety per project (`/kit-safety`): **Host** or **Sandbox**.
                          says once when a newer kit is installed than the one loaded (restart)
    SubagentStart         gives each kit:implementer and kit:verifier this repo's gate command and
                          lessons from the ledger, most repeated and newest first (about 600
-                         tokens max); the hook sees only the session's repo, so it names it and a thread sent to another
-                         repo knows the lines are not for it
+                         tokens max); the hook sees only the session's repo, so it names it,
+                         and a thread sent to another repo knows the lines are not for it
    SubagentStop          turns a kit:verifier FAIL into candidate lessons; gate failures, guard
                          denials are captured too (no tokens), all into
                          ~/.claude/kit-lessons/, outside every repo (see docs/reference.md)

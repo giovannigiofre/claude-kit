@@ -57,6 +57,7 @@ def main():
         delivered = run(tree, config)
         assert "one test per behaviour" in delivered, "the hook imports the memories and delivers them"
         assert delivered.startswith(f"kit: in {repo} and"), "the gate line comes first"
+        assert f"past sessions in {repo} (" in delivered, "the lessons name their repo too"
         text = subagent_start.lessons(tree, config)  # the fallback reading, from a worktree: the main checkout's
         assert len(text) <= subagent_start.MAX_CHARS, len(text)
         assert "- feedback_lean-tests.md: one test per behaviour" in text and "pitfall_39.md" in text, text

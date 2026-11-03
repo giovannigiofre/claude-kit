@@ -164,7 +164,7 @@ def main():
         text = ""
         if enabled(cwd):
             gate = gate_line(cwd)
-            budget = MAX_CHARS - (len(gate) + 1 if gate else 0)  # the gate line is part of the thread's budget
+            budget = MAX_CHARS - (len(gate) + 1 if gate else 0) - len(str(enabled(cwd)))  # gate line, repo name
             try:
                 import lessons as ledger
                 ledger.LOCK_WAIT = 1.0
@@ -173,6 +173,8 @@ def main():
             except Exception:
                 text = ""
             text = text or compose_within(lessons(cwd, kitlib.config_dir(), agent), budget)
+            # name the repo: a thread sent to another repo must know these lessons are not about it
+            text = text.replace("past sessions in this repo", f"past sessions in {enabled(cwd)}", 1)
             text = "\n".join(t for t in (gate, text) if t)
     except Exception:
         return 0  # sharing lessons is a help, never a reason for the thread not to start
