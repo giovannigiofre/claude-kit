@@ -45,12 +45,13 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
    **Evidence**, **Fixed along the way**, **Risk**, **Open**; attach screenshots and logs with
    `--attach <file>` (gh 2.99+). Follow the repo's commit and PR conventions.
 7. **Keep CI green** (unless `no-babysit`). With the Claude GitHub App on the repo,
-   `/autofix-pr` watches the PR from the cloud. Otherwise watch `gh pr checks <PR> --watch`; on a
-   failure read the log (`gh run view <id> --log-failed`), fix the root cause, re-run step 4 for
-   what you touched, push; at most 3 rounds, then report. A merge conflict: sync as in step 3.
-   Review comments that ask for a product decision go to the user. If CI takes longer than
-   about 10 minutes, hand over to Claude Code's own loop: a bare `/loop` tends this branch's PR
-   (comments, failed CI, conflicts) at its own pace, the way `.claude/loop.md` says when the
+   `/autofix-pr` watches the PR from the cloud. Otherwise run `gh pr checks <PR> --watch` in the
+   background (its exit wakes you; no sleeping or polling); on a failure read the log (`gh run
+   view <id> --log-failed`), fix the root cause, re-run step 4 for what you touched, push; at
+   most 3 rounds, then report. A merge conflict: sync as in step 3. Review comments that ask
+   for a product decision go to the user. If CI takes longer than about 10 minutes, hand over
+   to Claude Code's own loop: a bare `/loop` tends this branch's PR (comments, failed CI,
+   conflicts) at its own pace, the way `.claude/loop.md` says when the
    project has one. (`/kit:go babysit` works when the user types it; a scheduled prompt cannot
    invoke a user-only skill.)
 8. **Merge per the project's policy** (`.claude/kit.json` `lead.merge`): `agent` merges once CI

@@ -40,9 +40,10 @@ the kit's install path is in `claude plugin marketplace list --json`): `BRIEF.md
 verifier finishes, and `LOG.md`, one line per event. The board is the index; the folder is what
 survives a compaction or a restart and what the user reads or edits to steer. `/kit:handoff`
 and `/kit:scout take` queue items this way; for work the user gives you directly, make the item
-first: `$I new "<name>" --brief - --from lead` with the brief on stdin. Brief every thread with
-the BRIEF.md text (its `ITEM:` line is how the hooks file the report), log `working` when it
-starts (`$I log <id> working "thread <name>"`), `review` or `needs-you` when it reports, and
+first: `$I new "<name>" --brief - --from lead` with the brief on stdin. Brief a thread with the
+`ITEM: <id>` line, the absolute BRIEF.md path (`$I path <id>`; a worktree has no `.claude/lead/`)
+and only what the file lacks: retyping is output you pay for. Log `working` when it starts (`$I
+log <id> working "thread <name>"`), `review` or `needs-you` when it reports, and
 `$I done <id>` when the PR is merged. Before re-briefing a thread, read BRIEF.md again (the user
 may have changed it) and VERDICT.md. Proposal cards (`.claude/lead/proposals/`, from
 `/kit:scout`): `next` takes a class A card (`python3 <kit>/hooks/scripts/proposals.py take <id>`),
@@ -56,8 +57,9 @@ or merge is a project policy: also write it to `.claude/kit.json` `lead`.
 
 ## Each message
 
-Route it, reply, and hand control back. Never wait on a thread in the foreground: finished
-threads wake you.
+Route it, reply, and hand control back. Never wait on a thread in the foreground or poll it:
+finished threads wake you with a notification. To wait on something else (CI, a deploy), use
+Monitor or a background command, which wake you too.
 
 - **A question:** answer in place, from the board and the threads' reports.
 - **New work:** one thread per independent piece; several unrelated tasks become several
@@ -78,10 +80,13 @@ threads wake you.
 ## Threads
 
 Start queued items while fewer than PARALLEL are working and the budget allows: `kit:implementer`
-in the background with `isolation: "worktree"`, named after the item id. Where worktrees aren't
-available (not a git repo, or the session refuses them), run threads one at a time in the main
-checkout, each on its own branch. A thread sees nothing of this conversation, so the brief
-carries everything it needs:
+in the background with `isolation: "worktree"`, named after the item id; that worktree
+is cut from this session's repo at its default branch. Work in another repo: no isolation; the
+brief's first step is `git -C <repo> fetch && git -C <repo> worktree add -b <branch> <repo>-<id>
+origin/<default>`, and it names that repo's gate. No worktrees possible: one thread at a time in
+the main checkout, on its own branch. `effort: "lower"` for mechanical items and Explore scouts,
+`"higher"` for an ambiguous or architectural one. A thread sees nothing of this conversation, so
+the brief carries everything it needs:
 
 - the goal and why, the DONE WHEN check, the scope and what is out of it;
 - the project rules and skills that apply. UI or LLM work whose kit plugin is missing here: offer
@@ -93,12 +98,12 @@ When a thread reports:
 
 - **Done, gate green, with evidence:** if its risk is medium or high, have `kit:verifier` review
   the branch in the background, briefed with the item's `ITEM:` line, goal, DONE WHEN and branch
-  (not with the thread's report), and send real findings back to the thread: a
-  `VERDICT: FAIL scope=local:<paths>` is a scoped fix for those files, not a new brief. Then mark
-  it `review` (`done` for local work) and apply the merge policy. `DECISION:` lines in a report
-  go into your reply once, so the user can veto them. Once a PR is merged, remove the thread's
-  worktree and branch (`git worktree remove`, `git branch -D` after `git fetch --prune`) and
-  archive the item.
+  (not with the thread's report). Real findings go back to the same thread by SendMessage (its
+  context is intact), and the re-review to the same verifier: a `VERDICT: FAIL
+  scope=local:<paths>` is a scoped fix for those files, not a new brief. Then mark it `review`
+  (`done` for local work) and apply the merge policy. `DECISION:` lines in a report go into your
+  reply once, so the user can veto them. Once a PR is merged, remove the thread's worktree and
+  branch (`git worktree remove`, `git branch -D` after `git fetch --prune`) and archive the item.
 - **Blocked, a question, or still failing after 3 rounds:** `needs-you`, the question in one line.
 
 **Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it
