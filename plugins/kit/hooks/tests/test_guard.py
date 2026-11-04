@@ -191,6 +191,8 @@ def main():
         ("npm run dev &", {}, False),
         ("while read f; do wc -l \"$f\"; done < list; sleep 2", {}, False),  # the sleep is after the loop
         ("while read -r f; do convert \"$f\" out/; sleep 0.2; done < files", {}, False),  # throttling, no poll
+        ("while read -r line || [[ -n $line ]]; do echo \"$line\"; sleep 0.1; done < f", {}, False),  # the last-line idiom
+        ("while read -r line || [ -n \"$line\" ]; do echo \"$line\"; sleep 0.1; done < f", {}, False),
         ("npm run dev > dev.log 2>&1 & sleep 15; curl -s localhost:3000", {}, False),  # start, then hit
         ("git commit -m 'sleep 600 while we wait'", {}, False),
         ("npm test", {"timeout": 600000}, False),  # a long timeout is a cap, not a wait

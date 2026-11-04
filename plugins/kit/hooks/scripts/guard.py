@@ -1067,7 +1067,8 @@ def check_wait(command, tool_input, opts=None):
     # walks its input and a sleep there only throttles it
     for m in LOOP.finditer(bare):
         cond, body = m.group(1).strip(), m.group(2)
-        if re.fullmatch(r"(?:\w+=\S*\s+)*read\b[^;&|\n]*", cond):  # one read, nothing chained after it
+        # one read alone, or with the last-line idiom `|| [[ -n $line ]]`: nothing polled
+        if re.fullmatch(r"""(?:\w+=\S*\s+)*read\b[^;&|\n]*?(?:\|\|\s*\[\[?\s*-n\s+(?:"[^"]*"|'[^']*'|\S+)\s*\]\]?\s*)?""", cond):
             continue
         if SLEEP_CMD.search(" " + body):
             return ("deny", "wait", "a loop that sleeps until something changes (polling in the foreground)")
