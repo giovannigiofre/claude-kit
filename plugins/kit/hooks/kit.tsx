@@ -404,8 +404,10 @@ async function noteTool($: $, e: any, r: any): Promise<void> {
       timeoutMs: typeof e.timeout === 'number' && e.timeout > 0 ? e.timeout : undefined })
     bound(jobs)
   } else if (e.tool === 'Monitor' && res && res.taskId) {
-    // its owner waits on it and Claude Code ends it at timeout_ms (default 5 min): a job until then
-    const ms = typeof e.timeout_ms === 'number' && e.timeout_ms > 0 ? Math.min(e.timeout_ms, 3_600_000) : 300_000
+    // its owner waits on it and Claude Code ends it at its timeout: a job until then. The result
+    // carries the real one (0: persistent); else timeout_ms as Claude Code caps it (30 min, default 5)
+    const ms = typeof res.timeoutMs === 'number' && res.timeoutMs > 0 ? res.timeoutMs
+      : typeof e.timeout_ms === 'number' && e.timeout_ms > 0 ? Math.min(e.timeout_ms, 1_800_000) : 300_000
     jobs.set(String(res.taskId), { id: String(res.taskId), owner: e.agentId, label: String(e.description || 'Monitor').slice(0, 80),
       startedAt: now, timeoutMs: ms, endsAt: now + ms })
     bound(jobs)

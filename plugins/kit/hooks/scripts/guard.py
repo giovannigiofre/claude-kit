@@ -1038,6 +1038,17 @@ LOOP = re.compile(r"{}\s+((?:(?!{})[\s\S])*?)(?:[;\n]\s*|\s){}((?:(?!{})[\s\S])*
     KW.format("done"), KW.format("done")))
 
 
+# `sleep` in command position, also as `command sleep`, `/bin/sleep`, `timeout 40 sleep`, `{ sleep`, `(sleep`
+SLEEP_CMD = re.compile(r"(?:^|[;&|\n({]|" + KW.format("then") + "|" + KW.format("else") + r")\s*"
+                       r"(?:(?:command|timeout(?:\s+(?:-[sk]\s+\S+|-\S+))*\s+\S+)\s+)*(?:\S*/)?sleep(?=\s|;|$)")
+
+
+def sleep_limit(opts):
+    """guard.sleepMaxSec when it is a number of seconds, else the default."""
+    limit = (opts or {}).get("sleepMaxSec")
+    return limit if isinstance(limit, (int, float)) and not isinstance(limit, bool) and limit >= 0 else SLEEP_MAX_SEC
+
+
 def check_wait(command, tool_input, opts=None):
     """A foreground wait: the turn blocks on it, the caller sees no progress, and nothing tells
     anyone when it hangs. In the background the same wait costs nothing. A long Bash `timeout` is
@@ -1045,8 +1056,7 @@ def check_wait(command, tool_input, opts=None):
     opts = opts or {}
     if tool_input.get("run_in_background") or opts.get("waits") is False or allowed(command, opts):
         return None
-    limit = opts.get("sleepMaxSec")
-    limit = limit if isinstance(limit, (int, float)) and not isinstance(limit, bool) and limit >= 0 else SLEEP_MAX_SEC
+    limit = sleep_limit(opts)
     code = "\n".join(logical_lines(command.replace("\\\n", " ")))
     mask = quote_mask(code)
     # quoted text is an argument, never the wait itself
@@ -1057,9 +1067,9 @@ def check_wait(command, tool_input, opts=None):
     # walks its input and a sleep there only throttles it
     for m in LOOP.finditer(bare):
         cond, body = m.group(1).strip(), m.group(2)
-        if re.match(r"(?:\w+=\S*\s+)*read\b", cond):
+        if re.fullmatch(r"(?:\w+=\S*\s+)*read\b[^;&|\n]*", cond):  # one read, nothing chained after it
             continue
-        if re.search(r"(?:^|[;&|\n]|" + KW.format("then") + "|" + KW.format("else") + r")\s*sleep(?=\s|;|$)", " " + body):
+        if SLEEP_CMD.search(" " + body):
             return ("deny", "wait", "a loop that sleeps until something changes (polling in the foreground)")
     # `sleep 600 &` runs in the background: not a wait
     for seg in segments(re.sub(r"\bsleep\s+[^;&|\n]*&(?!&)", ";", command)):
@@ -1168,7 +1178,7 @@ def main():
     record_denial(cwd, rule, why, data.get("session_id") or "")
     if rule == "wait":
         print(f"kit guard (wait): {why} holds this turn with no progress and no alarm if it hangs. "
-              f"Instead, {WAIT_FIX}. A short sleep (10 s or less) is fine.", file=sys.stderr)
+              f"Instead, {WAIT_FIX}. A short sleep ({sleep_limit(opts):g} s or less) is fine.", file=sys.stderr)
         return 2
     print(f"kit guard ({rule}): {why}. Blocked by the kit's guardrails whatever the permission mode. "
           "Find a safer way (work inside the repo, on a branch, through a PR), or ask the user; they "

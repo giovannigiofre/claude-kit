@@ -178,6 +178,14 @@ def main():
         ("sleep 600", {}, True),
         ("until gh pr checks 12 | grep -q pass; do sleep 30; done", {}, True),
         ("gh pr checks 12 --watch", {}, True),
+        # sleep as a command however it is spelled, and a read chained to a poll, still polls
+        ("while true; do command sleep 30; done", {}, True),
+        ("while true; do /bin/sleep 30; done", {}, True),
+        ("while true; do { sleep 30; }; done", {}, True),
+        ("while true; do (sleep 30); done", {}, True),
+        ("while true; do timeout -k 5 40 sleep 30; done", {}, True),
+        ("while read -r _ <<< x; ! curl -s localhost; do sleep 5; done", {}, True),
+        ("while read -t 1 </dev/null || true; do sleep 30; done", {}, True),
         ("gh pr checks 12 --watch", {"run_in_background": True}, False),
         ("sleep 5 && curl -s localhost:3000", {}, False),
         ("npm run dev &", {}, False),
@@ -190,7 +198,7 @@ def main():
         ("until gh pr checks 12 | grep -qv pending; do sleep 30; done", {"tool": "Monitor", "timeout_ms": 1800000}, False),
     ]:
         code, _, err = call(home, repo, extra.pop("tool", "Bash"), {"command": command, **extra})
-        if (code == 2) != blocked or (blocked and "run_in_background" not in err):
+        if (code == 2) != blocked or (blocked and "run_in_background" not in err) or (code == 2 and "60 s or less" not in err):
             failed += 1
             print(f"FAIL wait {'block' if blocked else 'allow'}: {command!r} {extra} -> exit {code} {err.strip()[:120]}")
 

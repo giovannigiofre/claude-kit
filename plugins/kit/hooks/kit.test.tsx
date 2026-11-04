@@ -256,6 +256,22 @@ test('a background thread that goes silent wakes the coordinator once per stall'
   expect(texts.length).toBe(1)
 })
 
+test('a thread waiting on a Monitor is not silent until the Monitor\'s own timeout ends', async ($, on) => {
+  const agents = [{ id: 'a1', description: 'B2 grid', type: 'kit:implementer', status: 'running' }]
+  const { clock } = world(on, {}, agents)
+  const texts = wakes(on)
+  on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1', outputFile: '/tmp/a1.output' } }))
+  on('tool.call', { tool: 'Monitor' }, () => ({ result: { taskId: 'm1', timeoutMs: 40 * 60_000 } }))
+  on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 1_000_000, isLink: false } }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Agent', prompt: 'ITEM: B2', description: 'B2 grid', run_in_background: true } as any)
+  await $.tool.call({ tool: 'Monitor', command: 'until x; do sleep 30; done', description: 'CI', timeout_ms: 3_600_000, agentId: 'a1' } as any)
+  await clock.advance(39 * 60_000)
+  expect(texts).toEqual([])
+  await clock.advance(2 * 60_000)
+  expect(texts.join('\n')).toContain('thread B2 grid (a1) has written nothing')
+})
+
 test('a thread nudged for its report that stops again without one wakes the coordinator', async ($, on) => {
   let missing = 1
   const { clock } = world(on, {}, [], argv => (argv.includes('--missing') ? missing : 0))
