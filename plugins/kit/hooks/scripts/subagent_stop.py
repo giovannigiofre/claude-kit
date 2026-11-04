@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""SubagentStop (kit:verifier, kit:implementer): file a thread's report and a verifier's verdict under
+"""SubagentStop (every subagent): first, a background thread whose run delivered no report (its
+SubagentHandback refused as a duplicate, never called, or a crash before it) is stopped once and
+told to hand its report back; the kit's hooks module wakes the coordinator if it still does not.
+Then, for kit:verifier and kit:implementer: file a thread's report and a verifier's verdict under
 the coordinator's item when the brief names one (items.py), count the verifier's verdict, and turn each FAIL problem into a
 candidate lesson in the kit's ledger (lessons.py). The same problem in a later round or review
 makes it active, and so does a PASS after that FAIL (the problem was real and is fixed now; the
@@ -11,8 +14,9 @@ its final message, else, since a worker hands its report back through the Subage
 the last such call in its transcript, else the last text there that holds a verdict. Only the
 problem's headline is kept, never the evidence. A verdict is tied to the branch its brief names
 (else a PR number), and a PASS confirms only the last FAIL on that same branch; with neither named
-it confirms nothing. Silent, and never blocks the verifier from stopping. A project without
-.claude/kit.json records nothing. Standard library only.
+it confirms nothing. Apart from the missing report, silent and never blocks a stop. A project
+without .claude/kit.json records nothing. Standard library only. `subagent_stop.py --missing
+<transcript>` exits 1 when that transcript's last run delivered no report (the hooks module asks).
 """
 
 import hashlib
@@ -117,6 +121,68 @@ def text_of(content):
     return "\n".join(c.get("text", "") for c in content or [] if isinstance(c, dict) and c.get("type") == "text")
 
 
+KIT_TYPES = ("kit:implementer", "kit:verifier")
+# re-sent at the start of each run of a background thread (the brief, each message that resumes it)
+RUN_START = "Your final report is delivered through SubagentHandback"
+NO_REPORT = ("kit: no report reached your caller from this run. Call SubagentHandback with your full report "
+             "now; if it answers that a report was already delivered, send the report with SendMessage to "
+             "\"main\" instead. Then stop.")
+
+
+def missing_report(path):
+    """True when the transcript is a background thread's and its last run delivered no report:
+    no SubagentHandback that succeeded and no SendMessage to main that went through. A
+    transcript that cannot be read, a foreground subagent (its final text is the report), a run
+    the person interrupted and one paused on its own background work are never missing one."""
+    try:
+        return scan_runs(Path(path).read_text(errors="replace").splitlines())
+    except Exception:  # an unreadable or odd transcript: never a false "no report"
+        return False
+
+
+def scan_runs(lines):
+    is_thread, delivered, calls, pending, tried, stopped = False, False, {}, set(), False, False
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict) or not isinstance(entry.get("message"), dict):
+            continue
+        content = entry["message"].get("content")
+        if entry.get("type") == "assistant" and isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    name, args = block.get("name"), block.get("input") or {}
+                    if name == "SubagentHandback" or (name == "SendMessage" and args.get("to") == "main"):
+                        calls[block.get("id")] = name
+                        tried = True
+        elif entry.get("type") == "user":
+            blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content or []
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "text" and RUN_START in str(block.get("text")):
+                    is_thread, delivered, calls, tried, stopped = True, False, {}, False, False
+                elif block.get("type") == "text":
+                    pending -= {x for x in pending if x in str(block.get("text"))}  # its task notification
+                    stopped = stopped or str(block.get("text")).startswith("[Request interrupted by user")
+                elif block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
+                    text = text_of(block.get("content"))
+                    ok = not block.get("is_error") and (calls[block["tool_use_id"]] == "SendMessage"
+                                                        or re.search(r'"success"\s*:\s*true', text))
+                    delivered = delivered or bool(ok)
+                    calls.pop(block["tool_use_id"])
+            res = entry.get("toolUseResult") if isinstance(entry.get("toolUseResult"), dict) else {}
+            task = res.get("backgroundTaskId") or res.get("taskId") or (res.get("status") == "async_launched" and res.get("agentId"))
+            if task:  # a background command, a Monitor or a subagent: its notification wakes the thread
+                pending.add(str(task))
+    # a call whose result is not written yet may have gone through: never nudge on a guess. A thread
+    # paused on its own background work has not ended, unless it tried to hand back (B2: refused,
+    # with its dev servers still running); one the person interrupted is theirs
+    return is_thread and not delivered and not calls and not stopped and (tried or not pending)
+
+
 def from_transcript(path):
     """(brief, report) from a subagent transcript: the first user message, and the last
     SubagentHandback message, else the last assistant text that holds a verdict."""
@@ -205,12 +271,19 @@ def file_report(root, brief, report, agent_type):
 
 
 def main():
+    if sys.argv[1:2] == ["--missing"]:
+        return 1 if len(sys.argv) > 2 and missing_report(sys.argv[2]) else 0
     data = kitlib.read_input()
+    transcript = data.get("agent_transcript_path")
+    # once per stop: the second stop (stop_hook_active) is the hooks module's to report
+    if transcript and not data.get("stop_hook_active") and missing_report(transcript):
+        print(json.dumps({"decision": "block", "reason": NO_REPORT}))
+        return 0
     root = kitlib.project_root(data)
     config, _ = kitlib.load_config(root)
-    if not config:
-        return 0
     agent_type = str(data.get("agent_type") or "")
+    if not config or agent_type not in KIT_TYPES:
+        return 0
     report = data.get("last_assistant_message") or ""
     brief = ""
     if not agent_type.endswith("verifier"):  # a thread: file its report, nothing else to parse

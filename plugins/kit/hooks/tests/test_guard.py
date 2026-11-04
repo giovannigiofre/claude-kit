@@ -172,6 +172,38 @@ def main():
             failed += 1
             print(f"FAIL {'block' if blocked else 'allow'}: {command!r} -> exit {code} {err.strip()[:120]}")
 
+    # foreground waits: blocked with the way out named; the same in the background, short sleeps and
+    # quoted text pass
+    for command, extra, blocked in [
+        ("sleep 600", {}, True),
+        ("until gh pr checks 12 | grep -q pass; do sleep 30; done", {}, True),
+        ("gh pr checks 12 --watch", {}, True),
+        # sleep as a command however it is spelled, and a read chained to a poll, still polls
+        ("while true; do command sleep 30; done", {}, True),
+        ("while true; do /bin/sleep 30; done", {}, True),
+        ("while true; do { sleep 30; }; done", {}, True),
+        ("while true; do (sleep 30); done", {}, True),
+        ("while true; do timeout -k 5 40 sleep 30; done", {}, True),
+        ("while read -r _ <<< x; ! curl -s localhost; do sleep 5; done", {}, True),
+        ("while read -t 1 </dev/null || true; do sleep 30; done", {}, True),
+        ("gh pr checks 12 --watch", {"run_in_background": True}, False),
+        ("sleep 5 && curl -s localhost:3000", {}, False),
+        ("npm run dev &", {}, False),
+        ("while read f; do wc -l \"$f\"; done < list; sleep 2", {}, False),  # the sleep is after the loop
+        ("while read -r f; do convert \"$f\" out/; sleep 0.2; done < files", {}, False),  # throttling, no poll
+        ("while read -r line || [[ -n $line ]]; do echo \"$line\"; sleep 0.1; done < f", {}, False),  # the last-line idiom
+        ("while read -r line || [ -n \"$line\" ]; do echo \"$line\"; sleep 0.1; done < f", {}, False),
+        ("npm run dev > dev.log 2>&1 & sleep 15; curl -s localhost:3000", {}, False),  # start, then hit
+        ("git commit -m 'sleep 600 while we wait'", {}, False),
+        ("npm test", {"timeout": 600000}, False),  # a long timeout is a cap, not a wait
+        # Monitor is the way out the refusal names: its until-loop is never a wait
+        ("until gh pr checks 12 | grep -qv pending; do sleep 30; done", {"tool": "Monitor", "timeout_ms": 1800000}, False),
+    ]:
+        code, _, err = call(home, repo, extra.pop("tool", "Bash"), {"command": command, **extra})
+        if (code == 2) != blocked or (blocked and "run_in_background" not in err) or (code == 2 and "60 s or less" not in err):
+            failed += 1
+            print(f"FAIL wait {'block' if blocked else 'allow'}: {command!r} {extra} -> exit {code} {err.strip()[:120]}")
+
     for command, expected in MORE:
         got = verdict(home, repo, command)
         if got != expected:
