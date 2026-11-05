@@ -351,7 +351,7 @@ def judge(info, texts):
             listing = "\n".join(f"{n}. {text}" for n, text in enumerate(texts, 1))
             answer, _ = ask(JUDGE % listing)
             for v in answer.get("verdicts") or []:
-                if not isinstance(v, dict) or not isinstance(v.get("n"), int) or not 1 <= v["n"] <= len(texts):
+                if not isinstance(v, dict) or type(v.get("n")) is not int or not 1 <= v["n"] <= len(texts):
                     continue
                 text = texts[v["n"] - 1]
                 if v.get("verdict") == "generic":

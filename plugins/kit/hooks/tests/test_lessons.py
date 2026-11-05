@@ -320,6 +320,15 @@ def test_judge():
     env = {"KIT_LEARN_MODEL": "1", "KIT_LEARN_CLAUDE": str(fake), "CLAUDE_CODE_ENTRYPOINT": "cli"}
     os.environ.update(env)
     try:
+        bad = TMP / "fake-judge-bool"
+        bad.write_text("#!/usr/bin/env python3\nimport json\nprint(json.dumps({'result': json.dumps({'verdicts': "
+                       "[{'n': True, 'verdict': 'generic'}]}), 'total_cost_usd': 0.001}))\n")
+        bad.chmod(0o755)
+        os.environ["KIT_LEARN_CLAUDE"] = str(bad)
+        before = machine_keys()
+        promote.scan(info)
+        assert machine_keys() == before, "a lesson number of true is not lesson 1"
+        os.environ["KIT_LEARN_CLAUDE"] = str(fake)
         promote.scan(info)
         runs = lessons.load_repos()[info["slug"]]["model_runs"][lessons.today()]
         assert runs == 1 and distill.model_allowed(info)[0], "the judge and the tidy pass share one counted run"
