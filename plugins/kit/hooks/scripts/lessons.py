@@ -665,20 +665,21 @@ def prune(dry_run=True):
 
 
 def idle(slug, dry_run=True):
-    """Retire live lessons not seen for IDLE_DAYS (undo keeps one for good)."""
+    """Retire live lessons neither seen nor delivered for IDLE_DAYS (undo keeps one for good)."""
     def stale(r):
+        used = max(str(r.get(k) or "") for k in ("last", "last_delivered", "created")) or None
         return r.get("status") in ("active", "candidate") and not r.get("kept") \
-            and days_between(r.get("last") or r.get("created"), today()) >= IDLE_DAYS
+            and days_between(used, today()) >= IDLE_DAYS
     hits = [r for r in read_rows(file_of(slug)) if stale(r)]
     if dry_run:
-        return [f"would retire {r['id']} (not seen for {IDLE_DAYS}+ days): {brief(r.get('text', ''))}" for r in hits]
+        return [f"would retire {r['id']} (unused for {IDLE_DAYS}+ days): {brief(r.get('text', ''))}" for r in hits]
     lines = []
     with change(slug) as state:
         for r in state["rows"]:
             if stale(r):
                 r["status"] = "retired"
-                r["retired"] = {"date": today(), "why": f"not seen for {IDLE_DAYS}+ days"}
-                line = f"retired {r['id']} (not seen for {IDLE_DAYS}+ days): {brief(r['text'])} · {UNDO.format(r['id'])}"
+                r["retired"] = {"date": today(), "why": f"unused for {IDLE_DAYS}+ days"}
+                line = f"retired {r['id']} (unused for {IDLE_DAYS}+ days): {brief(r['text'])} · {UNDO.format(r['id'])}"
                 state["news"].append(line)
                 lines.append(line)
     return lines
@@ -703,8 +704,8 @@ def review(cwd, dry_run=True, model=True):
 
 
 def review_due(cwd):
-    """One line for SessionStart when this repo's review is REVIEW_DAYS old, else "". The first
-    session only starts the clock."""
+    """One line for SessionStart while this repo's review is REVIEW_DAYS old or more, else "".
+    The first session only starts the clock."""
     info = repo(cwd)
     if not info:
         return ""
@@ -756,7 +757,7 @@ def main(argv):
         except Busy:
             print("kit lessons: the ledger is busy; try again")
             return 1
-        print("\n".join(lines) if lines else "kit lessons: nothing to prune")
+        print("\n".join(lines) if lines else f"kit lessons: nothing to {argv[0]}")
         return 0
     if argv[0] in ("promote", "promoted", "scrub"):
         import promote

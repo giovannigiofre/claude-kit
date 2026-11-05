@@ -333,11 +333,12 @@ diff (no repo names, orgs, paths, env var names from the ledgers, or secrets). I
 that session and never merges it. `lessons.py promoted <id> <version> <url>` then makes the lesson
 retire itself once the PR is merged (checked with `gh`) and that kit version is installed.
 
-**Upkeep**: every 14 days (the first session starts the clock) the session start adds one line,
-"the lesson review is due", and `/kit:learn` runs `lessons.py review`: it drops the ledgers of test
-and scratchpad repos and retires the machine lessons only they held (`prune`), retires lessons
-not seen for 90 days, then runs the distiller. `--dry-run` lists what it would do. Every retire
-can be undone; a dropped ledger cannot.
+**Upkeep**: from 14 days after the last review (the first session starts the clock) the session
+start adds one line, "the lesson review is due", and `/kit:learn` runs `lessons.py review
+--dry-run`, then, once the user agrees, `lessons.py review`: it drops the ledgers of test and
+scratchpad repos and retires the machine lessons only they held (`prune`), retires lessons
+neither seen nor delivered for 90 days, then runs the distiller. Every retire can be undone; a
+dropped ledger cannot.
 
 ```bash
 python3 <kit>/hooks/scripts/lessons.py list [--all] [DIR]

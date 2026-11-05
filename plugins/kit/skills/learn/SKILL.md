@@ -17,13 +17,14 @@ expanded, the script is in the kit plugin's `hooks/scripts/`).
 
 ## Commands
 
-- **empty**: run `$L review .` and relay its lines as they are (each says what changed and how
-  to undo it). It drops ledgers of test and scratchpad repos, retires lessons unused for 90 days,
-  merges duplicates, retires lessons whose fix shipped, proposes retiring stale ones and writes
-  hardening proposals; with a model allowed it also rewords unclear lessons (one haiku call, at
-  most $0.05, once a day per repo). `--no-model` skips the model, `--dry-run` only lists. The
-  session-start hook says when a review is due (every 14 days). Then take this session's
-  corrections and repeated failures, if any, through the section below.
+- **empty**: run `$L review --dry-run .` and show its lines; when it would drop a ledger or retire
+  a lesson, ask the user once before `$L review .`, then relay its lines as they are (each says
+  what changed and how to undo it). It drops ledgers of test and scratchpad repos, retires lessons
+  neither seen nor delivered for 90 days, merges duplicates, retires lessons whose fix shipped,
+  proposes retiring stale ones and writes hardening proposals; with a model allowed it also rewords
+  unclear lessons (one haiku call, at most $0.05, once a day per repo). `--no-model` skips the
+  model, `--dry-run` only lists. The session-start hook says when a review is due (every 14 days).
+  Then take this session's corrections and repeated failures, if any, through the section below.
 - **undo <id>**: `$L undo <id> .`, then say what came back. On a proposal (to retire, or to
   harden) this keeps the lesson as it is, and the distiller does not ask again.
 - **retire <id>**: `$L retire <id> .`, for example to accept a proposal to retire a stale lesson.

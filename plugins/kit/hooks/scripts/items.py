@@ -23,6 +23,7 @@ carries the id, and the hooks file its report under it. Standard library only.
 """
 
 import json
+import os
 import re
 import shutil
 import sys
@@ -171,7 +172,9 @@ def archive_row(root, item_id):
     gone = [ln for ln in lines if row.match(ln)]
     if not gone:
         return
-    board.write_text("\n".join(ln for ln in lines if not row.match(ln)) + "\n", encoding="utf-8")
+    tmp = board.with_name(f".{board.name}.tmp")
+    tmp.write_text("\n".join(ln for ln in lines if not row.match(ln)) + "\n", encoding="utf-8")
+    os.replace(tmp, board)
     with open(board.parent / "archive.md", "a", encoding="utf-8") as f:
         f.write("".join(f"{ln} | archived {now()[:10]}\n" for ln in gone))
 

@@ -36,7 +36,9 @@ ABOUT_KIT = re.compile(r"\b(claude code|claude-kit|the kit|kit:\w+|/kit:\w+|work
 ENV_NAME = re.compile(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]{2,}\b")
 COMMON_ENV = ("KIT_", "CLAUDE_", "GITHUB_", "NODE_", "NPM_", "PYTHON", "HOME", "PATH")
 GENERIC = set("app api web src lib docs doc hooks scripts tests test main site server client core infra".split())
-FILE_PATH = re.compile(r"(?<![\w:/.])[\w.-]+/[\w.*-]+")
+# a relative file path: a slashed word ending in an extension, or with two slashes ("and/or" is not one)
+FILE_PATH = re.compile(r"(?<![\w:/.])[\w.-]+/(?:[\w.*-]+/)*[\w*-]*\.\w+|(?<![\w:/.])[\w.-]+/[\w.*-]+/[\w.*-]+")
+KIT_ROOT = Path(__file__).resolve().parents[4]
 
 
 def repo_slugs():
@@ -45,9 +47,12 @@ def repo_slugs():
 
 
 def specific(text):
-    """Why `text` holds only in one project (a repo's name, org, path, env var, or a file path),
-    or None when it reads the same in any repo. A lesson that is not generic stays in its repo."""
-    hits = scrub(text) + [f"a file path ({m})" for m in FILE_PATH.findall(text or "")]
+    """Why `text` holds only in one project (a repo's name, org, path, env var, or a file path
+    that is not the kit's own), or None when it reads the same in any repo. A lesson that is not
+    generic stays in its repo."""
+    def kit_file(m):
+        return any((d / m).exists() for d in (KIT_ROOT, KIT_ROOT / "plugins" / "kit"))
+    hits = scrub(text) + [f"a file path ({m})" for m in FILE_PATH.findall(text or "") if not kit_file(m)]
     return hits[0] if hits else None
 
 

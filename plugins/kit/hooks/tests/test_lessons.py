@@ -5,6 +5,7 @@ Synthetic repos and memories only, under a temporary CLAUDE_CONFIG_DIR.
 Run: python3 plugins/kit/hooks/tests/test_lessons.py   (exit 0 = all good)
 """
 
+import datetime
 import json
 import os
 import re
@@ -365,6 +366,7 @@ def test_upkeep():
         lessons.file_of("scratch-old-1").write_text("{}\n")
         lessons.observe(lessons.MACHINE, "fake-gate", "gate", "the fake gate failed", "gate", extra={"from": ["scratch-old-1:L1"]})
         assert promote.specific("keep old builds") is None, "a scratchpad repo's name is not a project term"
+        assert promote.specific("check pass/fail and/or CI/CD output") is None, "a slashed word is not a file path"
         dry = lessons.prune(dry_run=True)
         assert any("would drop the ledger of scratch-old-1" in x for x in dry) and any("would retire M" in x for x in dry), dry
         assert lessons.file_of("scratch-old-1").exists(), "a dry run changes nothing"
@@ -379,6 +381,12 @@ def test_upkeep():
         assert not any(r.get("key") == "local-path" for r in lessons.read_rows(lessons.file_of(lessons.MACHINE))), \
             "a lesson naming a project's files stays in its repo"
 
+        old = (datetime.date.today() - datetime.timedelta(days=lessons.IDLE_DAYS + 1)).isoformat()
+        with lessons.change(lessons.repo(a)["slug"]) as state:
+            for r in state["rows"]:
+                r["last"] = r["created"] = old
+                r["last_delivered"] = lessons.today()
+        assert not lessons.idle(lessons.repo(a)["slug"]), "a lesson still delivered is not idle"
         assert lessons.review_due(a) == "", "the first session starts the clock"
         lessons.register(lessons.repo(a), reviewed_ts=time.time() - (lessons.REVIEW_DAYS + 1) * 86400)
         assert "lesson review for this repo is due" in lessons.review_due(a)
