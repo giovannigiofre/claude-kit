@@ -2,7 +2,8 @@
 """SessionStart: tell Claude which kit gates this project has, make the user the git author when
 kit.json names them, offer the kit's machine settings once, re-apply the user's approved
 per-repo auto mode lines to user settings, import new memories into the kit's lesson ledger and
-hand the main session its lessons and the news of what the kit changed in them (lessons.py), and
+hand the main session its lessons, the news of what the kit changed in them and, every
+lessons.REVIEW_DAYS, a line that the lesson review is due (lessons.py), and
 after a compaction put the coordinator's board back into context (stdout is added to context)."""
 
 import json
@@ -17,21 +18,53 @@ import machine_setup  # noqa: E402
 
 BOARD = ".claude/lead/board.md"
 SESSION_LESSONS = 1600  # about 400 tokens of the ledger's lessons for the main session
-MAX_BOARD_CHARS = 6000
+MAX_BOARD_CHARS = 8000  # the contract's size: a board within it comes back whole
+BOARD_LINES, BOARD_BYTES = 60, 8000  # the board's contract (kit:lead)
 
 
-def print_board(root, config):
-    """After a compaction, the board is the coordinator's memory of every thread it started."""
+def read_board(root, config):
+    """(the board's path as configured, its text) or (rel, "") when there is none."""
     lead = (config or {}).get("lead") if isinstance(config, dict) else None
     rel = lead.get("board") if isinstance(lead, dict) and isinstance(lead.get("board"), str) else BOARD
     path = Path(rel) if Path(rel).is_absolute() else Path(root) / rel
     try:
-        text = path.read_text(encoding="utf-8").strip()
+        return rel, path.read_text(encoding="utf-8").strip()
     except Exception:
+        return rel, ""
+
+
+def board_warning(text):
+    """A line when the board is past its contract, else ""."""
+    lines, size = text.splitlines(), len(text.encode("utf-8"))
+    if len(lines) <= BOARD_LINES and size <= BOARD_BYTES:
+        return ""
+    return (f"kit: the board is {len(lines)} lines, {size // 1000} KB, over its {BOARD_LINES}-line, "
+            f"{BOARD_BYTES // 1000} KB contract: archive done rows (items.py done <id>), keep RULES to "
+            "standing rules and move dated decisions to .claude/lead/DECISIONS.md.")
+
+
+def print_board(root, config):
+    """After a compaction, the board is the coordinator's memory of every thread it started.
+    NEEDS YOU and the rows come first, RULES last and cut first."""
+    rel, text = read_board(root, config)
+    if not text:
         return
-    if text:
-        print(f"kit: the conversation was just compacted. The coordinator's board ({rel}):\n"
-              + text[:MAX_BOARD_CHARS] + "\n")
+    lines = text.splitlines()
+    rules = [ln for ln in lines if ln.startswith("RULES:")]
+    first = [ln for ln in lines if ln.startswith(("SHIP:", "NEEDS YOU:"))]
+    rest = [ln for ln in lines if ln not in rules and ln not in first]
+    body = "\n".join(first + rest)
+    if len(body) > MAX_BOARD_CHARS:
+        body = body[:MAX_BOARD_CHARS - 40] + " ... (cut: rows over the board budget)"
+    room = MAX_BOARD_CHARS - len(body) - 1
+    for ln in rules:
+        if room > 40:
+            cut = ln if len(ln) <= room else ln[:room - 40] + " ... (cut: RULES over the board budget)"
+            body += "\n" + cut
+            room -= len(cut) + 1
+    print(f"kit: the conversation was just compacted. The coordinator's board ({rel}):\n{body}\n")
+    if board_warning(text):
+        print(board_warning(text))
 
 
 def ensure_author(root, config):
@@ -118,6 +151,10 @@ def main():
         return 0
     if not config:
         return 0  # project has not opted in: stay silent
+    if data.get("source") != "compact":  # after a compaction print_board says it
+        warning = board_warning(read_board(root, config)[1])
+        if warning:
+            print(warning)
     notice = update_notice(data.get("session_id"))
     if notice:
         print(notice)
@@ -158,7 +195,7 @@ def learned(root):
         lessons.LOCK_WAIT = 1.0  # within the hook's timeout, with the gate lines already printed
         lessons.harvest(root)
         news = lessons.take_news(root)
-        block = news_block(news)
+        block = "\n".join(t for t in (news_block(news), lessons.review_due(root)) if t)
         text = lessons.deliver(root, "lead", SESSION_LESSONS - len(block))
     except Exception:
         return []  # lessons are a help, never a reason for a session not to start

@@ -20,8 +20,10 @@ def sh(repo, *args):
 
 
 def stop(repo, session, tmpdir):
+    # a temp config dir: the gate failures this test provokes must not reach the real lesson ledger
+    env = {**os.environ, "TMPDIR": tmpdir, "CLAUDE_CONFIG_DIR": str(Path(tmpdir) / "config")}
     out = subprocess.run([sys.executable, str(SCRIPT)], input=json.dumps({"cwd": str(repo), "session_id": session}),
-                         capture_output=True, text=True, timeout=60, env={**os.environ, "TMPDIR": tmpdir})
+                         capture_output=True, text=True, timeout=60, env=env)
     return out.returncode, out.stderr
 
 

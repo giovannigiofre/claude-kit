@@ -12,15 +12,15 @@ queued item on disk, else a class A proposal card, else the backlog that `.claud
 
 You are the conversation; threads do the work. You decide what becomes a thread, brief it, keep
 the board and talk to the user. You see what threads report, not every step they take, so your
-context stays free for decisions. (Modelled on Claude Projects, built from Claude Code's
-background agents.)
+context stays free for decisions. (Modelled on Claude Projects, built on background agents.)
 
 ## The board
 
 `.claude/lead/board.md` (or `lead.board` in kit.json) is the state that survives compaction and
-restarts. Read it when you start or lose track of an item; rewrite it whole whenever something
-changes; keep it under about 60 lines. If `.claude/lead/` isn't gitignored, add `/.claude/lead/`
-to `.git/info/exclude`.
+restarts. Read it when you start or lose track of an item; rewrite it whole on every change. Keep
+it under 60 lines and 8 KB: RULES holds standing rules only, dated decisions go to
+`.claude/lead/DECISIONS.md` (read on demand), `$I done` moves a done row to `archive.md`. Add
+`/.claude/lead/` to `.git/info/exclude` unless it is gitignored.
 
 ```
 SHIP: <local | pr | pr+fix> | MERGE: <user | agent | ask> | PARALLEL: <n> | BUDGET: <none | k of n items>
@@ -92,7 +92,8 @@ the brief carries everything it needs:
 - the goal and why, the DONE WHEN check, the scope and what is out of it, and an `EXPECT: 90m`
   line, how long it should run (the watchdog checks on it past that);
 - the project rules and skills that apply. UI or LLM work whose kit plugin is missing here: offer
-  it first (`kit:extras`), then give the thread the skill file's absolute path;
+  it first (`kit:extras`), then give the thread the skill file's absolute path. Facts every thread
+  needs go in a gitignored `CLAUDE.local.md` listed in `.worktreeinclude` (`lead.notes` is yours);
 - the ship mode: `local` commits on its branch; `pr` also pushes and opens a PR with Intent,
   Evidence, Fixed along the way and Risk; `pr+fix` also watches CI and fixes failures.
 
@@ -105,7 +106,7 @@ When a thread reports:
   scope=local:<paths>` is a scoped fix for those files, not a new brief. Then mark it `review`
   (`done` for local work) and apply the merge policy. `DECISION:` lines in a report go into your
   reply once, so the user can veto them. Once a PR is merged, remove the thread's worktree and
-  branch (`git worktree remove`, `git branch -D` after `git fetch --prune`) and archive the item.
+  branch (`git worktree remove`, `git branch -D` after `git fetch --prune`) and `$I done` it.
 - **Blocked, a question, or still failing after 3 rounds:** `needs-you`, the question in one line.
 
 **Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it
@@ -144,7 +145,6 @@ thread and reply in one line.
 
 - **The user says stop:** delete your cron jobs, let threads finish unless told otherwise, rewrite the board, report.
 - **Budget reached:** start nothing new; let working threads finish.
-- **Two threads in a row end in `needs-you` after 3 failed rounds:** stop starting threads,
-  report, wait.
+- **Two threads in a row end in `needs-you` after 3 failed rounds:** stop starting, report, wait.
 - **`next`** (e.g. `/loop 30m /kit:lead next`): one backlog item per run; stop the loop when the
   backlog is empty or an item needs the user.

@@ -5,12 +5,14 @@ Synthetic repos and memories only, under a temporary CLAUDE_CONFIG_DIR.
 Run: python3 plugins/kit/hooks/tests/test_lessons.py   (exit 0 = all good)
 """
 
+import datetime
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
@@ -350,9 +352,53 @@ def test_promotion():
         ["line 2: secret-shaped text"], "a diff's context lines are already in the kit"
 
 
+def test_upkeep():
+    import promote
+    scratch = TMP / "scratch"
+    scratch.mkdir()
+    os.environ["KIT_TEMP_ROOTS"] = str(scratch)  # the test's repos are real; only scratch/ is a temp folder
+    try:
+        probe = make_repo("scratch/probe")
+        assert lessons.repo(probe) is None and lessons.capture(probe, "gate", "k", "probe failed") is None, \
+            "a scratchpad repo writes no lesson to a real ledger"
+        noisy = {"main": str(scratch / "old"), "origin": str(scratch / "old")}
+        lessons.register({"slug": "scratch-old-1", **noisy})
+        lessons.file_of("scratch-old-1").write_text("{}\n")
+        lessons.observe(lessons.MACHINE, "fake-gate", "gate", "the fake gate failed", "gate", extra={"from": ["scratch-old-1:L1"]})
+        assert promote.specific("keep old builds") is None, "a scratchpad repo's name is not a project term"
+        assert promote.specific("check pass/fail and/or CI/CD output") is None, "a slashed word is not a file path"
+        dry = lessons.prune(dry_run=True)
+        assert any("would drop the ledger of scratch-old-1" in x for x in dry) and any("would retire M" in x for x in dry), dry
+        assert lessons.file_of("scratch-old-1").exists(), "a dry run changes nothing"
+        lessons.prune(dry_run=False)
+        assert not lessons.file_of("scratch-old-1").exists() and "scratch-old-1" not in lessons.load_repos()
+
+        a, b = (make_repo(f"g{i}", f"https://example.com/acme/g{i}.git") for i in range(2))
+        for r in (a, b):
+            lessons.register(lessons.repo(r))
+            lessons.observe(lessons.repo(r)["slug"], "local-path", "preference", "run src/db/seed.ts first", "user", activate_at=1)
+        promote.scan()
+        assert not any(r.get("key") == "local-path" for r in lessons.read_rows(lessons.file_of(lessons.MACHINE))), \
+            "a lesson naming a project's files stays in its repo"
+
+        old = (datetime.date.today() - datetime.timedelta(days=lessons.IDLE_DAYS + 1)).isoformat()
+        with lessons.change(lessons.repo(a)["slug"]) as state:
+            for r in state["rows"]:
+                r["last"] = r["created"] = old
+                r["last_delivered"] = lessons.today()
+        assert not lessons.idle(lessons.repo(a)["slug"]), "a lesson still delivered is not idle"
+        assert lessons.review_due(a) == "", "the first session starts the clock"
+        lessons.register(lessons.repo(a), reviewed_ts=time.time() - (lessons.REVIEW_DAYS + 1) * 86400)
+        assert "lesson review for this repo is due" in lessons.review_due(a)
+        lessons.main(["review", "--no-model", str(a)])
+        assert lessons.review_due(a) == "", "a review resets the clock"
+    finally:
+        os.environ.pop("KIT_TEMP_ROOTS", None)
+
+
 def main():
     for test in (test_ledger, test_import, test_capture, test_delivery, test_fail_then_pass, test_distill,
-                 test_model_pass, test_promotion):
+                 test_model_pass, test_promotion, test_upkeep):
         test()
     print("lessons: all checks passed")
 

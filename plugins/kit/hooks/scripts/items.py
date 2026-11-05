@@ -7,7 +7,8 @@
     .claude/lead/items/<id>/REPORT.md    the thread's final report (SubagentStop, kit:implementer)
     .claude/lead/items/<id>/VERDICT.md   the verifier's report (SubagentStop, kit:verifier)
     .claude/lead/items/<id>/LOG.md       one line per event, append-only
-    .claude/lead/items/done/<id>/        archived when the item is done
+    .claude/lead/items/done/<id>/        archived when the item is done; its board row moves
+                                         to .claude/lead/archive.md
 
 The board stays the index; these files are what survives a compaction, a restart or a look from
 another session (`cat` them). BRIEF.md starts with `ITEM: <id>`: a thread briefed with its text
@@ -22,6 +23,7 @@ carries the id, and the hooks file its report under it. Standard library only.
 """
 
 import json
+import os
 import re
 import shutil
 import sys
@@ -35,13 +37,17 @@ ITEM_LINE = re.compile(r"^\s*ITEM:\s*([a-z0-9][a-z0-9._-]*)\s*$", re.M | re.I)
 STATUSES = ("queued", "working", "review", "needs-you", "landing", "done", "parked", "reported", "verdict")
 
 
-def lead_dir(root):
-    """`.claude/lead` or the folder of kit.json `lead.board`."""
+def board_file(root):
+    """`.claude/lead/board.md`, or kit.json `lead.board`."""
     config, _ = kitlib.load_config(root)
     lead = (config or {}).get("lead") if isinstance(config, dict) else None
     board = lead.get("board") if isinstance(lead, dict) and isinstance(lead.get("board"), str) else ".claude/lead/board.md"
-    path = Path(board) if Path(board).is_absolute() else Path(root) / board
-    return path.parent
+    return Path(board) if Path(board).is_absolute() else Path(root) / board
+
+
+def lead_dir(root):
+    """`.claude/lead` or the folder of kit.json `lead.board`."""
+    return board_file(root).parent
 
 
 def items_dir(root):
@@ -155,11 +161,30 @@ def write(root, item_id, name, text, status, note=""):
     return True
 
 
+def archive_row(root, item_id):
+    """Move the item's board row to archive.md beside the board, so the board keeps only live work."""
+    board = board_file(root)
+    try:
+        lines = board.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    row = re.compile(rf"^\s*{re.escape(item_id)}\s*\|", re.I)
+    gone = [ln for ln in lines if row.match(ln)]
+    if not gone:
+        return
+    tmp = board.with_name(f".{board.name}.tmp")
+    tmp.write_text("\n".join(ln for ln in lines if not row.match(ln)) + "\n", encoding="utf-8")
+    os.replace(tmp, board)
+    with open(board.parent / "archive.md", "a", encoding="utf-8") as f:
+        f.write("".join(f"{ln} | archived {now()[:10]}\n" for ln in gone))
+
+
 def done(root, item_id):
     p = item_path(root, item_id)
     if not p.is_dir():
         return False
     log(root, item_id, "done")
+    archive_row(root, item_id)
     target = item_path(root, item_id, done=True)
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():

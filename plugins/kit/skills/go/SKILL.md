@@ -31,9 +31,10 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
    <evidence file>`. A test that mocks the changed path, or reading the code, is not evidence.
    Fix failures and repeat.
 5. **Review, then simplify.** Run the `code-review` skill on the branch with the intent from step
-   2; skip findings already declined in `.claude/review-decisions.md`. Fix the mechanical ones
-   that don't change what was asked. Collect those that touch the intent or a product decision
-   and ask about them once, with AskUserQuestion; a declined one goes into
+   2; skip findings already declined in `.claude/review-decisions.md`. Fix the ones that affect
+   correctness (a bug, a missing part, a broken contract) and don't change what was asked; list
+   style and taste findings without applying them. Collect those that touch the intent or a
+   product decision and ask about them once, with AskUserQuestion; a declined one goes into
    `.claude/review-decisions.md` (date, finding, reason). Then run the `simplify` skill, update
    docs that describe the changed behaviour, and re-run `verify`.
 6. **Risk and PR.** Rate the risk low, medium or high in one or two lines: blast radius (shared

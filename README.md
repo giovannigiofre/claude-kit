@@ -83,8 +83,10 @@ Safety per project (`/kit-safety`): **Host** or **Sandbox**.
                          protect after the fact
    Stop         check    runs the fast `check` (with KIT_CHANGED_FILES, so it can be diff-aware)
                          when the tree's content changed; on failure Claude keeps fixing (max 3)
-   SessionStart          lists the project's gates; after a compaction, re-injects the board;
-                         says once when a newer kit is installed than the one loaded (restart)
+   SessionStart          lists the project's gates; after a compaction, re-injects the board
+                         (rows first, warns past 60 lines or 8 KB); says once when a newer kit
+                         is installed than the one loaded (restart), and when the lesson review
+                         is due (every 14 days)
    SubagentStart         gives each kit:implementer and kit:verifier this repo's gate command and
                          lessons from the ledger, most repeated and newest first (about 600
                          tokens max); the hook sees only the session's repo, so it names it,
@@ -170,6 +172,11 @@ estimates otherwise pick the cheap, brittle option and test only in units:
 **Every new project:** `cd project && claude`, then `/kit:init`. Read `.claude/kit.json`, adjust
 it, commit it. The hooks do nothing in a project without it, so a user-scope install never
 changes a project you haven't opted in. Details of every key: [docs/reference.md](docs/reference.md).
+Facts every thread needs (how to set up a worktree, the integration-test command) go in a
+gitignored `CLAUDE.local.md`: threads load it like CLAUDE.md, while kit.json `lead.notes` reaches
+only the coordinator. List the gitignored files a fresh worktree needs (`.env`, `CLAUDE.local.md`,
+`.claude/kit.json` when it is not committed) in `.worktreeinclude` (gitignore syntax); Claude Code
+copies them into every worktree it creates, a manual `git worktree add` excepted.
 
 **Update:** `git pull` in the clone (or `claude plugin marketplace update claude-kit`), then
 `/reload-plugins`. Bump `version` in the plugin's `plugin.json` when behaviour changes.
