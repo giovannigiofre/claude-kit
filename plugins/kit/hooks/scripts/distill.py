@@ -23,7 +23,7 @@ lesson): `claude -p --model haiku` with no tools, no hooks, no plugins, MODEL_BU
 at most MODEL_RUNS_PER_DAY per repo. Skipped in headless runs (lessons.headless: overnight,
 `claude -p`, the SDK), with KIT_LEARN_MODEL=0, or with kit.json {"learn": {"model": false}}. It can only edit, merge or
 retire lessons that exist; every text it returns goes through the same filters as any lesson.
-The same call settings judge a promotion: one batch per run, counted against the same daily cap;
+The same call settings judge a promotion: one batch, inside the same counted run for the day;
 no model, a timeout or an unclear answer keeps the lesson in its repo (promote.scan).
 Standard library only.
 """
@@ -236,6 +236,24 @@ def fixed_fail_keys(slug, report, scope):
 
 # ---- the optional model pass ------------------------------------------------------------------
 
+COUNTED = set()  # (slug, day) whose run this distill already counted: its judge and tidy calls are one run
+
+
+def count_run(info):
+    """Count the day's model run once per distill, however many calls it makes."""
+    key = (info["slug"], lessons.today())
+    if key not in COUNTED:
+        COUNTED.add(key)
+        runs = lessons.load_repos().get(info["slug"], {}).get("model_runs") or {}
+        lessons.register(info, model_runs={key[1]: int(runs.get(key[1], 0)) + 1})
+
+
+def today_preview(info):
+    """What a dry run asked the model today ({} when it did not, or asked on another day)."""
+    saved = lessons.load_repos().get(info["slug"], {}).get("model_preview") or {}
+    return saved if saved.get("date") == lessons.today() else {}
+
+
 def model_allowed(info):
     """(allowed, reason)."""
     if lessons.headless():
@@ -247,7 +265,7 @@ def model_allowed(info):
     if isinstance(learn, dict) and learn.get("model") is False:
         return False, "kit.json learn.model is false"
     runs = lessons.load_repos().get(info["slug"], {}).get("model_runs") or {}
-    if int(runs.get(lessons.today(), 0)) >= MODEL_RUNS_PER_DAY:
+    if int(runs.get(lessons.today(), 0)) >= MODEL_RUNS_PER_DAY and (info["slug"], lessons.today()) not in COUNTED:
         return False, "already ran today"
     if not shutil.which(os.environ.get("KIT_LEARN_CLAUDE", "claude")):
         return False, "claude not on PATH"
@@ -312,29 +330,38 @@ Lessons:
 def judge(info, texts):
     """The model's genericity verdict on lessons bound for every repo: {text: True (generic) |
     False (specific) | a generic rewording}. Fail-safe: a text left out (no model, a timeout, an
-    unclear answer, a dry run's copy) stays local. One call, counted against the repo's model cap."""
-    if not info or not texts or os.environ.get("KIT_LESSONS_PREVIEW"):
-        return {}
-    try:
-        with lessons.locked(info["slug"] + ".model", wait=0):
-            ok, _ = model_allowed(info)
-            if not ok:
-                return {}
-            runs = lessons.load_repos().get(info["slug"], {}).get("model_runs") or {}
-            lessons.register(info, model_runs={lessons.today(): int(runs.get(lessons.today(), 0)) + 1})
-            listing = "\n".join(f"{n}. {text}" for n, text in enumerate(texts, 1))
-            answer, _ = ask(JUDGE % listing)
-    except Exception:
+    unclear answer) stays local. One call, part of the distill's single counted model run; a dry
+    run's verdicts are saved like its tidy answer and the review reuses them."""
+    if not info or not texts:
         return {}
     out = {}
-    for v in answer.get("verdicts") or []:
-        if not isinstance(v, dict) or not isinstance(v.get("n"), int) or not 1 <= v["n"] <= len(texts):
-            continue
-        text = texts[v["n"] - 1]
-        if v.get("verdict") == "generic":
-            out[text] = True
-        elif v.get("verdict") == "specific":
-            out[text] = usable(v.get("text")) or False
+    try:
+        with lessons.locked(info["slug"] + ".model", wait=0):
+            ok, why = model_allowed(info)
+            saved = today_preview(info)
+            known = {k: v for k, v in (saved.get("verdicts") or {}).items() if k in texts}
+            if known and why in ("", "already ran today"):  # a dry run asked today: reuse, no call
+                if not os.environ.get("KIT_LESSONS_PREVIEW"):
+                    rest = {k: v for k, v in saved.items() if k != "verdicts"}
+                    lessons.register(info, model_preview=rest if "ops" in rest else None)
+                return known
+            if not ok:
+                return {}
+            count_run(info)
+            listing = "\n".join(f"{n}. {text}" for n, text in enumerate(texts, 1))
+            answer, _ = ask(JUDGE % listing)
+            for v in answer.get("verdicts") or []:
+                if not isinstance(v, dict) or not isinstance(v.get("n"), int) or not 1 <= v["n"] <= len(texts):
+                    continue
+                text = texts[v["n"] - 1]
+                if v.get("verdict") == "generic":
+                    out[text] = True
+                elif v.get("verdict") == "specific":
+                    out[text] = (usable(v["text"]) if isinstance(v.get("text"), str) else None) or False
+            if os.environ.get("KIT_LESSONS_PREVIEW"):  # lessons.preview keeps them for the real review
+                lessons.register(info, model_preview=dict(today_preview(info), date=lessons.today(), verdicts=out))
+    except Exception:
+        return {}
     return out
 
 
@@ -388,8 +415,8 @@ def model_pass(info):
 
 def model_pass_locked(info):
     ok, why = model_allowed(info)
-    saved = lessons.load_repos().get(info["slug"], {}).get("model_preview") or {}
-    if saved.get("date") == lessons.today() and why in ("", "already ran today"):
+    saved = today_preview(info)
+    if "ops" in saved and why in ("", "already ran today"):
         # a dry run asked today (that was the day's run): apply its answer, no second call
         if not os.environ.get("KIT_LESSONS_PREVIEW"):
             lessons.register(info, model_preview=None)
@@ -400,14 +427,13 @@ def model_pass_locked(info):
         ok, why = False, "fewer than 3 lessons"
     if not ok:
         return [], f"model pass skipped ({why})"
-    runs = lessons.load_repos().get(info["slug"], {}).get("model_runs") or {}
-    lessons.register(info, model_runs={lessons.today(): int(runs.get(lessons.today(), 0)) + 1})
+    count_run(info)
     try:
         ops, cost = ask_model(rows)
     except Exception as exc:
         return [], f"model pass failed ({type(exc).__name__}); nothing changed"
     if os.environ.get("KIT_LESSONS_PREVIEW"):  # lessons.preview keeps it for the real review
-        lessons.register(info, model_preview={"date": lessons.today(), "ops": ops})
+        lessons.register(info, model_preview=dict(today_preview(info), date=lessons.today(), ops=ops))
     lines = apply_model_ops(info["slug"], ops)
     return lines, f"model pass: {len(lines)} change(s), ${cost:.4f}"
 
@@ -420,6 +446,7 @@ def distill(cwd, model=True):
     if not info:
         return [], "not a git checkout the kit keys a ledger to"
     slug = info["slug"]
+    COUNTED.discard((slug, lessons.today()))
     lines = merge_pass(slug) + retire_pass(slug) + harden_pass(slug)
     import promote  # lessons held by several repos move up a layer
     lines += retire_pass(lessons.MACHINE) + harden_pass(lessons.MACHINE) + promote.scan(info if model else None)

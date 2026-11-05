@@ -321,6 +321,8 @@ def test_judge():
     os.environ.update(env)
     try:
         promote.scan(info)
+        runs = lessons.load_repos()[info["slug"]]["model_runs"][lessons.today()]
+        assert runs == 1 and distill.model_allowed(info)[0], "the judge and the tidy pass share one counted run"
     finally:
         for key in env:
             os.environ.pop(key, None)

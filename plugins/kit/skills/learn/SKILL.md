@@ -22,8 +22,9 @@ expanded, the script is in the kit plugin's `hooks/scripts/`).
   what changed and how to undo it). It drops ledgers of test and scratchpad repos, retires lessons
   neither seen nor delivered for 90 days, merges duplicates, retires lessons whose fix shipped,
   proposes retiring stale ones and writes hardening proposals; with a model allowed it also rewords
-  unclear lessons (one haiku call, at most $0.05, once a day per repo). `--no-model` skips the
-  model; `--dry-run` changes nothing and previews all of it on a copy (rewords only with a model).
+  unclear lessons and judges whether a lesson held by 2 repos is generic enough for all (haiku, at
+  most $0.05 a call, one run a day per repo). `--no-model` skips the model, and a lesson waiting
+  for the judge stays local; `--dry-run` changes nothing and previews all of it on a copy.
   The session-start hook says once per 14 days that a review is due; declining waits for the next.
   Then take this session's corrections and repeated failures, if any, through the section below.
 - **undo <id>**: `$L undo <id> .`, then say what came back. On a proposal (to retire, or to

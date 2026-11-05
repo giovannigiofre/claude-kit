@@ -1,10 +1,10 @@
 # /kit:learn promote: a lesson from several repos becomes a kit change
 
 A kit candidate is a machine lesson (held by 2+ real repos) the distiller found in 3 or more repos,
-about the kit itself, or recorded as a kit defect, that the structural check and the model's genericity judge passed.
-Promoting it means a PR on the kit's own repo, which the user reviews and merges. This runs only here, in a
-session the user started the command in; no hook does it. `L` is the same `lessons.py` as in
-SKILL.md.
+about the kit itself, or recorded as a kit defect, that the structural check and the model's
+genericity judge passed. Promoting it means a PR on the kit's own repo, which the user reviews and
+merges. This runs only here, in a session the user started the command in; no hook does it. `L` is
+the same `lessons.py` as in SKILL.md.
 
 1. **Brief.** `$L promote <id> .` prints the lesson, why it qualifies, the kit checkout and the
    branch name, or why it cannot be promoted (stop there and say so). Without an id it lists the

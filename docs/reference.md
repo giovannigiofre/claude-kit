@@ -334,10 +334,10 @@ smallest generic change, a regression test or eval that fails without it, the bu
 `lessons.py scrub` on the diff (no repo names, orgs, paths, env var names from the ledgers, or
 secrets). It opens the PR in that session and never merges it. `lessons.py promoted <id> <version>
 <url>` then makes the lesson retire itself once the PR is merged (checked with `gh`) and that kit
-version is installed. The judge is one haiku call per batch, counted against the repo's daily model
-cap; with no model (`--no-model`, headless, turned off), a timeout or an unclear answer the lesson
-stays local and is asked about on a later run. It may give a generic rewording, promoted only when
-that passes the structural check too.
+version is installed. The judge is one haiku call per batch, part of the distill's one counted
+model run for the day (with the reword call); with no model (`--no-model`, headless, turned off), a
+timeout or an unclear answer the lesson stays local and is asked about on a later run. It may give
+a generic rewording, promoted only when that passes the structural check too.
 
 **Upkeep**: from 14 days after the last review (the first session starts the clock) the session
 start adds one line, "the lesson review is due", at most once per 14 days (a declined review comes
@@ -348,8 +348,8 @@ answer; `--no-model` says rewords are skipped), then, once the user agrees, `les
 drops the ledgers of test and scratchpad repos and retires the machine lessons only they held
 (`prune`), retires lessons neither seen nor delivered for 90 days, then runs the distiller. Every
 retire can be undone; a dropped ledger cannot. The dry run writes only metadata to `_repos.json`
-(`model_runs`, and `model_preview`, the answer the review applies), never a lesson; it does not ask
-the judge, so a promotion it lists waits for the review.
+(`model_runs`, and `model_preview`, the answers the review applies), never a lesson; its judge
+verdicts are kept the same way, so the review promotes what it listed.
 
 ```bash
 python3 <kit>/hooks/scripts/lessons.py list [--all] [DIR]

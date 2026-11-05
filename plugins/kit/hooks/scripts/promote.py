@@ -118,7 +118,8 @@ def scan_locked(info=None):
             lines += attach(c["m"]["id"], c["members"])
         elif not c["m"] and len({slug for slug, _ in c["members"]}) >= MACHINE_AT:
             best = max((r for _, r in c["members"]), key=lessons.rank)
-            if not specific(best.get("text")) and (best.get("judged") or {}).get("text") != best.get("text"):
+            judged = {(r.get("judged") or {}).get("text") for _, r in c["members"]}
+            if not specific(best.get("text")) and best.get("text") not in judged:
                 ask.append((best, c["members"]))  # a text the judge already found specific is not asked again
     verdicts = distill.judge(info, [best["text"] for best, _ in ask]) if ask else {}
     for best, members in ask:
@@ -130,7 +131,7 @@ def scan_locked(info=None):
         if verdict is False or (isinstance(verdict, str) and not wording):
             mark_judged(best["text"], members)
             continue
-        lines += create(members, wording if isinstance(wording, str) else None)
+        lines += create(members, wording)
     return lines + mark_candidates()
 
 
@@ -141,7 +142,7 @@ def mark_judged(text, members):
         with lessons.change(slug, log=False) as state:
             for r in state["rows"]:
                 if r.get("id") in ids:
-                    r["judged"] = {"date": lessons.today(), "text": text, "generic": False}
+                    r["judged"] = {"date": lessons.today(), "text": text}
 
 
 def create(members, wording=None):
