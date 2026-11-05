@@ -34,11 +34,13 @@ picks active lessons for that agent, most repeated and newest first, within the 
   python3 lessons.py promoted ID VERSION URL [DIR]  the PR is open; ID retires at kit VERSION
   python3 lessons.py scrub [FILE|-]            check text bound for the kit for this machine's repos
   python3 lessons.py prune [--dry-run]         drop the ledgers of test and scratchpad repos
-  python3 lessons.py review [--dry-run] [DIR]  the upkeep: prune, distill, retire lessons idle for IDLE_DAYS
+  python3 lessons.py review [--dry-run] [--no-model] [DIR]  the upkeep: prune, retire lessons idle
+                                               for IDLE_DAYS, distill; a dry run previews it on a copy
 
 Repos under a temp folder (tests, scratchpad probes; KIT_TEMP_ROOTS overrides the list) get no
-ledger, unless the config dir is a temp folder too (a test's own sandbox). SessionStart says once
-when the review is due (REVIEW_DAYS after the last one).
+ledger, unless the config dir is a temp folder too (a test's own sandbox). SessionStart says it
+once per REVIEW_DAYS while the review is due; a declined review comes back a period later.
+KIT_LESSONS_DIR points the ledgers elsewhere (the review's dry run uses a copy).
 Standard library only.
 """
 
@@ -48,6 +50,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -94,7 +98,7 @@ def days_between(a, b):
 
 
 def base():
-    return kitlib.config_dir() / "kit-lessons"
+    return Path(os.environ.get("KIT_LESSONS_DIR") or kitlib.config_dir() / "kit-lessons")
 
 
 def file_of(slug, part=""):
@@ -115,7 +119,7 @@ def is_temp(path):
 
 def ignored(path):
     """A test or scratchpad repo writing to a real ledger: no lessons from it, none for it."""
-    return is_temp(path) and not is_temp(base())
+    return is_temp(path) and not is_temp(kitlib.config_dir())
 
 
 def repo(cwd):
@@ -688,7 +692,8 @@ def idle(slug, dry_run=True):
 def review(cwd, dry_run=True, model=True):
     """The periodic upkeep: drop test and scratchpad noise, retire idle lessons, then the
     distiller (merge duplicates, reword unclear ones with the model when allowed, propose
-    stale ones, promote). Stamps the review time; a dry run changes nothing."""
+    stale ones, promote). Stamps the review time; a dry run changes nothing and previews the
+    distiller on a copy of the ledgers."""
     info = repo(cwd)
     if not info:
         return ["not a git checkout the kit keys a ledger to"]
@@ -696,18 +701,52 @@ def review(cwd, dry_run=True, model=True):
     for slug in (info["slug"], MACHINE):
         lines += idle(slug, dry_run)
     if dry_run:
-        return lines
+        return lines + preview(cwd, model)
     import distill
     more, status = distill.distill(cwd, model)
     register(info, reviewed_ts=time.time())
     return lines + more + [f"reviewed: {len(lines) + len(more)} change(s); {status}"]
 
 
+PREVIEW = """import sys; sys.path.insert(0, sys.argv[1]); import distill, lessons
+info = lessons.repo(sys.argv[2]); lessons.prune(False)
+for s in (info["slug"], lessons.MACHINE): lessons.idle(s, False)
+more, status = distill.distill(sys.argv[2], sys.argv[3] == "1"); print("\\n".join(more + [status]))"""
+
+
+def preview(cwd, model):
+    """What the distiller would merge, reword, retire and promote after this review: the whole
+    review run on a throwaway copy of the ledgers. With the model allowed, its one call counts for
+    the day and its answer is kept, so the review that follows applies the rewords shown here."""
+    copy = Path(tempfile.mkdtemp(prefix="kit-review-"))
+    try:
+        shutil.copytree(base(), copy / "kit-lessons", ignore=shutil.ignore_patterns("*.lock"))
+        out = subprocess.run([sys.executable, "-c", PREVIEW, str(Path(__file__).resolve().parent), str(cwd),
+                              "1" if model else "0"], capture_output=True, text=True, timeout=600,
+                             env=dict(os.environ, KIT_LESSONS_DIR=str(copy / "kit-lessons"), KIT_LESSONS_PREVIEW="1"))
+        repos_file, info = copy / "kit-lessons" / "_repos.json", repo(cwd)
+        seen = json.loads(repos_file.read_text(encoding="utf-8")) if repos_file.exists() else {}
+        asked = {k: v for k, v in (seen.get(info["slug"]) or {}).items() if k in ("model_runs", "model_preview")}
+        if model and asked:  # the call counts against the daily cap, and the review applies its answer
+            register(info, **asked)
+        found = out.stdout.strip().splitlines()
+        if out.returncode or not found:
+            return [f"the distiller preview failed: {(out.stderr.strip().splitlines() or ['no output'])[-1]}"]
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        return [f"the distiller preview failed: {exc}"]
+    finally:
+        shutil.rmtree(copy, ignore_errors=True)
+    status = found.pop()
+    lines = [f"would: {re.sub(r' · undo: .*$', '', x)}" for x in found] or ["the distiller would change nothing"]
+    return lines + ["rewords skipped (--no-model)" if not model else f"model pass: {status}"]
+
+
 def review_due(cwd):
-    """One line for SessionStart while this repo's review is REVIEW_DAYS old or more, else "".
-    The first session only starts the clock."""
+    """One line for SessionStart when this repo's review is REVIEW_DAYS old or more, at most once
+    per REVIEW_DAYS (a declined review is snoozed for a period), else "". The first session only
+    starts the clock."""
     info = repo(cwd)
-    if not info:
+    if not info or headless():  # a notice nobody reads must not use up the period
         return ""
     entry = load_repos().get(info["slug"]) or {}
     last = entry.get("reviewed_ts")
@@ -715,8 +754,10 @@ def review_due(cwd):
         register(info, reviewed_ts=time.time())
         return ""
     days = int((time.time() - float(last)) // 86400)
-    if days < REVIEW_DAYS or not live_count(info["slug"]):
+    told = int((time.time() - float(entry.get("review_announced_ts") or 0)) // 86400)
+    if min(days, told) < REVIEW_DAYS or not live_count(info["slug"]):
         return ""
+    register(info, review_announced_ts=time.time())
     return f"kit: the lesson review for this repo is due ({days} days since the last); suggest /kit:learn to the user once."
 
 
