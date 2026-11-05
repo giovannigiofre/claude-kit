@@ -3,12 +3,14 @@
 
 - **Machine.** The same lesson (same key, or the distiller's word match) active in 2 real repo
   ledgers (test and scratchpad repos never count), worded so it holds anywhere (`specific`: no
-  repo name, org, checkout path, file path or env var one of this machine's repos uses), becomes
+  repo name, org, checkout path, file name or path, env var, or a capitalised name that neither
+  the kit's docs nor a second repo's ledger uses), becomes
   one machine lesson (`_machine.jsonl`, ids M1, M2, ...) that every repo gets; the repo
   records turn `promoted` and point at it. Undoing the machine lesson gives them back and stops
   them from being promoted again.
-- **Kit candidate.** A machine lesson seen in 3 or more repos or about the kit itself, and any
-  `kit-defect` lesson, that passes the same wording check, is marked a promotion candidate and announced. Nothing else happens: a
+- **Kit candidate.** A machine lesson (so 2+ real repos) seen in 3 or more repos, about the kit
+  itself or of kind `kit-defect`, that passes the same wording check, is marked a promotion
+  candidate and announced. Nothing else happens: a
   claude-kit branch and PR are prepared only by `/kit:learn promote <id>`, run by the user in a
   session (`brief` refuses in a headless run), and the PR is never merged by Claude.
 - **Version-bound.** A lesson whose fix shipped (`fixed_in`, set by `lessons.py promoted`) retires
@@ -23,6 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -39,6 +42,13 @@ GENERIC = set("app api web src lib docs doc hooks scripts tests test main site s
 # a relative file path: a slashed word ending in an extension, or with two slashes ("and/or" is not one)
 FILE_PATH = re.compile(r"(?<![\w:/.])[\w.-]+/(?:[\w.*-]+/)*[\w*-]*\.\w+|(?<![\w:/.])[\w.-]+/[\w.*-]+/[\w.*-]+")
 KIT_ROOT = Path(__file__).resolve().parents[4]
+CODE_EXT = ("sh|bash|zsh|py|js|ts|tsx|jsx|mjs|cjs|json|jsonl|yaml|yml|toml|md|txt|csv|sql|lock|cfg|ini|"
+            "env|go|rs|rb|java|kt|swift|php|cs|html|css|xml|tf|gradle|pdf|png")
+FILE_NAME = re.compile(rf"(?<![\w/.-])[\w-]+(?:\.[\w-]+)*\.(?:{CODE_EXT})\b")
+ONE_SLASH = re.compile(r"(?<![\w:/.@-])[\w.-]+/[\w.-]+(?![\w/])")
+WORD_PAIRS = set("and/or pass/fail read/write ci/cd i/o input/output yes/no on/off true/false "
+                 "client/server start/stop either/or he/she his/her n/a".split())
+NAME = re.compile(r"(?<![\w./-])[A-Z][A-Za-z0-9]*[A-Z0-9][A-Za-z0-9]*\b|(?<![\w./-])[A-Z][a-z]{2,}\b")
 
 
 def repo_slugs():
@@ -47,13 +57,51 @@ def repo_slugs():
 
 
 def specific(text):
-    """Why `text` holds only in one project (a repo's name, org, path, env var, or a file path
-    that is not the kit's own), or None when it reads the same in any repo. A lesson that is not
-    generic stays in its repo."""
-    def kit_file(m):
-        return any((d / m).exists() for d in (KIT_ROOT, KIT_ROOT / "plugins" / "kit"))
-    hits = scrub(text) + [f"a file path ({m})" for m in FILE_PATH.findall(text or "") if not kit_file(m)]
+    """Why `text` holds only in one project, or None when it reads the same in any repo: a repo's
+    name, org or path (scrub), a file path or file name, a one-slash path, an env var, or a
+    capitalised name (ACME, Zorbix) that the kit's own docs do not use and fewer than 2 real repos'
+    ledgers mention. A lesson that is not generic stays in its repo."""
+    text = text or ""
+    words, names = corpus()
+
+    def known(m):
+        return m.lower() in words or any((d / m).exists() for d in (KIT_ROOT, KIT_ROOT / "plugins" / "kit"))
+    hits = scrub(text)
+    hits += [f"a file path ({m})" for m in FILE_PATH.findall(text) if not known(m)]
+    hits += [f"a file name ({m})" for m in FILE_NAME.findall(text) if not known(m)]
+    hits += [f"a path ({m})" for m in ONE_SLASH.findall(text) if m.lower() not in WORD_PAIRS and not known(m)]
+    hits += [f"an env var ({m})" for m in ENV_NAME.findall(text) if not m.startswith(COMMON_ENV) and m not in names]
+    shared = repo_counts(ledger_stamp())
+    hits += [f"a project name ({m})" for m in NAME.findall(text)
+             if (m not in names if m.isupper() else m.lower() not in words) and shared.get(m.lower(), 0) < MACHINE_AT]
     return hits[0] if hits else None
+
+
+@lru_cache(maxsize=1)
+def corpus():
+    """The kit's own docs: their words lowercased (file names and paths too) and their ALLCAPS
+    words as written ("acme" in prose would not make ACME generic)."""
+    text = "\n".join(f.read_text(encoding="utf-8", errors="replace") for f in sorted(KIT_ROOT.rglob("*.md"))
+                     if ".git" not in f.parts and "tests" not in f.parts)
+    tokens = set(re.findall(r"[\w./-]+", text))
+    return {t.strip("./-").lower() for t in tokens} | {t.lower() for t in tokens}, \
+        {t for t in re.findall(r"\b[A-Z][A-Z0-9_]+\b", text)}
+
+
+def ledger_stamp():
+    return tuple((s, *(lambda f: (f.stat().st_mtime_ns, f.stat().st_size) if f.exists() else (0, 0))(
+        lessons.file_of(s))) for s in repo_slugs())
+
+
+@lru_cache(maxsize=4)
+def repo_counts(stamp):
+    """How many real repos' ledgers use each word (lowercased)."""
+    counts = {}
+    for slug, *_ in stamp:
+        seen = {w.lower() for r in lessons.read_rows(lessons.file_of(slug)) for w in re.findall(r"\w+", r.get("text", ""))}
+        for w in seen:
+            counts[w] = counts.get(w, 0) + 1
+    return counts
 
 
 def same(a, b):
@@ -171,13 +219,11 @@ def release(m_id):
 # ---- machine -> kit -------------------------------------------------------------------------
 
 def why_candidate(record, machine):
-    if specific(record.get("text")):
-        return None
-    if record.get("kind") == "kit-defect":
-        return "a kit defect"
-    if not machine:
-        return None
+    if not machine or specific(record.get("text")):
+        return None  # only a machine lesson, held by 2+ real repos, goes to the kit
     n = repos_of(record)
+    if record.get("kind") == "kit-defect":
+        return f"a kit defect, seen in {n} repos"
     if n >= KIT_AT:
         return f"seen in {n} repos"
     if ABOUT_KIT.search(record.get("text", "")) or str(record.get("key", "")).startswith(("kit-", "guard-")):

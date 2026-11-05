@@ -23,7 +23,8 @@ expanded, the script is in the kit plugin's `hooks/scripts/`).
   neither seen nor delivered for 90 days, merges duplicates, retires lessons whose fix shipped,
   proposes retiring stale ones and writes hardening proposals; with a model allowed it also rewords
   unclear lessons (one haiku call, at most $0.05, once a day per repo). `--no-model` skips the
-  model, `--dry-run` only lists. The session-start hook says when a review is due (every 14 days).
+  model; `--dry-run` changes nothing and previews all of it on a copy (rewords only with a model).
+  The session-start hook says once per 14 days that a review is due; declining waits for the next.
   Then take this session's corrections and repeated failures, if any, through the section below.
 - **undo <id>**: `$L undo <id> .`, then say what came back. On a proposal (to retire, or to
   harden) this keeps the lesson as it is, and the distiller does not ask again.

@@ -70,9 +70,8 @@ know". An interim notice (a thread waiting on its own background work) needs no 
     `.claude/lead/reports/<id>.md`.
   - Hours of grinding toward one measurable objective is **overnight**: with the user's OK,
     launch `kit:overnight`'s runner in the background with `--worktree`.
-- **Unclear work:** when different readings lead to materially different work, or there is no
-  checkable done, ask a few multiple-choice questions as `kit:shape` does, or put the question
-  under NEEDS YOU and start the rest.
+- **Unclear work:** when readings lead to different work or there is no checkable done, ask a
+  few multiple-choice questions as `kit:shape` does, or put it under NEEDS YOU and start the rest.
 - **Steering** ("also X", "drop Y", "Z first"): SendMessage to the thread when it fits its brief;
   otherwise stop it (TaskStop), park its branch and requeue.
 - **A decision on a NEEDS YOU item:** apply it and resume the thread.
@@ -92,8 +91,9 @@ the brief carries everything it needs:
 - the goal and why, the DONE WHEN check, the scope and what is out of it, and an `EXPECT: 90m`
   line, how long it should run (the watchdog checks on it past that);
 - the project rules and skills that apply. UI or LLM work whose kit plugin is missing here: offer
-  it first (`kit:extras`), then give the thread the skill file's absolute path. Facts every thread
-  needs go in a gitignored `CLAUDE.local.md` listed in `.worktreeinclude` (`lead.notes` is yours);
+  it first (`kit:extras`), then the skill file's absolute path. Thread facts go in a gitignored
+  `CLAUDE.local.md` listed in `.worktreeinclude` (first line `@AGENTS.md` if the repo has only
+  AGENTS.md, which it would hide); `lead.notes` is yours only;
 - the ship mode: `local` commits on its branch; `pr` also pushes and opens a PR with Intent,
   Evidence, Fixed along the way and Risk; `pr+fix` also watches CI and fixes failures.
 

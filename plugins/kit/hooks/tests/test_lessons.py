@@ -367,6 +367,9 @@ def test_upkeep():
         lessons.observe(lessons.MACHINE, "fake-gate", "gate", "the fake gate failed", "gate", extra={"from": ["scratch-old-1:L1"]})
         assert promote.specific("keep old builds") is None, "a scratchpad repo's name is not a project term"
         assert promote.specific("check pass/fail and/or CI/CD output") is None, "a slashed word is not a file path"
+        for text in ("The ACME integration suites need run.sh --migrate acme",
+                     "Zorbix 7 breaks ts-jest of src/generated", "ACME_DB_URL must be set"):
+            assert promote.specific(text), f"a project-specific lesson stays in its repo: {text}"
         dry = lessons.prune(dry_run=True)
         assert any("would drop the ledger of scratch-old-1" in x for x in dry) and any("would retire M" in x for x in dry), dry
         assert lessons.file_of("scratch-old-1").exists(), "a dry run changes nothing"
@@ -390,6 +393,15 @@ def test_upkeep():
         assert lessons.review_due(a) == "", "the first session starts the clock"
         lessons.register(lessons.repo(a), reviewed_ts=time.time() - (lessons.REVIEW_DAYS + 1) * 86400)
         assert "lesson review for this repo is due" in lessons.review_due(a)
+        assert lessons.review_due(a) == "", "the due line shows once per period; a declined review snoozes"
+        slug = lessons.repo(a)["slug"]
+        for key, text in (("t1", "run the integration tests with a fresh database before pushing"),
+                          ("t2", "run integration tests with a fresh database before you push")):
+            lessons.observe(slug, key, "recipe", text, "user", activate_at=1)
+        before = lessons.file_of(slug).read_bytes()
+        dry = lessons.review(a, dry_run=True, model=False)
+        assert any(x.startswith("would: merged") for x in dry) and "rewords skipped (--no-model)" in dry, dry
+        assert lessons.file_of(slug).read_bytes() == before, "the preview runs on a copy"
         lessons.main(["review", "--no-model", str(a)])
         assert lessons.review_due(a) == "", "a review resets the clock"
     finally:

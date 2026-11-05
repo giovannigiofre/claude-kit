@@ -86,7 +86,7 @@ Safety per project (`/kit-safety`): **Host** or **Sandbox**.
    SessionStart          lists the project's gates; after a compaction, re-injects the board
                          (rows first, warns past 60 lines or 8 KB); says once when a newer kit
                          is installed than the one loaded (restart), and when the lesson review
-                         is due (every 14 days)
+                         is due (at most once per 14 days; declining snoozes it)
    SubagentStart         gives each kit:implementer and kit:verifier this repo's gate command and
                          lessons from the ledger, most repeated and newest first (about 600
                          tokens max); the hook sees only the session's repo, so it names it,
@@ -174,7 +174,8 @@ it, commit it. The hooks do nothing in a project without it, so a user-scope ins
 changes a project you haven't opted in. Details of every key: [docs/reference.md](docs/reference.md).
 Facts every thread needs (how to set up a worktree, the integration-test command) go in a
 gitignored `CLAUDE.local.md`: threads load it like CLAUDE.md, while kit.json `lead.notes` reaches
-only the coordinator. List the gitignored files a fresh worktree needs (`.env`, `CLAUDE.local.md`,
+only the coordinator. In a repo with AGENTS.md and no CLAUDE.md, start it with `@AGENTS.md`: a
+CLAUDE.local.md otherwise stops Claude Code reading AGENTS.md. List the gitignored files a fresh worktree needs (`.env`, `CLAUDE.local.md`,
 `.claude/kit.json` when it is not committed) in `.worktreeinclude` (gitignore syntax); Claude Code
 copies them into every worktree it creates, a manual `git worktree add` excepted.
 
