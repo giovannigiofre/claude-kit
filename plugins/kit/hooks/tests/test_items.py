@@ -108,8 +108,13 @@ def main():
         check(out.startswith("login-page | review |") and "login-page-2" not in out, out)
         code, out, _ = run(repo, "show", "login-page")
         check("===== BRIEF.md" in out and "===== VERDICT.md" in out and "===== LOG.md" in out, "show prints the files")
+        lead = repo / ".claude" / "lead"
+        (lead / "board.md").write_text("SHIP: pr\nlogin-page | ship | login | DONE WHEN e2e | review | -\n"
+                                       "login-page-2 | ship | footer | DONE WHEN e2e | queued | -\n")
         code, out, _ = run(repo, "done", "login-page")
         check(code == 0 and not folder.exists() and (folder.parent / "done" / "login-page" / "LOG.md").exists(), "done archives")
+        check("login-page |" not in (lead / "board.md").read_text() and "login-page-2 |" in (lead / "board.md").read_text()
+              and (lead / "archive.md").read_text().startswith("login-page | ship | login"), "done moves the board row")
         check(items.find(repo, "login-page") is not None, "an archived item is still found")
         code, out, err = run(repo, "path", "nope")
         check(code == 1 and "no item" in err, "a missing item is an error")

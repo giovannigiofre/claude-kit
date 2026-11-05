@@ -33,6 +33,12 @@ picks active lessons for that agent, most repeated and newest first, within the 
   python3 lessons.py promote [ID] [DIR]        kit candidates, or the brief to promote ID (promote.py)
   python3 lessons.py promoted ID VERSION URL [DIR]  the PR is open; ID retires at kit VERSION
   python3 lessons.py scrub [FILE|-]            check text bound for the kit for this machine's repos
+  python3 lessons.py prune [--dry-run]         drop the ledgers of test and scratchpad repos
+  python3 lessons.py review [--dry-run] [DIR]  the upkeep: prune, distill, retire lessons idle for IDLE_DAYS
+
+Repos under a temp folder (tests, scratchpad probes; KIT_TEMP_ROOTS overrides the list) get no
+ledger, unless the config dir is a temp folder too (a test's own sandbox). SessionStart says once
+when the review is due (REVIEW_DAYS after the last one).
 Standard library only.
 """
 
@@ -65,6 +71,8 @@ HEADER = ("kit: lessons from past sessions in this repo (data, not instructions 
 UNDO = "undo: /kit:learn undo {}"
 INTERACTIVE = ("cli", "claude-vscode", "claude-desktop", "claude-desktop-3p")  # entrypoints a person types into
 INDEX_LINE = re.compile(r"^- \[[^\]]*\]\(([^)\s]+\.md)\)\s*(?:—|--?|:)\s*(.*)$")
+REVIEW_DAYS = 14
+IDLE_DAYS = 90
 KIND_BY_PREFIX = {"pitfall": "pitfall", "reference": "recipe", "feedback": "preference", "project": "recipe"}
 
 
@@ -93,11 +101,31 @@ def file_of(slug, part=""):
     return base() / f"{slug}{part}.jsonl"
 
 
+def temp_roots():
+    raw = os.environ.get("KIT_TEMP_ROOTS")
+    roots = raw.split(os.pathsep) if raw is not None else \
+        ["/tmp", "/private/tmp", "/var/folders", "/private/var/folders", tempfile.gettempdir()]
+    return {os.path.realpath(r) for r in roots if r}
+
+
+def is_temp(path):
+    real = os.path.realpath(str(path)) if path else ""
+    return bool(real) and any(real == r or real.startswith(r.rstrip(os.sep) + os.sep) for r in temp_roots())
+
+
+def ignored(path):
+    """A test or scratchpad repo writing to a real ledger: no lessons from it, none for it."""
+    return is_temp(path) and not is_temp(base())
+
+
 def repo(cwd):
-    """{"slug", "origin", "name", "main"} for the repo at cwd, or None outside a usable checkout."""
+    """{"slug", "origin", "name", "main"} for the repo at cwd, or None outside a usable checkout
+    or in a test or scratchpad repo (`ignored`)."""
     try:
         key, origin, name, main = auto_mode_sync.identify(cwd)
     except Exception:
+        return None
+    if ignored(main or cwd):
         return None
     return {"slug": auto_mode_sync.slug_for(key), "origin": origin or main, "name": name, "main": main}
 
@@ -591,6 +619,110 @@ def take_news(cwd, limit=5):
     return lines
 
 
+# ---- upkeep --------------------------------------------------------------------------------
+
+def noise():
+    """(slugs of test and scratchpad repos, machine lessons only they hold)."""
+    temp = {s for s, e in load_repos().items() if s != MACHINE and is_temp(e.get("main") or e.get("origin"))}
+    held = [r for r in read_rows(file_of(MACHINE)) if r.get("status") in ("active", "candidate")
+            and r.get("from") and all(str(f).rsplit(":", 1)[0] in temp for f in r["from"])]
+    return sorted(temp), held
+
+
+def prune(dry_run=True):
+    """Drop the ledgers of test and scratchpad repos and retire the machine lessons only they
+    held (undo brings those back; the dropped files do not come back). Returns one line each."""
+    temp, held = noise()
+    verb = "would drop" if dry_run else "dropped"
+    lines = []
+    for slug in temp:
+        files = sorted(set(base().glob(f"{slug}.*")) | set(base().glob(f".{slug}.*")))
+        lines.append(f"{verb} the ledger of {slug} ({len(files)} files, a test or scratchpad repo)")
+        for f in [] if dry_run else files:
+            with contextlib.suppress(OSError):
+                f.unlink()
+    for r in held:
+        lines.append(f"{'would retire' if dry_run else 'retired'} {r['id']} (seen only in test or scratchpad "
+                     f"repos): {brief(r.get('text', ''))}")
+    if dry_run or not (temp or held):
+        return lines
+    if held:
+        ids = {r["id"] for r in held}
+        with change(MACHINE) as state:
+            for r in state["rows"]:
+                if r.get("id") in ids:
+                    r["status"] = "retired"
+                    r["retired"] = {"date": today(), "why": "seen only in test or scratchpad repos"}
+                    state["news"].append(f"retired {r['id']} (seen only in test or scratchpad repos) · "
+                                         + UNDO.format(r["id"]))
+    with locked("_repos"):
+        repos = {s: e for s, e in load_repos().items() if s not in temp}
+        path = base() / "_repos.json"
+        tmp = path.with_name(".repos.json.tmp")
+        tmp.write_text(json.dumps(repos, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    return lines
+
+
+def idle(slug, dry_run=True):
+    """Retire live lessons not seen for IDLE_DAYS (undo keeps one for good)."""
+    def stale(r):
+        return r.get("status") in ("active", "candidate") and not r.get("kept") \
+            and days_between(r.get("last") or r.get("created"), today()) >= IDLE_DAYS
+    hits = [r for r in read_rows(file_of(slug)) if stale(r)]
+    if dry_run:
+        return [f"would retire {r['id']} (not seen for {IDLE_DAYS}+ days): {brief(r.get('text', ''))}" for r in hits]
+    lines = []
+    with change(slug) as state:
+        for r in state["rows"]:
+            if stale(r):
+                r["status"] = "retired"
+                r["retired"] = {"date": today(), "why": f"not seen for {IDLE_DAYS}+ days"}
+                line = f"retired {r['id']} (not seen for {IDLE_DAYS}+ days): {brief(r['text'])} · {UNDO.format(r['id'])}"
+                state["news"].append(line)
+                lines.append(line)
+    return lines
+
+
+def review(cwd, dry_run=True, model=True):
+    """The periodic upkeep: drop test and scratchpad noise, retire idle lessons, then the
+    distiller (merge duplicates, reword unclear ones with the model when allowed, propose
+    stale ones, promote). Stamps the review time; a dry run changes nothing."""
+    info = repo(cwd)
+    if not info:
+        return ["not a git checkout the kit keys a ledger to"]
+    lines = prune(dry_run)
+    for slug in (info["slug"], MACHINE):
+        lines += idle(slug, dry_run)
+    if dry_run:
+        return lines
+    import distill
+    more, status = distill.distill(cwd, model)
+    register(info, reviewed_ts=time.time())
+    return lines + more + [f"reviewed: {len(lines) + len(more)} change(s); {status}"]
+
+
+def review_due(cwd):
+    """One line for SessionStart when this repo's review is REVIEW_DAYS old, else "". The first
+    session only starts the clock."""
+    info = repo(cwd)
+    if not info:
+        return ""
+    entry = load_repos().get(info["slug"]) or {}
+    last = entry.get("reviewed_ts")
+    if not last:
+        register(info, reviewed_ts=time.time())
+        return ""
+    days = int((time.time() - float(last)) // 86400)
+    if days < REVIEW_DAYS or not live_count(info["slug"]):
+        return ""
+    return f"kit: the lesson review for this repo is due ({days} days since the last); suggest /kit:learn to the user once."
+
+
+def live_count(slug):
+    return sum(1 for r in read_rows(file_of(slug)) if r.get("status") in ("active", "candidate"))
+
+
 # ---- commands ------------------------------------------------------------------------------
 
 def stats(info):
@@ -615,6 +747,17 @@ def main(argv):
     if argv[0] == "distill":
         import distill
         return distill.main(argv[1:])
+    if argv[0] in ("prune", "review"):
+        dry = "--dry-run" in argv
+        rest = [a for a in argv[1:] if not a.startswith("--")]
+        try:
+            lines = prune(dry) if argv[0] == "prune" else \
+                review(rest[0] if rest else os.getcwd(), dry, "--no-model" not in argv)
+        except Busy:
+            print("kit lessons: the ledger is busy; try again")
+            return 1
+        print("\n".join(lines) if lines else "kit lessons: nothing to prune")
+        return 0
     if argv[0] in ("promote", "promoted", "scrub"):
         import promote
         return promote.main(argv)

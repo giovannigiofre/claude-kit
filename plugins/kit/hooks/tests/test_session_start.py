@@ -40,6 +40,12 @@ def main():
         assert run({"cwd": str(repo), "source": "startup"}) == "", "the board comes back only after a compaction"
         out = run({"cwd": str(repo), "source": "compact"})
         assert "just compacted" in out and "A1 | ship | login" in out, out
+        rows = "".join(f"B{i} | ship | goal {i} | DONE WHEN ok | done | - | - | -\n" for i in range(70))
+        (repo / ".claude" / "lead" / "board.md").write_text("SHIP: pr\nRULES: " + "x; " * 3000 + "\n" + board + rows)
+        out = run({"cwd": str(repo), "source": "compact"})
+        assert "A1 | ship | login" in out and "B69 | ship" in out and "(cut: RULES" in out, "rows come back, RULES is cut"
+        assert "over its 60-line" in out, "an oversized board is flagged"
+        (repo / ".claude" / "lead" / "board.md").write_text(board)
 
         (repo / ".claude" / "kit.json").write_text(json.dumps({
             "check": "make lint", "verify": "make test",

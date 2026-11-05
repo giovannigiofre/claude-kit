@@ -2,7 +2,8 @@
 """SessionStart: tell Claude which kit gates this project has, make the user the git author when
 kit.json names them, offer the kit's machine settings once, re-apply the user's approved
 per-repo auto mode lines to user settings, import new memories into the kit's lesson ledger and
-hand the main session its lessons and the news of what the kit changed in them (lessons.py), and
+hand the main session its lessons, the news of what the kit changed in them and, every
+lessons.REVIEW_DAYS, a line that the lesson review is due (lessons.py), and
 after a compaction put the coordinator's board back into context (stdout is added to context)."""
 
 import json
@@ -18,10 +19,12 @@ import machine_setup  # noqa: E402
 BOARD = ".claude/lead/board.md"
 SESSION_LESSONS = 1600  # about 400 tokens of the ledger's lessons for the main session
 MAX_BOARD_CHARS = 6000
+BOARD_LINES, BOARD_BYTES = 60, 8000  # the board's contract (kit:lead)
 
 
 def print_board(root, config):
-    """After a compaction, the board is the coordinator's memory of every thread it started."""
+    """After a compaction, the board is the coordinator's memory of every thread it started. The
+    items come back whole: NEEDS YOU and the rows first, RULES last and cut first."""
     lead = (config or {}).get("lead") if isinstance(config, dict) else None
     rel = lead.get("board") if isinstance(lead, dict) and isinstance(lead.get("board"), str) else BOARD
     path = Path(rel) if Path(rel).is_absolute() else Path(root) / rel
@@ -29,9 +32,25 @@ def print_board(root, config):
         text = path.read_text(encoding="utf-8").strip()
     except Exception:
         return
-    if text:
-        print(f"kit: the conversation was just compacted. The coordinator's board ({rel}):\n"
-              + text[:MAX_BOARD_CHARS] + "\n")
+    if not text:
+        return
+    lines = text.splitlines()
+    rules = [ln for ln in lines if ln.startswith("RULES:")]
+    first = [ln for ln in lines if ln.startswith(("SHIP:", "NEEDS YOU:"))]
+    rest = [ln for ln in lines if ln not in rules and ln not in first]
+    body = "\n".join(first + rest)[:MAX_BOARD_CHARS]
+    room = MAX_BOARD_CHARS - len(body) - 1
+    for ln in rules:
+        if room > 40:
+            cut = ln if len(ln) <= room else ln[:room - 40] + " ... (cut: RULES over the board budget)"
+            body += "\n" + cut
+            room -= len(cut) + 1
+    print(f"kit: the conversation was just compacted. The coordinator's board ({rel}):\n{body}\n")
+    size = len(text.encode("utf-8"))
+    if len(lines) > BOARD_LINES or size > BOARD_BYTES:
+        print(f"kit: the board is {len(lines)} lines, {size // 1000} KB, over its {BOARD_LINES}-line, "
+              f"{BOARD_BYTES // 1000} KB contract: archive done rows (items.py done <id>), keep RULES to "
+              "standing rules and move dated decisions to .claude/lead/DECISIONS.md.")
 
 
 def ensure_author(root, config):
@@ -158,7 +177,7 @@ def learned(root):
         lessons.LOCK_WAIT = 1.0  # within the hook's timeout, with the gate lines already printed
         lessons.harvest(root)
         news = lessons.take_news(root)
-        block = news_block(news)
+        block = "\n".join(t for t in (news_block(news), lessons.review_due(root)) if t)
         text = lessons.deliver(root, "lead", SESSION_LESSONS - len(block))
     except Exception:
         return []  # lessons are a help, never a reason for a session not to start

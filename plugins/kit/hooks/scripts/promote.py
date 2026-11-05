@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Promotion: lessons that hold in more than one repo move up a layer.
 
-- **Machine.** The same lesson (same key, or the distiller's word match) active in 2 repo ledgers
-  becomes one machine lesson (`_machine.jsonl`, ids M1, M2, ...) that every repo gets; the repo
+- **Machine.** The same lesson (same key, or the distiller's word match) active in 2 real repo
+  ledgers (test and scratchpad repos never count), worded so it holds anywhere (`specific`: no
+  repo name, org, checkout path, file path or env var one of this machine's repos uses), becomes
+  one machine lesson (`_machine.jsonl`, ids M1, M2, ...) that every repo gets; the repo
   records turn `promoted` and point at it. Undoing the machine lesson gives them back and stops
   them from being promoted again.
 - **Kit candidate.** A machine lesson seen in 3 or more repos or about the kit itself, and any
-  `kit-defect` lesson, is marked a promotion candidate and announced. Nothing else happens: a
+  `kit-defect` lesson, that passes the same wording check, is marked a promotion candidate and announced. Nothing else happens: a
   claude-kit branch and PR are prepared only by `/kit:learn promote <id>`, run by the user in a
   session (`brief` refuses in a headless run), and the PR is never merged by Claude.
 - **Version-bound.** A lesson whose fix shipped (`fixed_in`, set by `lessons.py promoted`) retires
@@ -34,10 +36,19 @@ ABOUT_KIT = re.compile(r"\b(claude code|claude-kit|the kit|kit:\w+|/kit:\w+|work
 ENV_NAME = re.compile(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]{2,}\b")
 COMMON_ENV = ("KIT_", "CLAUDE_", "GITHUB_", "NODE_", "NPM_", "PYTHON", "HOME", "PATH")
 GENERIC = set("app api web src lib docs doc hooks scripts tests test main site server client core infra".split())
+FILE_PATH = re.compile(r"(?<![\w:/.])[\w.-]+/[\w.*-]+")
 
 
 def repo_slugs():
-    return sorted(s for s in lessons.load_repos() if s != lessons.MACHINE)
+    return sorted(s for s, e in lessons.load_repos().items()
+                  if s != lessons.MACHINE and not lessons.ignored(e.get("main") or e.get("origin")))
+
+
+def specific(text):
+    """Why `text` holds only in one project (a repo's name, org, path, env var, or a file path),
+    or None when it reads the same in any repo. A lesson that is not generic stays in its repo."""
+    hits = scrub(text) + [f"a file path ({m})" for m in FILE_PATH.findall(text or "")]
+    return hits[0] if hits else None
 
 
 def same(a, b):
@@ -74,7 +85,8 @@ def scan_locked():
     for c in clusters:
         if c["m"] and c["members"]:
             lines += attach(c["m"]["id"], c["members"])
-        elif not c["m"] and len({slug for slug, _ in c["members"]}) >= MACHINE_AT:
+        elif not c["m"] and len({slug for slug, _ in c["members"]}) >= MACHINE_AT \
+                and not specific(max((r for _, r in c["members"]), key=lessons.rank).get("text")):
             lines += create(c["members"])
     return lines + mark_candidates()
 
@@ -154,6 +166,8 @@ def release(m_id):
 # ---- machine -> kit -------------------------------------------------------------------------
 
 def why_candidate(record, machine):
+    if specific(record.get("text")):
+        return None
     if record.get("kind") == "kit-defect":
         return "a kit defect"
     if not machine:
@@ -252,8 +266,9 @@ def denylist():
     kit = set((lessons.kit_origin() or "").lower().split("/"))
     names, paths = set(), {str(Path.home())}
     for slug, entry in lessons.load_repos().items():
-        if slug == lessons.MACHINE or (entry.get("origin") and entry.get("origin") == lessons.kit_origin()):
-            continue
+        if slug == lessons.MACHINE or (entry.get("origin") and entry.get("origin") == lessons.kit_origin()) \
+                or lessons.ignored(entry.get("main") or entry.get("origin")):
+            continue  # a test or scratchpad repo's name ("repo", "probe") is not a project term
         names.add(slug)
         origin = str(entry.get("origin") or "")
         if not origin.startswith("/"):  # a repo without a remote is keyed by its path, listed below

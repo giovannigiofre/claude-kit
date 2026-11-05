@@ -24,7 +24,7 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   "lead": {
     "read": ["docs/backlog.md"],
     "backlog": "docs/backlog.md",
-    "notes": "one line of project-specific advice for the coordinator",
+    "notes": "one line of project-specific advice for the coordinator (threads never see it)",
     "board": ".claude/lead/board.md",
     "ship": "pr",
     "merge": "user",
@@ -285,7 +285,9 @@ and a PASS confirms only the last FAIL on the same branch (with no branch named,
 nothing). Each report counts once, so a verifier resumed with SendMessage records its next round
 too. The same key seen again is counted, not added; a repeat after the lesson was delivered
 counts as a miss. A new automatic lesson starts as a candidate and turns active on its second
-sighting, at most 3 a day per repo. Text that looks like a key or token is refused.
+sighting, at most 3 a day per repo. Text that looks like a key or token is refused. A repo under a
+temp dir (`/tmp`, `/var/folders`, `$TMPDIR`; `KIT_TEMP_ROOTS` overrides the list) gets no ledger:
+tests and scratchpad probes teach nothing. Tests point `CLAUDE_CONFIG_DIR` at a temp dir.
 
 **Import**: at session start the kit imports, once and without touching the files, the
 kit:verifier memory index (`.claude/agent-memory/kit-verifier/MEMORY.md`) and your auto-memory
@@ -319,15 +321,23 @@ interactive one (`cli`, `claude-vscode`, `claude-desktop`, `claude-desktop-3p`),
 `claude -p` or the SDK. Turn it off with `KIT_LEARN_MODEL=0` or `"learn": {"model": false}` in
 kit.json.
 
-**Promotion** (`promote.py`, run by the distiller): a lesson active in 2 repos becomes one machine
-lesson (`M` ids) that every repo gets; the repo copies turn `promoted`, and undoing the machine
+**Promotion** (`promote.py`, run by the distiller): a lesson active in 2 real repos, whose
+wording is generic (no repo name, org, path or env var name from the ledgers, no file path),
+becomes one machine lesson (`M` ids) that every repo gets; the repo copies turn `promoted`, and undoing the machine
 lesson gives them back for good. A machine lesson seen in 3 or more repos or about the kit, and
-any `kit-defect` lesson, becomes a kit candidate, announced once. Only `/kit:learn promote <id>`,
+any `kit-defect` lesson, becomes a kit candidate, announced once, when its wording passes the same
+check; a project-specific lesson stays in its repo's ledger. Only `/kit:learn promote <id>`,
 run in an interactive session, prepares a claude-kit branch: the smallest generic change, a
 regression test or eval that fails without it, the budget test, and `lessons.py scrub` on the
 diff (no repo names, orgs, paths, env var names from the ledgers, or secrets). It opens the PR in
 that session and never merges it. `lessons.py promoted <id> <version> <url>` then makes the lesson
 retire itself once the PR is merged (checked with `gh`) and that kit version is installed.
+
+**Upkeep**: every 14 days (the first session starts the clock) the session start adds one line,
+"the lesson review is due", and `/kit:learn` runs `lessons.py review`: it drops the ledgers of test
+and scratchpad repos and retires the machine lessons only they held (`prune`), retires lessons
+not seen for 90 days, then runs the distiller. `--dry-run` lists what it would do. Every retire
+can be undone; a dropped ledger cannot.
 
 ```bash
 python3 <kit>/hooks/scripts/lessons.py list [--all] [DIR]
@@ -338,6 +348,8 @@ python3 <kit>/hooks/scripts/lessons.py undo L4 [DIR]
 python3 <kit>/hooks/scripts/lessons.py stats [DIR]
 python3 <kit>/hooks/scripts/lessons.py news [DIR]
 python3 <kit>/hooks/scripts/lessons.py distill [--no-model] [DIR]
+python3 <kit>/hooks/scripts/lessons.py review [--dry-run] [--no-model] [DIR]
+python3 <kit>/hooks/scripts/lessons.py prune [--dry-run]
 python3 <kit>/hooks/scripts/lessons.py promote [ID] [DIR]
 python3 <kit>/hooks/scripts/lessons.py promoted ID VERSION PR_URL [DIR]
 git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
