@@ -290,6 +290,9 @@ def test_model_pass():
         assert by_id[ids[0]]["text"].startswith("Retries need") and "ghp_" not in by_id[ids[1]]["text"]
         assert by_id[ids[2]]["status"] == "retired"
         assert "already ran today" in distill.distill(repo)[1], "one model run a day per repo"
+        before = lessons.file_of(slug).read_bytes()
+        assert distill.apply_model_ops(slug, [{"op": "edit", "id": [ids[0]], "text": 5}]) == [] \
+            and lessons.file_of(slug).read_bytes() == before, "a malformed op is ignored, never raised"
     finally:
         for key in env:
             os.environ.pop(key, None)

@@ -373,8 +373,9 @@ def usable(text):
 def apply_model_ops(slug, ops):
     out = []
     for op in ops:
-        if not isinstance(op, dict):
-            continue
+        if not isinstance(op, dict) or not all(op.get(k) is None or isinstance(op[k], str) for k in ("id", "text", "why")) \
+                or not (op.get("ids") is None or isinstance(op["ids"], list) and all(isinstance(i, str) for i in op["ids"])):
+            continue  # a malformed op is ignored: ids, texts and reasons are strings
         with lessons.change(slug) as state:
             by_id = {r.get("id"): r for r in tidy(state["rows"])}
             kind = op.get("op")
