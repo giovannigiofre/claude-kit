@@ -336,6 +336,13 @@ def model_pass(info):
 
 def model_pass_locked(info):
     ok, why = model_allowed(info)
+    saved = lessons.load_repos().get(info["slug"], {}).get("model_preview") or {}
+    if saved.get("date") == lessons.today() and why in ("", "already ran today"):
+        # a dry run asked today (that was the day's run): apply its answer, no second call
+        if not os.environ.get("KIT_LESSONS_PREVIEW"):
+            lessons.register(info, model_preview=None)
+        lines = apply_model_ops(info["slug"], saved.get("ops") or [])
+        return lines, f"model pass: {len(lines)} change(s), the dry run's answer"
     rows = [r for r in lessons.read_rows(lessons.file_of(info["slug"])) if r.get("status") == "active"]
     if ok and len(rows) < 3:
         ok, why = False, "fewer than 3 lessons"
@@ -347,6 +354,8 @@ def model_pass_locked(info):
         ops, cost = ask_model(rows)
     except Exception as exc:
         return [], f"model pass failed ({type(exc).__name__}); nothing changed"
+    if os.environ.get("KIT_LESSONS_PREVIEW"):  # lessons.preview keeps it for the real review
+        lessons.register(info, model_preview={"date": lessons.today(), "ops": ops})
     lines = apply_model_ops(info["slug"], ops)
     return lines, f"model pass: {len(lines)} change(s), ${cost:.4f}"
 

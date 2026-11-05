@@ -716,17 +716,22 @@ more, status = distill.distill(sys.argv[2], sys.argv[3] == "1"); print("\\n".joi
 
 def preview(cwd, model):
     """What the distiller would merge, reword, retire and promote after this review: the whole
-    review run on a throwaway copy of the ledgers (the model asked only when allowed)."""
+    review run on a throwaway copy of the ledgers. With the model allowed, its one call counts for
+    the day and its answer is kept, so the review that follows applies the rewords shown here."""
     copy = Path(tempfile.mkdtemp(prefix="kit-review-"))
     try:
         shutil.copytree(base(), copy / "kit-lessons", ignore=shutil.ignore_patterns("*.lock"))
         out = subprocess.run([sys.executable, "-c", PREVIEW, str(Path(__file__).resolve().parent), str(cwd),
-                              "1" if model else "0"], env=dict(os.environ, KIT_LESSONS_DIR=str(copy / "kit-lessons")),
-                             capture_output=True, text=True, timeout=600)
+                              "1" if model else "0"], capture_output=True, text=True, timeout=600,
+                             env=dict(os.environ, KIT_LESSONS_DIR=str(copy / "kit-lessons"), KIT_LESSONS_PREVIEW="1"))
+        info, seen = repo(cwd), json.loads((copy / "kit-lessons" / "_repos.json").read_text(encoding="utf-8"))
+        asked = {k: v for k, v in (seen.get(info["slug"]) or {}).items() if k in ("model_runs", "model_preview")}
+        if model and asked:  # the call counts against the daily cap, and the review applies its answer
+            register(info, **asked)
         found = out.stdout.strip().splitlines()
         if out.returncode or not found:
             return [f"the distiller preview failed: {(out.stderr.strip().splitlines() or ['no output'])[-1]}"]
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         return [f"the distiller preview failed: {exc}"]
     finally:
         shutil.rmtree(copy, ignore_errors=True)
@@ -740,7 +745,7 @@ def review_due(cwd):
     per REVIEW_DAYS (a declined review is snoozed for a period), else "". The first session only
     starts the clock."""
     info = repo(cwd)
-    if not info:
+    if not info or headless():  # a notice nobody reads must not use up the period
         return ""
     entry = load_repos().get(info["slug"]) or {}
     last = entry.get("reviewed_ts")

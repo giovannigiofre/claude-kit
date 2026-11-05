@@ -269,7 +269,7 @@ def test_model_pass():
            {"op": "edit", "id": ids[1], "text": "use token ghp_" + "a1B2" * 9},
            {"op": "retire", "id": ids[2], "why": "one-off"}]
     fake = TMP / "fake-claude"
-    fake.write_text("#!/bin/sh\necho \"$@\" > " + str(TMP / "fake-args") + "\ncat > /dev/null\n"
+    fake.write_text("#!/bin/sh\necho \"$@\" >> " + str(TMP / "fake-args") + "\ncat > /dev/null\n"
                     "echo '" + json.dumps({"result": json.dumps({"ops": ops}), "total_cost_usd": 0.0012}) + "'\n")
     fake.chmod(0o755)
     env = {"KIT_LEARN_MODEL": "1", "KIT_LEARN_CLAUDE": str(fake), "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}
@@ -277,10 +277,14 @@ def test_model_pass():
     try:
         assert "headless" in distill.model_pass(lessons.repo(repo))[1], "never in a `claude -p` session"
         os.environ["CLAUDE_CODE_ENTRYPOINT"] = "cli"
+        before = lessons.file_of(slug).read_bytes()
+        dry = lessons.review(repo, dry_run=True)
+        assert any(x.startswith("would: reworded") for x in dry) and lessons.file_of(slug).read_bytes() == before, dry
         lines, status = distill.distill(repo)
         model_lines = [line for line in lines if line.startswith(("reworded", "retired"))]
-        assert "2 change(s), $0.0012" in status and len(model_lines) == 2, (lines, status)
+        assert "2 change(s), the dry run's answer" in status and len(model_lines) == 2, (lines, status)
         args = (TMP / "fake-args").read_text()
+        assert len(args.splitlines()) == 1, "the review applies the dry run's answer without a second call"
         assert "--max-budget-usd 0.05" in args and "--tools" in args and "--safe-mode" in args, args
         by_id = {r["id"]: r for r in rows(repo)}
         assert by_id[ids[0]]["text"].startswith("Retries need") and "ghp_" not in by_id[ids[1]]["text"]
@@ -383,6 +387,12 @@ def test_upkeep():
         promote.scan()
         assert not any(r.get("key") == "local-path" for r in lessons.read_rows(lessons.file_of(lessons.MACHINE))), \
             "a lesson naming a project's files stays in its repo"
+        for r in (a, b):
+            lessons.observe(lessons.repo(r)["slug"], "local-name", "pitfall", "Zorbix suites need a warm cache", "user",
+                            activate_at=1)
+        promote.scan()
+        assert not any(r.get("key") == "local-name" for r in lessons.read_rows(lessons.file_of(lessons.MACHINE))), \
+            "a name only the lesson's own copies use is still a project name"
 
         old = (datetime.date.today() - datetime.timedelta(days=lessons.IDLE_DAYS + 1)).isoformat()
         with lessons.change(lessons.repo(a)["slug"]) as state:

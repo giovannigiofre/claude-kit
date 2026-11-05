@@ -47,7 +47,7 @@ CODE_EXT = ("sh|bash|zsh|py|js|ts|tsx|jsx|mjs|cjs|json|jsonl|yaml|yml|toml|md|tx
 FILE_NAME = re.compile(rf"(?<![\w/.-])[\w-]+(?:\.[\w-]+)*\.(?:{CODE_EXT})\b")
 ONE_SLASH = re.compile(r"(?<![\w:/.@-])[\w.-]+/[\w.-]+(?![\w/])")
 WORD_PAIRS = set("and/or pass/fail read/write ci/cd i/o input/output yes/no on/off true/false "
-                 "client/server start/stop either/or he/she his/her n/a".split())
+                 "client/server start/stop either/or he/she his/her n/a async/await".split())
 NAME = re.compile(r"(?<![\w./-])[A-Z][A-Za-z0-9]*[A-Z0-9][A-Za-z0-9]*\b|(?<![\w./-])[A-Z][a-z]{2,}\b")
 
 
@@ -56,11 +56,12 @@ def repo_slugs():
                   if s != lessons.MACHINE and not lessons.ignored(e.get("main") or e.get("origin")))
 
 
-def specific(text):
+def specific(text, own=()):
     """Why `text` holds only in one project, or None when it reads the same in any repo: a repo's
     name, org or path (scrub), a file path or file name, a one-slash path, an env var, or a
     capitalised name (ACME, Zorbix) that the kit's own docs do not use and fewer than 2 real repos'
-    ledgers mention. A lesson that is not generic stays in its repo."""
+    ledgers mention (`own`, "slug:id" of the lesson's own copies, do not count). A lesson that is
+    not generic stays in its repo."""
     text = text or ""
     words, names = corpus()
 
@@ -71,9 +72,12 @@ def specific(text):
     hits += [f"a file name ({m})" for m in FILE_NAME.findall(text) if not known(m)]
     hits += [f"a path ({m})" for m in ONE_SLASH.findall(text) if m.lower() not in WORD_PAIRS and not known(m)]
     hits += [f"an env var ({m})" for m in ENV_NAME.findall(text) if not m.startswith(COMMON_ENV) and m not in names]
-    shared = repo_counts(ledger_stamp())
+    users = repo_users(ledger_stamp())
+
+    def shared(word):
+        return len({u.rsplit(":", 1)[0] for u in users.get(word.lower(), ()) if u not in own})
     hits += [f"a project name ({m})" for m in NAME.findall(text)
-             if (m not in names if m.isupper() else m.lower() not in words) and shared.get(m.lower(), 0) < MACHINE_AT]
+             if (m not in names if m.isupper() else m.lower() not in words) and shared(m) < MACHINE_AT]
     return hits[0] if hits else None
 
 
@@ -81,27 +85,34 @@ def specific(text):
 def corpus():
     """The kit's own docs: their words lowercased (file names and paths too) and their ALLCAPS
     words as written ("acme" in prose would not make ACME generic)."""
-    text = "\n".join(f.read_text(encoding="utf-8", errors="replace") for f in sorted(KIT_ROOT.rglob("*.md"))
-                     if ".git" not in f.parts and "tests" not in f.parts)
+    plugin = Path(__file__).resolve().parents[2]  # the same files in a checkout and an install
+    text = "\n".join(f.read_text(encoding="utf-8", errors="replace") for f in sorted(plugin.rglob("*.md"))
+                     if "tests" not in f.parts)
     tokens = set(re.findall(r"[\w./-]+", text))
     return {t.strip("./-").lower() for t in tokens} | {t.lower() for t in tokens}, \
         {t for t in re.findall(r"\b[A-Z][A-Z0-9_]+\b", text)}
 
 
 def ledger_stamp():
-    return tuple((s, *(lambda f: (f.stat().st_mtime_ns, f.stat().st_size) if f.exists() else (0, 0))(
-        lessons.file_of(s))) for s in repo_slugs())
+    """(slug, mtime, size) of each real repo's ledger: repo_users' cache key."""
+    def stamp(path):
+        try:
+            st = path.stat()
+            return st.st_mtime_ns, st.st_size
+        except OSError:
+            return 0, 0
+    return tuple((s, *stamp(lessons.file_of(s))) for s in repo_slugs())
 
 
 @lru_cache(maxsize=4)
-def repo_counts(stamp):
-    """How many real repos' ledgers use each word (lowercased)."""
-    counts = {}
+def repo_users(stamp):
+    """Each word (lowercased) of the real repos' ledgers -> the "slug:id" records that use it."""
+    users = {}
     for slug, *_ in stamp:
-        seen = {w.lower() for r in lessons.read_rows(lessons.file_of(slug)) for w in re.findall(r"\w+", r.get("text", ""))}
-        for w in seen:
-            counts[w] = counts.get(w, 0) + 1
-    return counts
+        for r in lessons.read_rows(lessons.file_of(slug)):
+            for w in {w.lower() for w in re.findall(r"\w+", r.get("text", ""))}:
+                users.setdefault(w, set()).add(member(slug, r))
+    return users
 
 
 def same(a, b):
@@ -139,7 +150,8 @@ def scan_locked():
         if c["m"] and c["members"]:
             lines += attach(c["m"]["id"], c["members"])
         elif not c["m"] and len({slug for slug, _ in c["members"]}) >= MACHINE_AT \
-                and not specific(max((r for _, r in c["members"]), key=lessons.rank).get("text")):
+                and not specific(max((r for _, r in c["members"]), key=lessons.rank).get("text"),
+                                 {member(s, r) for s, r in c["members"]}):
             lines += create(c["members"])
     return lines + mark_candidates()
 
@@ -219,7 +231,7 @@ def release(m_id):
 # ---- machine -> kit -------------------------------------------------------------------------
 
 def why_candidate(record, machine):
-    if not machine or specific(record.get("text")):
+    if not machine or specific(record.get("text"), set(record.get("from") or [])):
         return None  # only a machine lesson, held by 2+ real repos, goes to the kit
     n = repos_of(record)
     if record.get("kind") == "kit-defect":

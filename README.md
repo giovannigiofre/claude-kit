@@ -175,9 +175,10 @@ changes a project you haven't opted in. Details of every key: [docs/reference.md
 Facts every thread needs (how to set up a worktree, the integration-test command) go in a
 gitignored `CLAUDE.local.md`: threads load it like CLAUDE.md, while kit.json `lead.notes` reaches
 only the coordinator. In a repo with AGENTS.md and no CLAUDE.md, start it with `@AGENTS.md`: a
-CLAUDE.local.md otherwise stops Claude Code reading AGENTS.md. List the gitignored files a fresh worktree needs (`.env`, `CLAUDE.local.md`,
-`.claude/kit.json` when it is not committed) in `.worktreeinclude` (gitignore syntax); Claude Code
-copies them into every worktree it creates, a manual `git worktree add` excepted.
+CLAUDE.local.md otherwise stops Claude Code reading AGENTS.md. List the gitignored files a fresh
+worktree needs (`.env`, `CLAUDE.local.md`, `.claude/kit.json` when it is not committed) in
+`.worktreeinclude` (gitignore syntax); Claude Code copies them into every worktree it creates, a
+manual `git worktree add` excepted.
 
 **Update:** `git pull` in the clone (or `claude plugin marketplace update claude-kit`), then
 `/reload-plugins`. Bump `version` in the plugin's `plugin.json` when behaviour changes.
