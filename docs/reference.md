@@ -322,18 +322,22 @@ interactive one (`cli`, `claude-vscode`, `claude-desktop`, `claude-desktop-3p`),
 kit.json.
 
 **Promotion** (`promote.py`, run by the distiller): a lesson active in 2 real repos, whose wording
-is generic (no repo name, org or path from the ledgers, no file name or path, no env var, no
-capitalised name that the kit's docs do not use and fewer than 2 repos' ledgers mention), becomes
-one machine lesson (`M` ids) that every repo gets; the repo copies turn `promoted`, and undoing the
+passes the structural check (no repo name, org or path from the ledgers, no file name or path, no
+env var) and the model's genericity judge (would it be correct and useful in an unrelated repo with
+a different stack, naming no product, library, service, tool config or project term?), becomes one
+machine lesson (`M` ids) that every repo gets; the repo copies turn `promoted`, and undoing the
 machine lesson gives them back for good. Only a machine lesson goes further: seen in 3 or more
 repos, about the kit, or a `kit-defect`, it becomes a kit candidate, announced once, when its
-wording passes the same check; a project-specific lesson stays in its repo's ledger. Only
+wording passes the structural check; a project-specific lesson stays in its repo's ledger. Only
 `/kit:learn promote <id>`, run in an interactive session, prepares a claude-kit branch: the
 smallest generic change, a regression test or eval that fails without it, the budget test, and
 `lessons.py scrub` on the diff (no repo names, orgs, paths, env var names from the ledgers, or
 secrets). It opens the PR in that session and never merges it. `lessons.py promoted <id> <version>
 <url>` then makes the lesson retire itself once the PR is merged (checked with `gh`) and that kit
-version is installed.
+version is installed. The judge is one haiku call per batch, counted against the repo's daily model
+cap; with no model (`--no-model`, headless, turned off), a timeout or an unclear answer the lesson
+stays local and is asked about on a later run. It may give a generic rewording, promoted only when
+that passes the structural check too.
 
 **Upkeep**: from 14 days after the last review (the first session starts the clock) the session
 start adds one line, "the lesson review is due", at most once per 14 days (a declined review comes
@@ -343,7 +347,9 @@ rewords too when the model is allowed: that one call counts for the day and the 
 answer; `--no-model` says rewords are skipped), then, once the user agrees, `lessons.py review`: it
 drops the ledgers of test and scratchpad repos and retires the machine lessons only they held
 (`prune`), retires lessons neither seen nor delivered for 90 days, then runs the distiller. Every
-retire can be undone; a dropped ledger cannot.
+retire can be undone; a dropped ledger cannot. The dry run writes only metadata to `_repos.json`
+(`model_runs`, and `model_preview`, the answer the review applies), never a lesson; it does not ask
+the judge, so a promotion it lists waits for the review.
 
 ```bash
 python3 <kit>/hooks/scripts/lessons.py list [--all] [DIR]

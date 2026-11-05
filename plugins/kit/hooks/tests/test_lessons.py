@@ -296,8 +296,42 @@ def test_model_pass():
         os.environ["KIT_LEARN_MODEL"] = "0"
 
 
+def test_judge():
+    import promote
+    repos = [make_repo(f"j{i}", f"https://example.com/acme/j{i}.git") for i in range(2)]
+    for r in repos:
+        lessons.register(lessons.repo(r))
+        for key, text in (("timeouts", "Timeouts belong on every network call."),
+                          ("orm-bump", "an orm bump breaks the jest transform of generated clients")):
+            lessons.observe(lessons.repo(r)["slug"], key, "pitfall", text, "user", activate_at=1)
+
+    def machine_keys():
+        return {r.get("key") for r in lessons.read_rows(lessons.file_of(lessons.MACHINE)) if r.get("status") == "active"}
+    info = lessons.repo(repos[0])
+    lines = promote.scan(info)
+    assert not {"timeouts", "orm-bump"} & machine_keys() and any("genericity check" in x for x in lines), \
+        "no model: a lesson in 2 repos stays local"
+    fake = TMP / "fake-judge"
+    fake.write_text("#!/usr/bin/env python3\nimport json, re, sys\nlines = re.findall(r'^(\\d+)\\. (.*)$', "
+                    "sys.stdin.read(), re.M)\nv = [{'n': int(n), 'verdict': 'generic' if 'Timeouts' in t else "
+                    "'specific'} for n, t in lines]\nprint(json.dumps({'result': json.dumps({'verdicts': v}), "
+                    "'total_cost_usd': 0.001}))\n")
+    fake.chmod(0o755)
+    env = {"KIT_LEARN_MODEL": "1", "KIT_LEARN_CLAUDE": str(fake), "CLAUDE_CODE_ENTRYPOINT": "cli"}
+    os.environ.update(env)
+    try:
+        promote.scan(info)
+    finally:
+        for key in env:
+            os.environ.pop(key, None)
+        os.environ["KIT_LEARN_MODEL"] = "0"
+    assert "timeouts" in machine_keys(), "the judge says generic: every repo gets it"
+    assert "orm-bump" not in machine_keys(), "the judge says specific: it stays in its repos"
+
+
 def test_promotion():
     import promote
+    judge, distill.judge = distill.judge, lambda info, texts: {t: True for t in texts}  # the judge: test_judge
     repos = [make_repo(f"p{i}", f"https://example.com/acme/p{i}.git") for i in range(3)]
     slugs = []
     for r in repos:
@@ -354,6 +388,7 @@ def test_promotion():
     assert len(found) >= 2 and not any("line 3" in f for f in found), found
     assert promote.scrub("@@ -1 +1 @@\n+ token ghp_" + "a1B2" * 9 + f"\n  context {repos[1]}") == \
         ["line 2: secret-shaped text"], "a diff's context lines are already in the kit"
+    distill.judge = judge
 
 
 def test_upkeep():
@@ -387,12 +422,6 @@ def test_upkeep():
         promote.scan()
         assert not any(r.get("key") == "local-path" for r in lessons.read_rows(lessons.file_of(lessons.MACHINE))), \
             "a lesson naming a project's files stays in its repo"
-        for r in (a, b):
-            lessons.observe(lessons.repo(r)["slug"], "local-name", "pitfall", "Zorbix suites need a warm cache", "user",
-                            activate_at=1)
-        promote.scan()
-        assert not any(r.get("key") == "local-name" for r in lessons.read_rows(lessons.file_of(lessons.MACHINE))), \
-            "a name only the lesson's own copies use is still a project name"
 
         old = (datetime.date.today() - datetime.timedelta(days=lessons.IDLE_DAYS + 1)).isoformat()
         with lessons.change(lessons.repo(a)["slug"]) as state:
@@ -420,7 +449,7 @@ def test_upkeep():
 
 def main():
     for test in (test_ledger, test_import, test_capture, test_delivery, test_fail_then_pass, test_distill,
-                 test_model_pass, test_promotion, test_upkeep):
+                 test_model_pass, test_judge, test_promotion, test_upkeep):
         test()
     print("lessons: all checks passed")
 

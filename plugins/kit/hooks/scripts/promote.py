@@ -3,13 +3,13 @@
 
 - **Machine.** The same lesson (same key, or the distiller's word match) active in 2 real repo
   ledgers (test and scratchpad repos never count), worded so it holds anywhere (`specific`: no
-  repo name, org, checkout path, file name or path, env var, or a capitalised name that neither
-  the kit's docs nor a second repo's ledger uses), becomes
+  repo name, org, checkout path, file name or path or env var; then the model's genericity
+  judge, `distill.judge`, which fails safe: no model, no answer, the lesson stays local), becomes
   one machine lesson (`_machine.jsonl`, ids M1, M2, ...) that every repo gets; the repo
   records turn `promoted` and point at it. Undoing the machine lesson gives them back and stops
   them from being promoted again.
 - **Kit candidate.** A machine lesson (so 2+ real repos) seen in 3 or more repos, about the kit
-  itself or of kind `kit-defect`, that passes the same wording check, is marked a promotion
+  itself or of kind `kit-defect`, that passes the structural check, is marked a promotion
   candidate and announced. Nothing else happens: a
   claude-kit branch and PR are prepared only by `/kit:learn promote <id>`, run by the user in a
   session (`brief` refuses in a headless run), and the PR is never merged by Claude.
@@ -48,7 +48,6 @@ FILE_NAME = re.compile(rf"(?<![\w/.-])[\w-]+(?:\.[\w-]+)*\.(?:{CODE_EXT})\b")
 ONE_SLASH = re.compile(r"(?<![\w:/.@-])[\w.-]+/[\w.-]+(?![\w/])")
 WORD_PAIRS = set("and/or pass/fail read/write ci/cd i/o input/output yes/no on/off true/false "
                  "client/server start/stop either/or he/she his/her n/a async/await".split())
-NAME = re.compile(r"(?<![\w./-])[A-Z][A-Za-z0-9]*[A-Z0-9][A-Za-z0-9]*\b|(?<![\w./-])[A-Z][a-z]{2,}\b")
 
 
 def repo_slugs():
@@ -56,14 +55,12 @@ def repo_slugs():
                   if s != lessons.MACHINE and not lessons.ignored(e.get("main") or e.get("origin")))
 
 
-def specific(text, own=()):
-    """Why `text` holds only in one project, or None when it reads the same in any repo: a repo's
-    name, org or path (scrub), a file path or file name, a one-slash path, an env var, or a
-    capitalised name (ACME, Zorbix) that the kit's own docs do not use and fewer than 2 real repos'
-    ledgers mention (`own`, "slug:id" of the lesson's own copies, do not count). A lesson that is
-    not generic stays in its repo."""
+def specific(text):
+    """Why `text` holds only in one project, by its shape, or None: a repo's name, org or path
+    (scrub), a file path or file name, a one-slash path, an env var. Whether its words are generic
+    (no product, library, service or project term) is the model's call (`distill.judge`)."""
     text = text or ""
-    words, names = corpus()
+    words = corpus()
 
     def known(m):
         return m.lower() in words or (PLUGIN_ROOT / m).exists()
@@ -71,47 +68,17 @@ def specific(text, own=()):
     hits += [f"a file path ({m})" for m in FILE_PATH.findall(text) if not known(m)]
     hits += [f"a file name ({m})" for m in FILE_NAME.findall(text) if not known(m)]
     hits += [f"a path ({m})" for m in ONE_SLASH.findall(text) if m.lower() not in WORD_PAIRS and not known(m)]
-    hits += [f"an env var ({m})" for m in ENV_NAME.findall(text) if not m.startswith(COMMON_ENV) and m not in names]
-    users = repo_users(ledger_stamp())
-
-    def shared(word):
-        return len({u.rsplit(":", 1)[0] for u in users.get(word.lower(), ()) if u not in own})
-    hits += [f"a project name ({m})" for m in NAME.findall(text)
-             if (m not in names if m.isupper() else m.lower() not in words) and shared(m) < MACHINE_AT]
+    hits += [f"an env var ({m})" for m in ENV_NAME.findall(text) if not m.startswith(COMMON_ENV)]
     return hits[0] if hits else None
 
 
 @lru_cache(maxsize=1)
 def corpus():
-    """The kit's own docs: their words lowercased (file names and paths too) and their ALLCAPS
-    words as written ("acme" in prose would not make ACME generic)."""
+    """Words, file names and paths the kit's own docs use (lowercased): those are not project terms."""
     text = "\n".join(f.read_text(encoding="utf-8", errors="replace") for f in sorted(PLUGIN_ROOT.rglob("*.md"))
                      if "tests" not in f.parts)
     tokens = set(re.findall(r"[\w./-]+", text))
-    return {t.strip("./-").lower() for t in tokens} | {t.lower() for t in tokens}, \
-        {t for t in re.findall(r"\b[A-Z][A-Z0-9_]+\b", text)}
-
-
-def ledger_stamp():
-    """(slug, mtime, size) of each real repo's ledger: repo_users' cache key."""
-    def stamp(path):
-        try:
-            st = path.stat()
-            return st.st_mtime_ns, st.st_size
-        except OSError:
-            return 0, 0
-    return tuple((s, *stamp(lessons.file_of(s))) for s in repo_slugs())
-
-
-@lru_cache(maxsize=4)
-def repo_users(stamp):
-    """Each word (lowercased) of the real repos' ledgers -> the "slug:id" records that use it."""
-    users = {}
-    for slug, *_ in stamp:
-        for r in lessons.read_rows(lessons.file_of(slug)):
-            for w in {w.lower() for w in re.findall(r"\w+", r.get("text", ""))}:
-                users.setdefault(w, set()).add(member(slug, r))
-    return users
+    return {t.strip("./-").lower() for t in tokens} | {t.lower() for t in tokens}
 
 
 def same(a, b):
@@ -120,17 +87,18 @@ def same(a, b):
 
 # ---- repo -> machine ------------------------------------------------------------------------
 
-def scan():
-    """Promote lessons active in MACHINE_AT+ repos, then mark kit candidates. Returns news lines.
-    One scan at a time on this machine; a second one returns at once."""
+def scan(info=None):
+    """Promote lessons active in MACHINE_AT+ repos that the model judges generic (the call counts
+    against the model cap of the repo `info` names; without it nothing is promoted), then mark kit
+    candidates. Returns news lines. One scan at a time on this machine; a second one returns at once."""
     try:
         with lessons.locked("_promote", wait=0):
-            return scan_locked()
+            return scan_locked(info)
     except lessons.Busy:
         return []
 
 
-def scan_locked():
+def scan_locked(info=None):
     machine = distill.live(lessons.read_rows(lessons.file_of(lessons.MACHINE)))
     held = {m for r in lessons.read_rows(lessons.file_of(lessons.MACHINE)) for m in r.get("from") or []}
     # a repo copy a machine lesson already holds stays out: it is active again only by an undo
@@ -144,22 +112,45 @@ def scan_locked():
             clusters.append({"m": None, "members": [(slug, r)]})
         else:
             home["members"].append((slug, r))
-    lines = []
+    lines, ask = [], []
     for c in clusters:
         if c["m"] and c["members"]:
             lines += attach(c["m"]["id"], c["members"])
-        elif not c["m"] and len({slug for slug, _ in c["members"]}) >= MACHINE_AT \
-                and not specific(max((r for _, r in c["members"]), key=lessons.rank).get("text"),
-                                 {member(s, r) for s, r in c["members"]}):
-            lines += create(c["members"])
+        elif not c["m"] and len({slug for slug, _ in c["members"]}) >= MACHINE_AT:
+            best = max((r for _, r in c["members"]), key=lessons.rank)
+            if not specific(best.get("text")) and (best.get("judged") or {}).get("text") != best.get("text"):
+                ask.append((best, c["members"]))  # a text the judge already found specific is not asked again
+    verdicts = distill.judge(info, [best["text"] for best, _ in ask]) if ask else {}
+    for best, members in ask:
+        verdict = verdicts.get(best["text"])
+        if verdict is None:
+            lines.append(f"{best['id']} is in {MACHINE_AT}+ repos and waits for the model's genericity check")
+            continue
+        wording = verdict if isinstance(verdict, str) and not specific(verdict) else None
+        if verdict is False or (isinstance(verdict, str) and not wording):
+            mark_judged(best["text"], members)
+            continue
+        lines += create(members, wording if isinstance(wording, str) else None)
     return lines + mark_candidates()
 
 
-def create(members):
+def mark_judged(text, members):
+    """The judge found `text` specific: its repo copies stay local and are not asked about again."""
+    for slug in sorted({slug for slug, _ in members}):
+        ids = {r["id"] for s, r in members if s == slug}
+        with lessons.change(slug, log=False) as state:
+            for r in state["rows"]:
+                if r.get("id") in ids:
+                    r["judged"] = {"date": lessons.today(), "text": text, "generic": False}
+
+
+def create(members, wording=None):
     best = max((r for _, r in members), key=lessons.rank)
     with lessons.change(lessons.MACHINE) as state:
         record = {k: v for k, v in best.items() if k not in ("file", "sources", "delivered", "last_delivered",
-                                                              "proposal", "promote", "fixed_in")}
+                                                              "proposal", "promote", "fixed_in", "judged")}
+        if wording:
+            record["text"] = wording
         record.update({"id": lessons.next_id(state["rows"], "M"), "status": "active", "origin_src": "promoted",
                        "created": lessons.today(), "activated": lessons.today(), "from": [],
                        "seen": 0, "misses": 0, "helpful": 0, "harmful": 0, "evidence": [], "projects": []})
@@ -230,7 +221,7 @@ def release(m_id):
 # ---- machine -> kit -------------------------------------------------------------------------
 
 def why_candidate(record, machine):
-    if not machine or specific(record.get("text"), set(record.get("from") or [])):
+    if not machine or specific(record.get("text")):
         return None  # only a machine lesson, held by 2+ real repos, goes to the kit
     n = repos_of(record)
     if record.get("kind") == "kit-defect":
