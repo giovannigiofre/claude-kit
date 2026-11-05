@@ -724,7 +724,8 @@ def preview(cwd, model):
         out = subprocess.run([sys.executable, "-c", PREVIEW, str(Path(__file__).resolve().parent), str(cwd),
                               "1" if model else "0"], capture_output=True, text=True, timeout=600,
                              env=dict(os.environ, KIT_LESSONS_DIR=str(copy / "kit-lessons"), KIT_LESSONS_PREVIEW="1"))
-        info, seen = repo(cwd), json.loads((copy / "kit-lessons" / "_repos.json").read_text(encoding="utf-8"))
+        repos_file, info = copy / "kit-lessons" / "_repos.json", repo(cwd)
+        seen = json.loads(repos_file.read_text(encoding="utf-8")) if repos_file.exists() else {}
         asked = {k: v for k, v in (seen.get(info["slug"]) or {}).items() if k in ("model_runs", "model_preview")}
         if model and asked:  # the call counts against the daily cap, and the review applies its answer
             register(info, **asked)

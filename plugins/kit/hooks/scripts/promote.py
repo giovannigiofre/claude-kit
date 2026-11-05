@@ -41,7 +41,7 @@ COMMON_ENV = ("KIT_", "CLAUDE_", "GITHUB_", "NODE_", "NPM_", "PYTHON", "HOME", "
 GENERIC = set("app api web src lib docs doc hooks scripts tests test main site server client core infra".split())
 # a relative file path: a slashed word ending in an extension, or with two slashes ("and/or" is not one)
 FILE_PATH = re.compile(r"(?<![\w:/.])[\w.-]+/(?:[\w.*-]+/)*[\w*-]*\.\w+|(?<![\w:/.])[\w.-]+/[\w.*-]+/[\w.*-]+")
-KIT_ROOT = Path(__file__).resolve().parents[4]
+PLUGIN_ROOT = Path(__file__).resolve().parents[2]  # the same files in a checkout and an install
 CODE_EXT = ("sh|bash|zsh|py|js|ts|tsx|jsx|mjs|cjs|json|jsonl|yaml|yml|toml|md|txt|csv|sql|lock|cfg|ini|"
             "env|go|rs|rb|java|kt|swift|php|cs|html|css|xml|tf|gradle|pdf|png")
 FILE_NAME = re.compile(rf"(?<![\w/.-])[\w-]+(?:\.[\w-]+)*\.(?:{CODE_EXT})\b")
@@ -66,7 +66,7 @@ def specific(text, own=()):
     words, names = corpus()
 
     def known(m):
-        return m.lower() in words or any((d / m).exists() for d in (KIT_ROOT, KIT_ROOT / "plugins" / "kit"))
+        return m.lower() in words or (PLUGIN_ROOT / m).exists()
     hits = scrub(text)
     hits += [f"a file path ({m})" for m in FILE_PATH.findall(text) if not known(m)]
     hits += [f"a file name ({m})" for m in FILE_NAME.findall(text) if not known(m)]
@@ -85,8 +85,7 @@ def specific(text, own=()):
 def corpus():
     """The kit's own docs: their words lowercased (file names and paths too) and their ALLCAPS
     words as written ("acme" in prose would not make ACME generic)."""
-    plugin = Path(__file__).resolve().parents[2]  # the same files in a checkout and an install
-    text = "\n".join(f.read_text(encoding="utf-8", errors="replace") for f in sorted(plugin.rglob("*.md"))
+    text = "\n".join(f.read_text(encoding="utf-8", errors="replace") for f in sorted(PLUGIN_ROOT.rglob("*.md"))
                      if "tests" not in f.parts)
     tokens = set(re.findall(r"[\w./-]+", text))
     return {t.strip("./-").lower() for t in tokens} | {t.lower() for t in tokens}, \
