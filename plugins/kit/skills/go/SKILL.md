@@ -31,9 +31,10 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
    <evidence file>`. A test that mocks the changed path, or reading the code, is not evidence.
    Fix failures and repeat.
 5. **Review, then simplify.** Run the `code-review` skill on the branch with the intent from step
-   2; skip findings already declined in `.claude/review-decisions.md`. Fix the mechanical ones
-   that don't change what was asked. Collect those that touch the intent or a product decision
-   and ask about them once, with AskUserQuestion; a declined one goes into
+   2; skip findings already declined in `.claude/review-decisions.md`. Fix the ones that affect
+   correctness (a bug, a missing part, a broken contract) and don't change what was asked; list
+   style and taste findings without applying them. Collect those that touch the intent or a
+   product decision and ask about them once, with AskUserQuestion; a declined one goes into
    `.claude/review-decisions.md` (date, finding, reason). Then run the `simplify` skill, update
    docs that describe the changed behaviour, and re-run `verify`.
 6. **Risk and PR.** Rate the risk low, medium or high in one or two lines: blast radius (shared
@@ -45,12 +46,14 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
    **Evidence**, **Fixed along the way**, **Risk**, **Open**; attach screenshots and logs with
    `--attach <file>` (gh 2.99+). Follow the repo's commit and PR conventions.
 7. **Keep CI green** (unless `no-babysit`). With the Claude GitHub App on the repo,
-   `/autofix-pr` watches the PR from the cloud. Otherwise watch `gh pr checks <PR> --watch`; on a
-   failure read the log (`gh run view <id> --log-failed`), fix the root cause, re-run step 4 for
-   what you touched, push; at most 3 rounds, then report. A merge conflict: sync as in step 3.
-   Review comments that ask for a product decision go to the user. If CI takes longer than
-   about 10 minutes, hand over to Claude Code's own loop: a bare `/loop` tends this branch's PR
-   (comments, failed CI, conflicts) at its own pace, the way `.claude/loop.md` says when the
+   `/autofix-pr` watches the PR from the cloud. Otherwise run `gh pr checks <PR> --watch` in the
+   background, one watcher per PR (its exit wakes you; no sleeping or polling, and a notice that
+   it is still running needs no reply); on a failure read the log (`gh run
+   view <id> --log-failed`), fix the root cause, re-run step 4 for what you touched, push; at
+   most 3 rounds, then report. A merge conflict: sync as in step 3. Review comments that ask
+   for a product decision go to the user. If CI takes longer than about 10 minutes, hand over
+   to Claude Code's own loop: a bare `/loop` tends this branch's PR (comments, failed CI,
+   conflicts) at its own pace, the way `.claude/loop.md` says when the
    project has one. (`/kit:go babysit` works when the user types it; a scheduled prompt cannot
    invoke a user-only skill.)
 8. **Merge per the project's policy** (`.claude/kit.json` `lead.merge`): `agent` merges once CI

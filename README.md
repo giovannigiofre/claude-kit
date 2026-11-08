@@ -83,10 +83,14 @@ Safety per project (`/kit-safety`): **Host** or **Sandbox**.
                          protect after the fact
    Stop         check    runs the fast `check` (with KIT_CHANGED_FILES, so it can be diff-aware)
                          when the tree's content changed; on failure Claude keeps fixing (max 3)
-   SessionStart          lists the project's gates; after a compaction, re-injects the board;
-                         says once when a newer kit is installed than the one loaded (restart)
-   SubagentStart         gives each kit:implementer and kit:verifier this repo's lessons from the
-                         ledger, most repeated and newest first (about 600 tokens max)
+   SessionStart          lists the project's gates; after a compaction, re-injects the board
+                         (rows first, warns past 60 lines or 8 KB); says once when a newer kit
+                         is installed than the one loaded (restart), and when the lesson review
+                         is due (at most once per 14 days; declining snoozes it)
+   SubagentStart         gives each kit:implementer and kit:verifier this repo's gate command and
+                         lessons from the ledger, most repeated and newest first (about 600
+                         tokens max); the hook sees only the session's repo, so it names it,
+                         and a thread sent to another repo knows the lines are not for it
    SubagentStop          turns a kit:verifier FAIL into candidate lessons; gate failures, guard
                          denials are captured too (no tokens), all into
                          ~/.claude/kit-lessons/, outside every repo (see docs/reference.md)
@@ -112,7 +116,7 @@ Safety per project (`/kit-safety`): **Host** or **Sandbox**.
 | `/kit:init` | Sets up a project (kit.json, e2e skill, safety, permissions) |
 | `/kit:learn` | Tidies the lesson ledger (merge, retire shipped fixes, proposals to retire or harden, undo); `promote` turns a lesson seen across repos into a kit PR; corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
 | `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
-| `kit:implementer` | A thread: one item from brief to PR in its own worktree; effort set per thread by the coordinator (low for a clear, small brief, medium otherwise, high for ambiguous work) |
+| `kit:implementer` | A thread: one item from brief to PR in its own worktree (another repo's included); effort set per thread by the coordinator (low for a clear, small brief, medium otherwise, high for ambiguous work) |
 | `kit:verifier` | A fresh-context review against the intent at effort medium, with a per-project memory of pitfalls |
 | Hooks + mod | `protect`, `guard`, `on_edit`, `bash_edits`, `permission`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop` (files each thread's report and each verdict under its item), the lesson ledger `lessons.py`, `gate.py` (runs `check` or `verify` and records the tree it passed on: the evidence a PR body cites), `items.py` and `proposals.py` (the coordinator's items and proposal cards on disk); the mod (`kit.tsx`: modes light / loop / ask, safety, status line with threads waiting for you, a native notification when the board gains work for you) |
 
@@ -124,7 +128,9 @@ Safety per project (`/kit-safety`): **Host** or **Sandbox**.
 | `kit-llm` | `kit-llm:llm-build` (build checklist A-H for code that calls an LLM), `kit-llm:llm-evals` (error analysis, calibrated judges, then prompt optimization or model choice), and a hook that spots LLM code on edit |
 
 **Native features the kit uses instead of its own copies:** `/code-review`, `/simplify`,
-`/goal`, `/loop`, `/autofix-pr`, agent view (`claude agents`), the Workflow tool, auto-compact
+`/goal`, `/loop`, `/autofix-pr`, agent view (`claude agents`), background agents with per-call
+`effort` and `isolation: "worktree"`, SendMessage to resume a thread with its context, Monitor
+and background commands that wake the session, the Workflow tool, auto-compact
 with a `# Compact instructions` section in CLAUDE.md, auto mode, `/doctor prompt-audit`.
 
 ## Install
@@ -166,6 +172,13 @@ estimates otherwise pick the cheap, brittle option and test only in units:
 **Every new project:** `cd project && claude`, then `/kit:init`. Read `.claude/kit.json`, adjust
 it, commit it. The hooks do nothing in a project without it, so a user-scope install never
 changes a project you haven't opted in. Details of every key: [docs/reference.md](docs/reference.md).
+Facts every thread needs (how to set up a worktree, the integration-test command) go in a
+gitignored `CLAUDE.local.md`: threads load it like CLAUDE.md, while kit.json `lead.notes` reaches
+only the coordinator. In a repo with AGENTS.md and no CLAUDE.md, start it with `@AGENTS.md`: a
+CLAUDE.local.md otherwise stops Claude Code reading AGENTS.md. List the gitignored files a fresh
+worktree needs (`.env`, `CLAUDE.local.md`, `.claude/kit.json` when it is not committed) in
+`.worktreeinclude` (gitignore syntax); Claude Code copies them into every worktree it creates, a
+manual `git worktree add` excepted.
 
 **Update:** `git pull` in the clone (or `claude plugin marketplace update claude-kit`), then
 `/reload-plugins`. Bump `version` in the plugin's `plugin.json` when behaviour changes.

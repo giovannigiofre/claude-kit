@@ -17,13 +17,14 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   ],
   "guard": {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40, "allowCommands": [],
             "denyCommands": [{"pattern": "^npm install\\b", "reason": "pnpm only here"}], "askCommands": []},
+  "watchdog": {"silentMin": 20, "bashDeadlineMin": 30, "permissionMin": 2},
   "llm": "on",
   "learn": {"model": true},
   "author": "Giovanni Giofré <99892523+giovannigiofre@users.noreply.github.com>",
   "lead": {
     "read": ["docs/backlog.md"],
     "backlog": "docs/backlog.md",
-    "notes": "one line of project-specific advice for the coordinator",
+    "notes": "one line of project-specific advice for the coordinator (threads never see it)",
     "board": ".claude/lead/board.md",
     "ship": "pr",
     "merge": "user",
@@ -57,7 +58,14 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   (name "Claude", an `anthropic.com` email); `"allow"` turns that rule off. Pair it with
   `"attribution": {"commit": "", "pr": "", "sessionUrl": false}` in `settings.json`, so Claude
   doesn't write the credits in the first place. `{"guard": "on"}` in `~/.claude/kit.json` guards projects without a
-  `kit.json` too.
+  `kit.json` too. The guard's `wait` rule refuses a foreground wait (sleep over
+  `sleepMaxSec`, 60 by default, a while/until loop that sleeps while it polls, `gh run watch`,
+  `gh pr checks --watch`) and names the way out: `run_in_background`, the Monitor tool, the
+  completion notice. A Monitor command, a background command, one ended with `&`, a `while read`
+  loop, a long Bash `timeout` and a command `allowCommands` names pass; `"waits": false` turns
+  the rule off.
+- `watchdog`: the thresholds of the stall watchdog (see [Stalls](#stalls)), in minutes; `0`
+  turns that check off, a value that is not a number keeps the default.
 - `learn`: `{"model": false}` keeps the lesson distiller to its no-token passes (see Lessons).
 - `llm` (read by the `kit-llm` plugin's hook): `"off"` silences the LLM-code hint in this project.
 - `author`: who commits in this project, as `"Name <email>"`. When git's identity in the checkout
@@ -248,6 +256,29 @@ no-overwrite: a change to a file that existed before) with the way to restore it
 reverts nothing itself. A command that changed more than 40 files is reported, not checked.
 Cost: one `git status` before and after each shell command.
 
+## Stalls
+
+Nothing in Claude Code tells the coordinator that a thread went quiet. The kit's mod watches on
+its 15 s tick (interactive sessions only) and wakes the coordinator with a prompt of its own:
+
+- a running thread whose transcript has not moved for `silentMin` (20), skipped while it waits
+  on its own subagent, background command or Monitor (a Monitor counts until its `timeout_ms`);
+- a thread past the duration its brief expected: an `EXPECT: 90m` (or `2h`) line in the brief;
+- a background command past its deadline (its Bash `timeout`, else `bashDeadlineMin`, 30) while
+  its owner has been quiet for `silentMin`. A command whose description holds `(server)` is
+  meant to keep running and has none.
+
+Each stall wakes at 1x, 2x and 4x its threshold, and the third wake also sends a native
+notification, and it stays quiet until real activity starts it over: the turn a wake itself
+starts does not count. A thread waiting `permissionMin` (2) on a permission
+prompt notifies the person (not one a hook answered first); the prompt is never answered for them. A turn that failed on the API
+gets a "continue" nudge after 15, 30 and 60 s when the error clears on its own (overloaded, a
+server error, a short rate limit, `max_output_tokens`) and a notification plus a NEEDS YOU wake when it does not (a
+login, a usage limit). A thread that ends without its report reaching the coordinator (a refused
+or missing `SubagentHandback`) is told once by `subagent_stop.py` to send it; if it stops again
+without one, the coordinator is woken to SendMessage it. The facts live in memory, bounded to
+the work in flight; a module reload only makes the watchdog quieter.
+
 ## Permission prompts
 
 `permission.py` (PermissionRequest, matcher Bash) allows, without a prompt, a command that is
@@ -280,7 +311,9 @@ and a PASS confirms only the last FAIL on the same branch (with no branch named,
 nothing). Each report counts once, so a verifier resumed with SendMessage records its next round
 too. The same key seen again is counted, not added; a repeat after the lesson was delivered
 counts as a miss. A new automatic lesson starts as a candidate and turns active on its second
-sighting, at most 3 a day per repo. Text that looks like a key or token is refused.
+sighting, at most 3 a day per repo. Text that looks like a key or token is refused. A repo under a
+temp dir (`/tmp`, `/var/folders`, `$TMPDIR`; `KIT_TEMP_ROOTS` overrides the list) gets no ledger:
+tests and scratchpad probes teach nothing. Tests point `CLAUDE_CONFIG_DIR` at a temp dir.
 
 **Import**: at session start the kit imports, once and without touching the files, the
 kit:verifier memory index (`.claude/agent-memory/kit-verifier/MEMORY.md`) and your auto-memory
@@ -314,15 +347,35 @@ interactive one (`cli`, `claude-vscode`, `claude-desktop`, `claude-desktop-3p`),
 `claude -p` or the SDK. Turn it off with `KIT_LEARN_MODEL=0` or `"learn": {"model": false}` in
 kit.json.
 
-**Promotion** (`promote.py`, run by the distiller): a lesson active in 2 repos becomes one machine
-lesson (`M` ids) that every repo gets; the repo copies turn `promoted`, and undoing the machine
-lesson gives them back for good. A machine lesson seen in 3 or more repos or about the kit, and
-any `kit-defect` lesson, becomes a kit candidate, announced once. Only `/kit:learn promote <id>`,
-run in an interactive session, prepares a claude-kit branch: the smallest generic change, a
-regression test or eval that fails without it, the budget test, and `lessons.py scrub` on the
-diff (no repo names, orgs, paths, env var names from the ledgers, or secrets). It opens the PR in
-that session and never merges it. `lessons.py promoted <id> <version> <url>` then makes the lesson
-retire itself once the PR is merged (checked with `gh`) and that kit version is installed.
+**Promotion** (`promote.py`, run by the distiller): a lesson active in 2 real repos, whose wording
+passes the structural check (no repo name, org or path from the ledgers, no file name or path, no
+env var) and the model's genericity judge (would it be correct and useful in an unrelated repo with
+a different stack, naming no product, library, service, tool config or project term?), becomes one
+machine lesson (`M` ids) that every repo gets; the repo copies turn `promoted`, and undoing the
+machine lesson gives them back for good. Only a machine lesson goes further: seen in 3 or more
+repos, about the kit, or a `kit-defect`, it becomes a kit candidate, announced once, when its
+wording passes the structural check; a project-specific lesson stays in its repo's ledger. Only
+`/kit:learn promote <id>`, run in an interactive session, prepares a claude-kit branch: the
+smallest generic change, a regression test or eval that fails without it, the budget test, and
+`lessons.py scrub` on the diff (no repo names, orgs, paths, env var names from the ledgers, or
+secrets). It opens the PR in that session and never merges it. `lessons.py promoted <id> <version>
+<url>` then makes the lesson retire itself once the PR is merged (checked with `gh`) and that kit
+version is installed. The judge is one haiku call per batch, part of the distill's one counted
+model run for the day (with the reword call); with no model (`--no-model`, headless, turned off), a
+timeout or an unclear answer the lesson stays local and is asked about on a later run. It may give
+a generic rewording, promoted only when that passes the structural check too.
+
+**Upkeep**: from 14 days after the last review (the first session starts the clock) the session
+start adds one line, "the lesson review is due", at most once per 14 days (a declined review comes
+back a period later), and `/kit:learn` runs `lessons.py review --dry-run`, which changes nothing
+and previews the distiller's merges, retires and promotions on a throwaway copy of the ledgers (its
+rewords too when the model is allowed: that one call counts for the day and the review applies its
+answer; `--no-model` says rewords are skipped), then, once the user agrees, `lessons.py review`: it
+drops the ledgers of test and scratchpad repos and retires the machine lessons only they held
+(`prune`), retires lessons neither seen nor delivered for 90 days, then runs the distiller. Every
+retire can be undone; a dropped ledger cannot. The dry run writes only metadata to `_repos.json`
+(`model_runs`, and `model_preview`, the answers the review applies), never a lesson; its judge
+verdicts are kept the same way, so the review promotes what it listed.
 
 ```bash
 python3 <kit>/hooks/scripts/lessons.py list [--all] [DIR]
@@ -333,6 +386,8 @@ python3 <kit>/hooks/scripts/lessons.py undo L4 [DIR]
 python3 <kit>/hooks/scripts/lessons.py stats [DIR]
 python3 <kit>/hooks/scripts/lessons.py news [DIR]
 python3 <kit>/hooks/scripts/lessons.py distill [--no-model] [DIR]
+python3 <kit>/hooks/scripts/lessons.py review [--dry-run] [--no-model] [DIR]
+python3 <kit>/hooks/scripts/lessons.py prune [--dry-run]
 python3 <kit>/hooks/scripts/lessons.py promote [ID] [DIR]
 python3 <kit>/hooks/scripts/lessons.py promoted ID VERSION PR_URL [DIR]
 git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
@@ -425,12 +480,13 @@ python3 plugins/kit/hooks/tests/test_proposals.py
 python3 plugins/kit/hooks/tests/test_session_start.py
 python3 plugins/kit/hooks/tests/test_subagent_start.py
 python3 plugins/kit/hooks/tests/test_lessons.py
+python3 plugins/kit/hooks/tests/test_subagent_stop.py
 python3 plugins/kit/hooks/tests/test_machine_setup.py
 python3 plugins/kit/hooks/tests/test_auto_mode_sync.py
 python3 plugins/kit/skills/investigate/tests/test_compact_logs.py
 python3 plugins/kit/skills/overnight/tests/test_overnight.py
 python3 plugins/kit-llm/hooks/tests/test_llm_detect.py
-claude plugin test plugins/kit               # the mod (modes, safety, status line) against the engine
+claude plugin test plugins/kit               # the mod (modes, safety, status line, watchdog) against the engine
 ```
 
 Test a hook by hand:

@@ -11,16 +11,15 @@ queued item on disk, else a class A proposal card, else the backlog that `.claud
 `lead.backlog` or `lead.read` points to).
 
 You are the conversation; threads do the work. You decide what becomes a thread, brief it, keep
-the board and talk to the user. You see what threads report, not every step they take, so your
-context stays free for decisions. (Modelled on Claude Projects, built from Claude Code's
-background agents.)
+the board and talk to the user. You see what threads report, not every step they take.
 
 ## The board
 
 `.claude/lead/board.md` (or `lead.board` in kit.json) is the state that survives compaction and
-restarts. Read it when you start or lose track of an item; rewrite it whole whenever something
-changes; keep it under about 60 lines. If `.claude/lead/` isn't gitignored, add `/.claude/lead/`
-to `.git/info/exclude`.
+restarts. Read it when you start or lose track of an item; rewrite it whole on every change. Keep
+it under 60 lines and 8 KB: RULES holds standing rules only, dated decisions go to
+`.claude/lead/DECISIONS.md` (read on demand), `$I done` moves a done row to `archive.md`. Add
+`/.claude/lead/` to `.git/info/exclude` unless it is gitignored.
 
 ```
 SHIP: <local | pr | pr+fix> | MERGE: <user | agent | ask> | PARALLEL: <n> | BUDGET: <none | k of n items>
@@ -40,13 +39,13 @@ the kit's install path is in `claude plugin marketplace list --json`): `BRIEF.md
 verifier finishes, and `LOG.md`, one line per event. The board is the index; the folder is what
 survives a compaction or a restart and what the user reads or edits to steer. `/kit:handoff`
 and `/kit:scout take` queue items this way; for work the user gives you directly, make the item
-first: `$I new "<name>" --brief - --from lead` with the brief on stdin. Brief every thread with
-the BRIEF.md text (its `ITEM:` line is how the hooks file the report), log `working` when it
-starts (`$I log <id> working "thread <name>"`), `review` or `needs-you` when it reports, and
-`$I done <id>` when the PR is merged. Before re-briefing a thread, read BRIEF.md again (the user
-may have changed it) and VERDICT.md. Proposal cards (`.claude/lead/proposals/`, from
-`/kit:scout`): `next` takes a class A card (`python3 <kit>/hooks/scripts/proposals.py take <id>`),
-asks before a B, never starts a C.
+first: `$I new "<name>" --brief - --from lead` with the brief on stdin. Brief a thread with the
+`ITEM: <id>` line, the absolute BRIEF.md path (`$I path <id>`; a worktree has no `.claude/lead/`)
+and only what the file lacks. Log `working` when it starts (`$I log <id> working "thread
+<name>"`), `review` or `needs-you` when it reports, and `$I done <id>` when the PR is merged.
+Before re-briefing a thread, read BRIEF.md again (the user may have changed it) and VERDICT.md.
+Proposal cards (`.claude/lead/proposals/`, from `/kit:scout`): `next` takes a class A card
+(`python3 <kit>/hooks/scripts/proposals.py take <id>`), asks before a B, never starts a C.
 
 Defaults come from kit.json `lead` (`ship`, `merge`, `parallel`, `budget`, `loops`), else ship
 `pr` (`local` when the repo has no remote), merge `ask`, parallel 3, no budget. State them in one
@@ -56,8 +55,10 @@ or merge is a project policy: also write it to `.claude/kit.json` `lead`.
 
 ## Each message
 
-Route it, reply, and hand control back. Never wait on a thread in the foreground: finished
-threads wake you.
+Route it, reply, and hand control back. Never wait on a thread in the foreground or poll it:
+finished threads wake you, and the kit's watchdog wakes you about a quiet one. To wait on CI or a
+deploy, arm one Monitor or background command per subject, before you tell the user "I'll let you
+know". An interim notice (a thread waiting on its own background work) needs no reply.
 
 - **A question:** answer in place, from the board and the threads' reports.
 - **New work:** one thread per independent piece; several unrelated tasks become several
@@ -67,9 +68,8 @@ threads wake you.
     `.claude/lead/reports/<id>.md`.
   - Hours of grinding toward one measurable objective is **overnight**: with the user's OK,
     launch `kit:overnight`'s runner in the background with `--worktree`.
-- **Unclear work:** when different readings lead to materially different work, or there is no
-  checkable done, ask a few multiple-choice questions as `kit:shape` does, or put the question
-  under NEEDS YOU and start the rest.
+- **Unclear work:** when readings lead to different work or there is no checkable done, ask a
+  few multiple-choice questions as `kit:shape` does, or put it under NEEDS YOU and start the rest.
 - **Steering** ("also X", "drop Y", "Z first"): SendMessage to the thread when it fits its brief;
   otherwise stop it (TaskStop), park its branch and requeue.
 - **A decision on a NEEDS YOU item:** apply it and resume the thread.
@@ -78,20 +78,24 @@ threads wake you.
 ## Threads
 
 Start queued items while fewer than PARALLEL are working and the budget allows: `kit:implementer`
-in the background with `isolation: "worktree"`, named after the item id. Where worktrees aren't
-available (not a git repo, or the session refuses them), run threads one at a time in the main
-checkout, each on its own branch. A thread sees nothing of this conversation, so the brief
+in the background with `isolation: "worktree"`, named after the item id; that worktree
+is cut from this session's repo at its default branch. Work in another repo: no isolation; the
+brief's first step is `git -C <repo> fetch && git -C <repo> worktree add -b <branch> <repo>-<id>
+origin/<default>`, and it names that repo's gate. No worktrees possible: one thread at a time in
+the main checkout, on its own branch. A thread sees nothing of this conversation, so the brief
 carries everything it needs:
 
-- the goal and why, the DONE WHEN check, the scope and what is out of it;
+- the goal and why, the DONE WHEN check, the scope and what is out of it, and an `EXPECT: 90m`
+  line, how long it should run (the watchdog checks on it past that);
 - the project rules and skills that apply. UI or LLM work whose kit plugin is missing here: offer
-  it first (`kit:extras`), then give the thread the skill file's absolute path;
+  it first (`kit:extras`), then the skill file's absolute path. Thread facts go in a gitignored
+  `CLAUDE.local.md` listed in `.worktreeinclude` (first line `@AGENTS.md` if the repo has only
+  AGENTS.md, which it would hide); `lead.notes` is yours only;
 - the ship mode: `local` commits on its branch; `pr` also pushes and opens a PR with Intent,
   Evidence, Fixed along the way and Risk; `pr+fix` also watches CI and fixes failures;
-- the effort, passed on the Agent call: `low` when the brief has a checkable DONE WHEN, a small
-  scope and its PLACES listed (a thread at low does what was asked and little else); `medium`
-  otherwise; `high` for an ambiguous or architectural item. Scouts run at `low`; the verifier
-  runs at `medium` on its own;
+- the effort, passed on the Agent call: `low` for a checkable DONE WHEN, a small scope and its
+  PLACES listed (a thread at low does what was asked and little else), `medium` otherwise, `high`
+  for an ambiguous or architectural item; scouts run at `low`, the verifier at `medium` on its own;
 - for an item that is large, architectural or reads two ways, the fresh-eyes check first
   ([fresh-eyes.md](fresh-eyes.md)): fix what it finds in the brief before the thread starts.
 
@@ -99,20 +103,19 @@ When a thread reports:
 
 - **Done, gate green, with evidence:** if its risk is medium or high, have `kit:verifier` review
   the branch in the background, briefed with the item's `ITEM:` line, goal, DONE WHEN and branch
-  (not with the thread's report), and send real findings back to the thread: a
-  `VERDICT: FAIL scope=local:<paths>` is a scoped fix for those files, not a new brief. Then mark
-  it `review` (`done` for local work) and apply the merge policy. `DECISION:` lines in a report
-  go into your reply once, so the user can veto them. Once a PR is merged, remove the thread's
-  worktree and branch (`git worktree remove`, `git branch -D` after `git fetch --prune`) and
-  archive the item.
+  (not with the thread's report). Real findings go back to the same thread by SendMessage (its
+  context is intact), and the re-review to the same verifier: a `VERDICT: FAIL
+  scope=local:<paths>` is a scoped fix for those files, not a new brief. Then mark it `review`
+  (`done` for local work) and apply the merge policy. `DECISION:` lines in a report go into your
+  reply once, so the user can veto them. Once a PR is merged, remove the thread's worktree and
+  branch (`git worktree remove`, `git branch -D` after `git fetch --prune`) and `$I done` it.
 - **Blocked, a question, or still failing after 3 rounds:** `needs-you`, the question in one line.
 
 **Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it
 waits as `review`. `agent`: merge it yourself (`gh pr merge --squash --delete-branch`, or the
 method the repo allows) once CI is green, the review has nothing open and the risk is not high; a
-high-risk PR still waits. Not set yet: when the first PR is ready, ask "In this project, do I
-merge PRs once they're green, or do you always review them first?" and write the answer to
-`.claude/kit.json` `lead.merge`.
+high-risk PR still waits. Not set yet: when the first PR is ready, ask whether to merge green PRs
+yourself or leave them for review, and write the answer to `.claude/kit.json` `lead.merge`.
 
 The user is the author of every commit and PR: threads commit under the repo's configured git
 identity (kit.json `author`), with no AI co-author lines or footers; on a branch a thread created
@@ -125,9 +128,8 @@ migrations, deleting data and anything outside the repo need the user's go-ahead
 
 - Lead with the outcome, in at most four lines: what started, what is ready for review (with
   the PR or branch), and NEEDS YOU, ordered by what unblocks the most.
-- When nothing changed, say so in a line or not at all.
-- When a wake-up the user didn't cause (a thread finishing) leaves something for them, send
-  one PushNotification with that line, if the tool is available.
+- When nothing changed, say so in a line or not at all. When a wake-up the user didn't cause
+  leaves something for them, send one PushNotification with that line, if the tool is available.
 
 ## Standing loops
 
@@ -141,10 +143,8 @@ thread and reply in one line.
 
 ## Stop
 
-- **The user says stop:** delete your cron jobs, let working threads finish unless told otherwise,
-  rewrite the board, report.
+- **The user says stop:** delete your cron jobs, let threads finish unless told otherwise, rewrite the board, report.
 - **Budget reached:** start nothing new; let working threads finish.
-- **Two threads in a row end in `needs-you` after 3 failed rounds:** stop starting threads,
-  report, wait.
+- **Two threads in a row end in `needs-you` after 3 failed rounds:** stop starting, report, wait.
 - **`next`** (e.g. `/loop 30m /kit:lead next`): one backlog item per run; stop the loop when the
   backlog is empty or an item needs the user.

@@ -5,12 +5,14 @@ Synthetic repos and memories only, under a temporary CLAUDE_CONFIG_DIR.
 Run: python3 plugins/kit/hooks/tests/test_lessons.py   (exit 0 = all good)
 """
 
+import datetime
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
@@ -267,7 +269,7 @@ def test_model_pass():
            {"op": "edit", "id": ids[1], "text": "use token ghp_" + "a1B2" * 9},
            {"op": "retire", "id": ids[2], "why": "one-off"}]
     fake = TMP / "fake-claude"
-    fake.write_text("#!/bin/sh\necho \"$@\" > " + str(TMP / "fake-args") + "\ncat > /dev/null\n"
+    fake.write_text("#!/bin/sh\necho \"$@\" >> " + str(TMP / "fake-args") + "\ncat > /dev/null\n"
                     "echo '" + json.dumps({"result": json.dumps({"ops": ops}), "total_cost_usd": 0.0012}) + "'\n")
     fake.chmod(0o755)
     env = {"KIT_LEARN_MODEL": "1", "KIT_LEARN_CLAUDE": str(fake), "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}
@@ -275,23 +277,75 @@ def test_model_pass():
     try:
         assert "headless" in distill.model_pass(lessons.repo(repo))[1], "never in a `claude -p` session"
         os.environ["CLAUDE_CODE_ENTRYPOINT"] = "cli"
+        before = lessons.file_of(slug).read_bytes()
+        dry = lessons.review(repo, dry_run=True)
+        assert any(x.startswith("would: reworded") for x in dry) and lessons.file_of(slug).read_bytes() == before, dry
         lines, status = distill.distill(repo)
         model_lines = [line for line in lines if line.startswith(("reworded", "retired"))]
-        assert "2 change(s), $0.0012" in status and len(model_lines) == 2, (lines, status)
+        assert "2 change(s), the dry run's answer" in status and len(model_lines) == 2, (lines, status)
         args = (TMP / "fake-args").read_text()
+        assert len(args.splitlines()) == 1, "the review applies the dry run's answer without a second call"
         assert "--max-budget-usd 0.05" in args and "--tools" in args and "--safe-mode" in args, args
         by_id = {r["id"]: r for r in rows(repo)}
         assert by_id[ids[0]]["text"].startswith("Retries need") and "ghp_" not in by_id[ids[1]]["text"]
         assert by_id[ids[2]]["status"] == "retired"
         assert "already ran today" in distill.distill(repo)[1], "one model run a day per repo"
+        before = lessons.file_of(slug).read_bytes()
+        assert distill.apply_model_ops(slug, [{"op": "edit", "id": [ids[0]], "text": 5}]) == [] \
+            and lessons.file_of(slug).read_bytes() == before, "a malformed op is ignored, never raised"
     finally:
         for key in env:
             os.environ.pop(key, None)
         os.environ["KIT_LEARN_MODEL"] = "0"
 
 
+def test_judge():
+    import promote
+    repos = [make_repo(f"j{i}", f"https://example.com/acme/j{i}.git") for i in range(2)]
+    for r in repos:
+        lessons.register(lessons.repo(r))
+        for key, text in (("timeouts", "Timeouts belong on every network call."),
+                          ("orm-bump", "an orm bump breaks the jest transform of generated clients")):
+            lessons.observe(lessons.repo(r)["slug"], key, "pitfall", text, "user", activate_at=1)
+
+    def machine_keys():
+        return {r.get("key") for r in lessons.read_rows(lessons.file_of(lessons.MACHINE)) if r.get("status") == "active"}
+    info = lessons.repo(repos[0])
+    lines = promote.scan(info)
+    assert not {"timeouts", "orm-bump"} & machine_keys() and any("genericity check" in x for x in lines), \
+        "no model: a lesson in 2 repos stays local"
+    fake = TMP / "fake-judge"
+    fake.write_text("#!/usr/bin/env python3\nimport json, re, sys\nlines = re.findall(r'^(\\d+)\\. (.*)$', "
+                    "sys.stdin.read(), re.M)\nv = [{'n': int(n), 'verdict': 'generic' if 'Timeouts' in t else "
+                    "'specific'} for n, t in lines]\nprint(json.dumps({'result': json.dumps({'verdicts': v}), "
+                    "'total_cost_usd': 0.001}))\n")
+    fake.chmod(0o755)
+    env = {"KIT_LEARN_MODEL": "1", "KIT_LEARN_CLAUDE": str(fake), "CLAUDE_CODE_ENTRYPOINT": "cli"}
+    os.environ.update(env)
+    try:
+        bad = TMP / "fake-judge-bool"
+        bad.write_text("#!/usr/bin/env python3\nimport json\nprint(json.dumps({'result': json.dumps({'verdicts': "
+                       "[{'n': True, 'verdict': 'generic'}]}), 'total_cost_usd': 0.001}))\n")
+        bad.chmod(0o755)
+        os.environ["KIT_LEARN_CLAUDE"] = str(bad)
+        before = machine_keys()
+        promote.scan(info)
+        assert machine_keys() == before, "a lesson number of true is not lesson 1"
+        os.environ["KIT_LEARN_CLAUDE"] = str(fake)
+        promote.scan(info)
+        runs = lessons.load_repos()[info["slug"]]["model_runs"][lessons.today()]
+        assert runs == 1 and distill.model_allowed(info)[0], "the judge and the tidy pass share one counted run"
+    finally:
+        for key in env:
+            os.environ.pop(key, None)
+        os.environ["KIT_LEARN_MODEL"] = "0"
+    assert "timeouts" in machine_keys(), "the judge says generic: every repo gets it"
+    assert "orm-bump" not in machine_keys(), "the judge says specific: it stays in its repos"
+
+
 def test_promotion():
     import promote
+    judge, distill.judge = distill.judge, lambda info, texts: {t: True for t in texts}  # the judge: test_judge
     repos = [make_repo(f"p{i}", f"https://example.com/acme/p{i}.git") for i in range(3)]
     slugs = []
     for r in repos:
@@ -348,11 +402,68 @@ def test_promotion():
     assert len(found) >= 2 and not any("line 3" in f for f in found), found
     assert promote.scrub("@@ -1 +1 @@\n+ token ghp_" + "a1B2" * 9 + f"\n  context {repos[1]}") == \
         ["line 2: secret-shaped text"], "a diff's context lines are already in the kit"
+    distill.judge = judge
+
+
+def test_upkeep():
+    import promote
+    scratch = TMP / "scratch"
+    scratch.mkdir()
+    os.environ["KIT_TEMP_ROOTS"] = str(scratch)  # the test's repos are real; only scratch/ is a temp folder
+    try:
+        probe = make_repo("scratch/probe")
+        assert lessons.repo(probe) is None and lessons.capture(probe, "gate", "k", "probe failed") is None, \
+            "a scratchpad repo writes no lesson to a real ledger"
+        noisy = {"main": str(scratch / "old"), "origin": str(scratch / "old")}
+        lessons.register({"slug": "scratch-old-1", **noisy})
+        lessons.file_of("scratch-old-1").write_text("{}\n")
+        lessons.observe(lessons.MACHINE, "fake-gate", "gate", "the fake gate failed", "gate", extra={"from": ["scratch-old-1:L1"]})
+        assert promote.specific("keep old builds") is None, "a scratchpad repo's name is not a project term"
+        assert promote.specific("check pass/fail and/or CI/CD output") is None, "a slashed word is not a file path"
+        for text in ("The ACME integration suites need run.sh --migrate acme",
+                     "Zorbix 7 breaks ts-jest of src/generated", "ACME_DB_URL must be set"):
+            assert promote.specific(text), f"a project-specific lesson stays in its repo: {text}"
+        dry = lessons.prune(dry_run=True)
+        assert any("would drop the ledger of scratch-old-1" in x for x in dry) and any("would retire M" in x for x in dry), dry
+        assert lessons.file_of("scratch-old-1").exists(), "a dry run changes nothing"
+        lessons.prune(dry_run=False)
+        assert not lessons.file_of("scratch-old-1").exists() and "scratch-old-1" not in lessons.load_repos()
+
+        a, b = (make_repo(f"g{i}", f"https://example.com/acme/g{i}.git") for i in range(2))
+        for r in (a, b):
+            lessons.register(lessons.repo(r))
+            lessons.observe(lessons.repo(r)["slug"], "local-path", "preference", "run src/db/seed.ts first", "user", activate_at=1)
+        promote.scan()
+        assert not any(r.get("key") == "local-path" for r in lessons.read_rows(lessons.file_of(lessons.MACHINE))), \
+            "a lesson naming a project's files stays in its repo"
+
+        old = (datetime.date.today() - datetime.timedelta(days=lessons.IDLE_DAYS + 1)).isoformat()
+        with lessons.change(lessons.repo(a)["slug"]) as state:
+            for r in state["rows"]:
+                r["last"] = r["created"] = old
+                r["last_delivered"] = lessons.today()
+        assert not lessons.idle(lessons.repo(a)["slug"]), "a lesson still delivered is not idle"
+        assert lessons.review_due(a) == "", "the first session starts the clock"
+        lessons.register(lessons.repo(a), reviewed_ts=time.time() - (lessons.REVIEW_DAYS + 1) * 86400)
+        assert "lesson review for this repo is due" in lessons.review_due(a)
+        assert lessons.review_due(a) == "", "the due line shows once per period; a declined review snoozes"
+        slug = lessons.repo(a)["slug"]
+        for key, text in (("t1", "run the integration tests with a fresh database before pushing"),
+                          ("t2", "run integration tests with a fresh database before you push")):
+            lessons.observe(slug, key, "recipe", text, "user", activate_at=1)
+        before = lessons.file_of(slug).read_bytes()
+        dry = lessons.review(a, dry_run=True, model=False)
+        assert any(x.startswith("would: merged") for x in dry) and "rewords skipped (--no-model)" in dry, dry
+        assert lessons.file_of(slug).read_bytes() == before, "the preview runs on a copy"
+        lessons.main(["review", "--no-model", str(a)])
+        assert lessons.review_due(a) == "", "a review resets the clock"
+    finally:
+        os.environ.pop("KIT_TEMP_ROOTS", None)
 
 
 def main():
     for test in (test_ledger, test_import, test_capture, test_delivery, test_fail_then_pass, test_distill,
-                 test_model_pass, test_promotion):
+                 test_model_pass, test_judge, test_promotion, test_upkeep):
         test()
     print("lessons: all checks passed")
 

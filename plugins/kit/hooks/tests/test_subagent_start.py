@@ -40,7 +40,7 @@ def main():
         assert run(tree, config) == "", "no gate, no memory files: nothing, and no error"
         (repo / ".claude" / "kit.json").write_text('{"check": "true"}')
         gate_only = run(tree, config)
-        assert gate_only.startswith("kit: run the project's gate with `python3 ") and "gate.py\" check`" in gate_only \
+        assert gate_only.startswith(f"kit: in {repo} and its worktrees, run the project's gate with `python3 ") and "gate.py\" check`" in gate_only \
             and gate_only.count("\n") == 0, gate_only
         (repo / ".claude" / "kit.json").write_text('{"check": "true", "verify": "make test"}')
         assert "gate.py\" verify` (kit.json `verify`: `make test`)" in run(tree, config), "verify wins over check"
@@ -56,7 +56,8 @@ def main():
 
         delivered = run(tree, config)
         assert "one test per behaviour" in delivered, "the hook imports the memories and delivers them"
-        assert delivered.startswith("kit: run the project's gate"), "the gate line comes first"
+        assert delivered.startswith(f"kit: in {repo} and"), "the gate line comes first"
+        assert f"past sessions in {repo} (" in delivered, "the lessons name their repo too"
         text = subagent_start.lessons(tree, config)  # the fallback reading, from a worktree: the main checkout's
         assert len(text) <= subagent_start.MAX_CHARS, len(text)
         assert "- feedback_lean-tests.md: one test per behaviour" in text and "pitfall_39.md" in text, text

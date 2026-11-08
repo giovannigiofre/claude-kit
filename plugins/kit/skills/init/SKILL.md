@@ -26,13 +26,15 @@ and its CI actually run, not guesses.
 4. **protect**: paths that must never be edited (`read-only`) or never overwritten once written
    (`no-overwrite`), each with a `reason`, from the repo's rules (raw data, generated files,
    vendored code, applied migrations).
-5. **lead** (the coordinator): `read` (1-3 files to read before planning: backlog, decision
-   log), `backlog`, `notes` (one line of project-specific advice), and optionally `ship`
+5. **lead** (the coordinator): `read` (1-3 files to read before planning: backlog, decision log),
+   `backlog`, `notes` (one line of advice for the coordinator only: facts threads need go in a
+   gitignored `CLAUDE.local.md`, whose first line is `@AGENTS.md` when the repo has AGENTS.md and
+   no CLAUDE.md, since a CLAUDE.local.md stops AGENTS.md being read), and optionally `ship`
    (`local`, `pr` or `pr+fix`), `parallel` (default 3), `budget` (`{"items": N}` or `"none"`),
-   `loops` (`[{"name", "every", "run"}]`). Writing `ship` here is the user's standing go-ahead
-   for threads to push and open PRs, so ask before setting it to `pr` or `pr+fix`. Ask too who
-   merges PRs in this project and write `merge`: `user` (they always review first) or `agent`
-   (the coordinator merges green, reviewed, not-high-risk PRs).
+   `loops` (`[{"name", "every", "run"}]`). Writing `ship` here is the user's standing go-ahead for
+   threads to push and open PRs, so ask before setting it to `pr` or `pr+fix`. Ask too who merges
+   PRs in this project and write `merge`: `user` (they always review first) or `agent` (the
+   coordinator merges green, reviewed, not-high-risk PRs).
    Write `author` at the top level: the user's git identity as `"Name <email>"` (from their own
    recent commits or their global git config, never an AI's; confirm it with them). The kit's
    SessionStart hook sets it on the repo whenever git's identity is missing or an AI's, so every
@@ -46,10 +48,10 @@ and its CI actually run, not guesses.
    skill named `verify` on its own before each commit and behind `/verify` (an older `e2e` skill
    keeps working but is not run natively: rename it). Try each step once while writing it.
    Threads start in a fresh worktree: the skill says how to set one up (install dependencies,
-   migrate a local database), untracked files the app needs to run (`.env`, local config) go in
-   `.worktreeinclude` (gitignore syntax), which Claude Code copies into every new worktree, and
-   `"worktree": {"symlinkDirectories": ["node_modules"]}` in `.claude/settings.json` saves a
-   reinstall per thread. A Next.js 16.3+ app writes its own agent block into `AGENTS.md`
+   migrate a local database), untracked files threads need (`.env`, local config,
+   `CLAUDE.local.md`) go in `.worktreeinclude` (gitignore syntax), which Claude Code copies into
+   every worktree it creates, and `"worktree": {"symlinkDirectories": ["node_modules"]}` in
+   `.claude/settings.json` saves a reinstall per thread. A Next.js 16.3+ app writes its own agent block into `AGENTS.md`
    (bundled docs under `node_modules/next/dist/docs/`): check it is there.
 7. **gitignore**: `.claude/evidence/` (proof from `/kit:go` and threads), `.claude/overnight/`
    (run logs) and `.claude/lead/` (the board), unless the user wants the board shared.
