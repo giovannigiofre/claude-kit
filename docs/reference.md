@@ -209,7 +209,9 @@ kit acts on:
 - **Effort per thread.** `kit:implementer` declares `effort: medium` (Opus 5.5's default) as
   its floor, so a session running at `xhigh` does not spawn `xhigh` threads; the coordinator
   passes `effort` on the Agent call: `low` for a brief with a checkable DONE WHEN, a small scope
-  and its PLACES listed, `medium` otherwise, `high` for ambiguous or architectural work. Scouts
+  and its PLACES listed, `medium` otherwise, `high` for ambiguous or architectural work. The call
+  value overrides the frontmatter and stays in effect when the thread is resumed (sub-agents
+  reference, Claude Code 2.1.292+); the values are `low`, `medium`, `high`, `xhigh`, `max`. Scouts
   run at `low`, `kit:verifier` at `medium` (declared in its frontmatter; it used to inherit the
   session's level). Anthropic's effort page puts subagents under `low` ("simpler tasks that need
   the best speed and lowest costs, such as subagents") and says to run an effort sweep on your
