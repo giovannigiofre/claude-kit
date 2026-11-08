@@ -253,6 +253,27 @@ iterazione, dashboard e driver per dieci harness. Costruiti, approvati prima dal
 Costo sempre caricato: zero (le due skill sono solo da tastiera; la riga di contesto di ask
 mode arriva solo in quella modalità).
 
+## 4c. Kit 1.6: effort per thread e occhi freschi sul brief (8 novembre)
+
+Verifica chiesta dall'utente: i thread sono "goldfish"? Sì: la documentazione di Claude Code
+dice che un subagent parte con un contesto fresco e isolato, senza la conversazione del
+coordinatore; un `kit:implementer` vede il suo system prompt, i CLAUDE.md del progetto, uno
+snapshot di `git status`, il brief e la riga del kit (lezioni e gate). Il brief è l'unico canale.
+
+Effort: l'implementer aveva `medium` (il default di Opus 5.5); il verifier ereditava il livello
+della sessione, quindi da una sessione a `xhigh` partivano review a `xhigh`. La pagina Effort di
+Anthropic mette i subagent sotto `low` e chiede uno sweep sugli eval propri invece di ereditare
+impostazioni; l'unica misura indipendente (Prompt-Induced Waste, Opus 5) dà `low` 16-17 su 25
+contro `high` 18, a un quarto del costo. Fatto: il coordinatore passa l'effort per thread
+(`low` per un brief chiaro, piccolo e con i PLACES; `medium` altrimenti; `high` per item
+ambigui), gli scout a `low`, il verifier fissato a `medium`; il default resta `medium` finché un
+eval a 3 run (`CLAUDE_CODE_EFFORT_LEVEL=low` contro `medium`) non dice altro.
+
+Da Google EGM (Apache-2.0) si è preso un solo meccanismo: una passata a occhi freschi sul brief,
+per item grandi o ambigui, che parafrasa, elenca cosa andrebbe indovinato, cosa DONE WHEN non
+richiede, cosa esiste da riusare e cosa il brief cita che non esiste. Non presi: la pipeline
+spec-driven a cinque stadi, i nove persona, le regole di tono, il "mai un'opzione raccomandata".
+
 ## 5. Da decidere (in ordine di impatto)
 
 Decisioni già prese dall'utente il 29 ottobre: guard come in 1.3 (niente regole su deploy,

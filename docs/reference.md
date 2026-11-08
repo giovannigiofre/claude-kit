@@ -191,6 +191,32 @@ Classes: A mechanical and reversible (the coordinator's `next` takes it), B need
 queued item and retires the card; `retire [--days 30]` archives cards older than that or whose
 origin file is gone.
 
+## Effort and fresh eyes
+
+Threads start fresh: a `kit:implementer` sees its own system prompt, the project's CLAUDE.md, a
+`git status` snapshot, the brief and the kit's start-up line (lessons and the gate command), and
+nothing of the coordinator's conversation. The brief is the whole channel. Two consequences the
+kit acts on:
+
+- **Effort per thread.** `kit:implementer` declares `effort: medium` (Opus 5.5's default) as
+  its floor, so a session running at `xhigh` does not spawn `xhigh` threads; the coordinator
+  passes `effort` on the Agent call: `low` for a brief with a checkable DONE WHEN, a small scope
+  and its PLACES listed, `medium` otherwise, `high` for ambiguous or architectural work. Scouts
+  run at `low`, `kit:verifier` at `medium` (declared in its frontmatter; it used to inherit the
+  session's level). Anthropic's effort page puts subagents under `low` ("simpler tasks that need
+  the best speed and lowest costs, such as subagents") and says to run an effort sweep on your
+  own evals rather than carry a setting over. The sweep for the kit:
+  `CLAUDE_CODE_EFFORT_LEVEL=low claude plugin eval . --case lead-verifies-before-done --runs 3 ...`
+  against the same at `medium` (the variable beats every frontmatter and call), comparing pass
+  rate and cost; change the default only on that evidence.
+- **Fresh eyes on a brief** (`skills/lead/fresh-eyes.md`): for an item that is large,
+  architectural or reads two ways, one read-only subagent gets the brief alone and returns a
+  paraphrase, what it would have to guess, what DONE WHEN does not need, what exists to reuse
+  and what the brief names that does not exist. The lead fixes the brief before the thread
+  starts. Adapted from Google's Elephant-Goldfish Model (Apache-2.0), which runs five such
+  passes on a design document before any code; the kit runs one, on a brief, only when the
+  item deserves it.
+
 ## The gate record
 
 `hooks/scripts/gate.py` runs a gate and keeps the result as evidence:

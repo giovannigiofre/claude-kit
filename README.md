@@ -101,7 +101,7 @@ Safety per project (`/kit-safety`): **Host** or **Sandbox**.
 
 | Piece | What it does |
 |---|---|
-| `kit:lead` | The coordinator: board, threads, routing, short replies, standing loops, notifications |
+| `kit:lead` | The coordinator: board, items on disk, threads with an effort chosen per brief, a fresh-eyes check of a large brief before its thread starts, routing, short replies, standing loops, notifications |
 | `kit:shape` | A brain-dump into a brief through at most 3 multiple-choice rounds |
 | `kit:investigate` | Root-cause debugging for any failure; `scripts/compact_logs.py` reads big log exports and diffs a failing run against a working one |
 | `kit:overnight` | Launches `scripts/overnight.py`: fresh `claude -p` per step, commit on a green gate, reset otherwise, notes as memory, optional caps, resumes early stops |
@@ -112,8 +112,8 @@ Safety per project (`/kit-safety`): **Host** or **Sandbox**.
 | `/kit:init` | Sets up a project (kit.json, e2e skill, safety, permissions) |
 | `/kit:learn` | Tidies the lesson ledger (merge, retire shipped fixes, proposals to retire or harden, undo); `promote` turns a lesson seen across repos into a kit PR; corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
 | `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
-| `kit:implementer` | A thread: one item from brief to PR in its own worktree, effort medium |
-| `kit:verifier` | A fresh-context review against the intent, with a per-project memory of pitfalls |
+| `kit:implementer` | A thread: one item from brief to PR in its own worktree; effort set per thread by the coordinator (low for a clear, small brief, medium otherwise, high for ambiguous work) |
+| `kit:verifier` | A fresh-context review against the intent at effort medium, with a per-project memory of pitfalls |
 | Hooks + mod | `protect`, `guard`, `on_edit`, `bash_edits`, `permission`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop` (files each thread's report and each verdict under its item), the lesson ledger `lessons.py`, `gate.py` (runs `check` or `verify` and records the tree it passed on: the evidence a PR body cites), `items.py` and `proposals.py` (the coordinator's items and proposal cards on disk); the mod (`kit.tsx`: modes light / loop / ask, safety, status line with threads waiting for you, a native notification when the board gains work for you) |
 
 **Domain plugins** (project scope, offered by `kit:extras` when a task needs them):

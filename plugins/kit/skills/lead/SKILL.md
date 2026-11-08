@@ -87,7 +87,13 @@ carries everything it needs:
 - the project rules and skills that apply. UI or LLM work whose kit plugin is missing here: offer
   it first (`kit:extras`), then give the thread the skill file's absolute path;
 - the ship mode: `local` commits on its branch; `pr` also pushes and opens a PR with Intent,
-  Evidence, Fixed along the way and Risk; `pr+fix` also watches CI and fixes failures.
+  Evidence, Fixed along the way and Risk; `pr+fix` also watches CI and fixes failures;
+- the effort, passed on the Agent call: `low` when the brief has a checkable DONE WHEN, a small
+  scope and its PLACES listed (a thread at low does what was asked and little else); `medium`
+  otherwise; `high` for an ambiguous or architectural item. Scouts run at `low`; the verifier
+  runs at `medium` on its own;
+- for an item that is large, architectural or reads two ways, the fresh-eyes check first
+  ([fresh-eyes.md](fresh-eyes.md)): fix what it finds in the brief before the thread starts.
 
 When a thread reports:
 
@@ -102,19 +108,18 @@ When a thread reports:
 - **Blocked, a question, or still failing after 3 rounds:** `needs-you`, the question in one line.
 
 **Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it
-waits as `review`. `agent`: merge the PR yourself (`gh pr merge --squash --delete-branch`, or the
+waits as `review`. `agent`: merge it yourself (`gh pr merge --squash --delete-branch`, or the
 method the repo allows) once CI is green, the review has nothing open and the risk is not high; a
-high-risk PR still waits for the user. Not set yet: when the first PR is ready, ask "In this
-project, do I merge PRs once they're green, or do you always review them first?" and write the
-answer to `.claude/kit.json` `lead.merge`.
+high-risk PR still waits. Not set yet: when the first PR is ready, ask "In this project, do I
+merge PRs once they're green, or do you always review them first?" and write the answer to
+`.claude/kit.json` `lead.merge`.
 
-The user is the author of every commit and PR: threads commit under the git identity the repo is
-configured with (kit.json `author` sets it), with no AI co-author lines or footers. On a branch a
-thread created for its item, it may commit, amend, rebase and force-push with
-`--force-with-lease` as the work needs; never on the default branch or a branch it didn't create.
-Pushing and opening PRs follow SHIP when it comes from kit.json or from the user in this session;
-otherwise ask once before the first push and save the answer. Deploys, migrations, deleting data
-and anything outside the repo always need the user's go-ahead.
+The user is the author of every commit and PR: threads commit under the repo's configured git
+identity (kit.json `author`), with no AI co-author lines or footers; on a branch a thread created
+for its item it may amend, rebase and force-push with `--force-with-lease`, never on the default
+branch or one it didn't create. Pushing and PRs follow SHIP when it comes from kit.json or from
+the user in this session, else ask once before the first push and save the answer. Deploys,
+migrations, deleting data and anything outside the repo need the user's go-ahead.
 
 ## Replies
 
@@ -136,8 +141,8 @@ thread and reply in one line.
 
 ## Stop
 
-- **The user says stop:** delete your cron jobs, let working threads finish unless told
-  otherwise, rewrite the board, report.
+- **The user says stop:** delete your cron jobs, let working threads finish unless told otherwise,
+  rewrite the board, report.
 - **Budget reached:** start nothing new; let working threads finish.
 - **Two threads in a row end in `needs-you` after 3 failed rounds:** stop starting threads,
   report, wait.
