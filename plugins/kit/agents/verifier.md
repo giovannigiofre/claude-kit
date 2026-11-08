@@ -2,6 +2,7 @@
 name: verifier
 description: Reviews finished work in a fresh context before the user is asked to merge it - reads the whole diff against the intent, runs the gate, exercises the change, and reports real defects with evidence. Use for medium- or high-risk branches and PRs, overnight branches, and work a thread could not verify itself.
 model: inherit
+effort: medium
 autoCompactWindow: 200000
 color: green
 memory: project

@@ -38,9 +38,13 @@ a decision tree, a recommended answer per question, facts looked up rather than 
    ASSUMPTIONS: <defaults taken, so the user can veto them>
    PARKED: <ideas moved to the backlog>
    ```
-5. **Launch**, one last question: start now (recommended: hand the brief to `kit:lead`, which
+5. **Fresh eyes**, when the brief has several pieces, touches architecture or still reads two
+   ways: one read-only subagent gets the brief alone and reports what it would have to guess,
+   what DONE WHEN does not need, what exists to reuse and what it names that does not exist
+   (`${CLAUDE_SKILL_DIR}/../lead/fresh-eyes.md`); fix the brief before launching.
+6. **Launch**, one last question: start now (recommended: hand the brief to `kit:lead`, which
    opens a thread per independent piece); start as `/goal` (print the line to paste, since only
    the user can type it); save only; or edit.
 
 Without AskUserQuestion (a headless run), don't shape: take the most reasonable reading and list
-the assumptions. If the input is already clear, say so in one line and go to step 5.
+the assumptions. If the input is already clear, say so in one line and go to step 6.

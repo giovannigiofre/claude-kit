@@ -11,8 +11,7 @@ queued item on disk, else a class A proposal card, else the backlog that `.claud
 `lead.backlog` or `lead.read` points to).
 
 You are the conversation; threads do the work. You decide what becomes a thread, brief it, keep
-the board and talk to the user. You see what threads report, not every step they take, so your
-context stays free for decisions. (Modelled on Claude Projects, built on background agents.)
+the board and talk to the user. You see what threads report, not every step they take.
 
 ## The board
 
@@ -42,12 +41,11 @@ survives a compaction or a restart and what the user reads or edits to steer. `/
 and `/kit:scout take` queue items this way; for work the user gives you directly, make the item
 first: `$I new "<name>" --brief - --from lead` with the brief on stdin. Brief a thread with the
 `ITEM: <id>` line, the absolute BRIEF.md path (`$I path <id>`; a worktree has no `.claude/lead/`)
-and only what the file lacks: retyping is output you pay for. Log `working` when it starts (`$I
-log <id> working "thread <name>"`), `review` or `needs-you` when it reports, and
-`$I done <id>` when the PR is merged. Before re-briefing a thread, read BRIEF.md again (the user
-may have changed it) and VERDICT.md. Proposal cards (`.claude/lead/proposals/`, from
-`/kit:scout`): `next` takes a class A card (`python3 <kit>/hooks/scripts/proposals.py take <id>`),
-asks before a B, never starts a C.
+and only what the file lacks. Log `working` when it starts (`$I log <id> working "thread
+<name>"`), `review` or `needs-you` when it reports, and `$I done <id>` when the PR is merged.
+Before re-briefing a thread, read BRIEF.md again (the user may have changed it) and VERDICT.md.
+Proposal cards (`.claude/lead/proposals/`, from `/kit:scout`): `next` takes a class A card
+(`python3 <kit>/hooks/scripts/proposals.py take <id>`), asks before a B, never starts a C.
 
 Defaults come from kit.json `lead` (`ship`, `merge`, `parallel`, `budget`, `loops`), else ship
 `pr` (`local` when the repo has no remote), merge `ask`, parallel 3, no budget. State them in one
@@ -84,9 +82,8 @@ in the background with `isolation: "worktree"`, named after the item id; that wo
 is cut from this session's repo at its default branch. Work in another repo: no isolation; the
 brief's first step is `git -C <repo> fetch && git -C <repo> worktree add -b <branch> <repo>-<id>
 origin/<default>`, and it names that repo's gate. No worktrees possible: one thread at a time in
-the main checkout, on its own branch. `effort: "lower"` for mechanical items and Explore scouts,
-`"higher"` for an ambiguous or architectural one. A thread sees nothing of this conversation, so
-the brief carries everything it needs:
+the main checkout, on its own branch. A thread sees nothing of this conversation, so the brief
+carries everything it needs:
 
 - the goal and why, the DONE WHEN check, the scope and what is out of it, and an `EXPECT: 90m`
   line, how long it should run (the watchdog checks on it past that);
@@ -95,7 +92,12 @@ the brief carries everything it needs:
   `CLAUDE.local.md` listed in `.worktreeinclude` (first line `@AGENTS.md` if the repo has only
   AGENTS.md, which it would hide); `lead.notes` is yours only;
 - the ship mode: `local` commits on its branch; `pr` also pushes and opens a PR with Intent,
-  Evidence, Fixed along the way and Risk; `pr+fix` also watches CI and fixes failures.
+  Evidence, Fixed along the way and Risk; `pr+fix` also watches CI and fixes failures;
+- the effort, passed on the Agent call: `low` for a checkable DONE WHEN, a small scope and its
+  PLACES listed (a thread at low does what was asked and little else), `medium` otherwise, `high`
+  for an ambiguous or architectural item; scouts run at `low`, the verifier at `medium` on its own;
+- for an item that is large, architectural or reads two ways, the fresh-eyes check first
+  ([fresh-eyes.md](fresh-eyes.md)): fix what it finds in the brief before the thread starts.
 
 When a thread reports:
 
@@ -110,19 +112,17 @@ When a thread reports:
 - **Blocked, a question, or still failing after 3 rounds:** `needs-you`, the question in one line.
 
 **Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it
-waits as `review`. `agent`: merge the PR yourself (`gh pr merge --squash --delete-branch`, or the
+waits as `review`. `agent`: merge it yourself (`gh pr merge --squash --delete-branch`, or the
 method the repo allows) once CI is green, the review has nothing open and the risk is not high; a
-high-risk PR still waits for the user. Not set yet: when the first PR is ready, ask "In this
-project, do I merge PRs once they're green, or do you always review them first?" and write the
-answer to `.claude/kit.json` `lead.merge`.
+high-risk PR still waits. Not set yet: when the first PR is ready, ask whether to merge green PRs
+yourself or leave them for review, and write the answer to `.claude/kit.json` `lead.merge`.
 
-The user is the author of every commit and PR: threads commit under the git identity the repo is
-configured with (kit.json `author` sets it), with no AI co-author lines or footers. On a branch a
-thread created for its item, it may commit, amend, rebase and force-push with
-`--force-with-lease` as the work needs; never on the default branch or a branch it didn't create.
-Pushing and opening PRs follow SHIP when it comes from kit.json or from the user in this session;
-otherwise ask once before the first push and save the answer. Deploys, migrations, deleting data
-and anything outside the repo always need the user's go-ahead.
+The user is the author of every commit and PR: threads commit under the repo's configured git
+identity (kit.json `author`), with no AI co-author lines or footers; on a branch a thread created
+for its item it may amend, rebase and force-push with `--force-with-lease`, never on the default
+branch or one it didn't create. Pushing and PRs follow SHIP when it comes from kit.json or from
+the user in this session, else ask once before the first push and save the answer. Deploys,
+migrations, deleting data and anything outside the repo need the user's go-ahead.
 
 ## Replies
 
