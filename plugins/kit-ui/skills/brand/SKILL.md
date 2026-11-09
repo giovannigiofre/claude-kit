@@ -109,4 +109,4 @@ at every size when the detailed one reads worse; loosen a display font that feel
   brand-sweep grep returns nothing except leftovers the owner approved; both reviews ran, and the
   findings the rebrand introduced are fixed.
 
-Origin: the myinsurance → Polizzen rebrand (2026-10-16), tested end to end with a fictional brand the same day.
+Origin: a real product rebrand (2026-10-16), tested end to end with a fictional brand the same day.

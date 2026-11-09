@@ -40,7 +40,7 @@ REASONING = re.compile(r"(?<![\"'`(])\b(?:(?:show|write|share|explain|print)(?: 
                        r"(?:reasoning|thinking|thought process|chain of thought)|think (?:out loud|aloud|step[ -]by[ -]step))\b", re.I)
 REFERENCE = re.compile(r"(?<![\w/.-])(kit(?:-ui|-llm)?):([a-z][a-z0-9-]*)")
 # files that describe the past (removed pieces are named there on purpose)
-HISTORY = {"CATALOG.md", "proposta-kit-1.0.md"}
+HISTORY = {"CATALOG.md"}
 
 
 def frontmatter(path):

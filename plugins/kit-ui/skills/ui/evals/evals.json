@@ -3,13 +3,13 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "nel repo concorsit (Next.js, apps/web) aggiungi la schermata /preparazione/[slug]: la home del pacchetto di preparazione per un concorso, con giorni alla prova, percentuale di preparazione, piano di oggi e i moduli (quiz, situazionali, simulazione, tutor). Fammi vedere prima come la imposteresti: passi, skill che useresti, controlli finali. Non scrivere codice.",
+      "prompt": "nel repo acme (Next.js, apps/web) aggiungi la schermata /preparazione/[slug]: la home del pacchetto di preparazione per un concorso, con giorni alla prova, percentuale di preparazione, piano di oggi e i moduli (quiz, situazionali, simulazione, tutor). Fammi vedere prima come la imposteresti: passi, skill che useresti, controlli finali. Non scrivere codice.",
       "expected_output": "Task type B led by impeccable: context on the project stylesheet, extend the existing surface with project tokens, no taste draw, keeps the DESIGN.md stamps (uppercase Schibsted 800; Courier only for data), done-check with inspector/detect/critique/audit/guidelines/verify.",
       "files": [],
       "assertions": [
         {"name": "lead-is-impeccable", "text": "The plan makes impeccable the lead skill for this app screen"},
         {"name": "no-new-palette-or-type", "text": "The plan does not draw a new palette or type (no taste draw.mjs direction, or explicitly --keep palette,type) and builds with the project's tokens"},
-        {"name": "keeps-stamp-labels", "text": "The plan follows Concorsit DESIGN.md for stamps (uppercase Schibsted 800 stamps kept; Courier Prime only for data), and says taste's micro-label rule must not override the stamps"},
+        {"name": "keeps-stamp-labels", "text": "The plan follows the project's DESIGN.md for stamps (uppercase Schibsted 800 stamps kept; Courier Prime only for data), and says taste's micro-label rule must not override the stamps"},
         {"name": "telemetry-off", "text": "The plan runs impeccable with telemetry disabled (IMPECCABLE_NO_TELEMETRY=1 / DO_NOT_TRACK=1)"},
         {"name": "measures-mobile-and-desktop", "text": "The done-check includes screenshots or inspection at phone width (about 390) and desktop width (about 1440)"},
         {"name": "accessibility-audit", "text": "The done-check includes an accessibility audit (impeccable audit or equivalent)"},
@@ -33,13 +33,13 @@
     },
     {
       "id": 3,
-      "prompt": "la home di concorsit sembra generica e fatta con l'AI, rendila migliore. Dimmi solo il piano: cosa controlli, quali skill, cosa cambieresti per primo e cosa NON tocchi.",
+      "prompt": "la home di acme sembra generica e fatta con l'AI, rendila migliore. Dimmi solo il piano: cosa controlli, quali skill, cosa cambieresti per primo e cosa NON tocchi.",
       "expected_output": "Task type C led by impeccable: critique then audit, fixes via named commands, taste before/after inspection only as a meter, keeps the existing brand and stamp labels, report with precedence calls.",
       "files": [],
       "assertions": [
         {"name": "critique-and-audit-first", "text": "The plan starts with an impeccable critique and/or audit of the existing home before changing anything"},
-        {"name": "keeps-brand", "text": "The plan states it does not replace the existing palette and fonts (Concorsit tokens, Schibsted Grotesk / Atkinson / Courier Prime)"},
-        {"name": "keeps-stamp-labels", "text": "The plan follows Concorsit DESIGN.md for stamps (uppercase Schibsted 800 stamps kept; Courier Prime only for data), and says taste's micro-label rule must not override the stamps"},
+        {"name": "keeps-brand", "text": "The plan states it does not replace the existing palette and fonts (the project's tokens, Schibsted Grotesk / Atkinson / Courier Prime)"},
+        {"name": "keeps-stamp-labels", "text": "The plan follows the project's DESIGN.md for stamps (uppercase Schibsted 800 stamps kept; Courier Prime only for data), and says taste's micro-label rule must not override the stamps"},
         {"name": "taste-only-as-meter", "text": "Taste is used, if at all, as a measuring/inspection tool or source of ideas, not to redraw the direction"},
         {"name": "telemetry-off", "text": "The plan runs impeccable with telemetry disabled (IMPECCABLE_NO_TELEMETRY=1 / DO_NOT_TRACK=1)"},
         {"name": "before-after-evidence", "text": "The plan produces before/after evidence (screenshots or scores) to show the home actually improved"}

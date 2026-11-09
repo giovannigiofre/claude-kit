@@ -5,9 +5,7 @@ for each piece of work, every thread works in its own worktree and ends with a P
 without reading the diff, and deterministic hooks keep the quality gates on. It is a git repo
 installed once as a plugin marketplace, and it works in every project.
 
-Design rule, from the research in [docs/proposta-kit-1.0.md](docs/proposta-kit-1.0.md) and
-[docs/proposta-kit-2.0.md](docs/proposta-kit-2.0.md): **few instructions, deterministic checks,
-native features first.** Current models verify their own
+Design rule: **few instructions, deterministic checks, native features first.** Current models verify their own
 work and follow instructions literally, so generic rules and mandated process cost tokens and can
 lower quality; tests, gates and hooks don't. Every piece of the kit is an assumption about what
 the model can't do alone, re-checked when a new model lands.
@@ -139,7 +137,7 @@ with a `# Compact instructions` section in CLAUDE.md, auto mode, `/doctor prompt
 ## Install
 
 ```bash
-git clone git@github.com:giovannigiofre/claude-kit.git ~/Documents/repositories/claude-kit
+git clone https://github.com/giovannigiofre/claude-kit.git ~/Documents/repositories/claude-kit
 ~/Documents/repositories/claude-kit/install.sh            # or: install.sh --github
 ```
 
@@ -237,10 +235,9 @@ Tests and evals: [docs/reference.md#develop](docs/reference.md#develop).
 ## Sources
 
 - Research behind this version (Anthropic's guides for Opus 5 and 5.5, the Claude Code team,
-  measured studies of context files and instruction following, practitioners' loops):
-  [docs/proposta-kit-1.0.md](docs/proposta-kit-1.0.md); for 2.0 (Fable 5.1, Claude Code
-  2.1.312, the 2026 studies on agent PRs, harness overhead and code decay, the owner's stack):
-  [docs/proposta-kit-2.0.md](docs/proposta-kit-2.0.md).
+  measured studies of context files and instruction following, practitioners' loops); for 2.0,
+  the 2026 studies on agent PRs, harness overhead and code decay. The papers and tools are
+  listed in [CATALOG.md](CATALOG.md).
 - Boris Cherny: verification as the main lever, `/go`, loops that do the prompting:
   https://x.com/bcherny/status/2044847858634064115, https://x.com/bcherny/status/2038454341884154269
 - Claude Code docs, Projects (the model for `kit:lead`): https://code.claude.com/docs/en/claude-projects
@@ -248,3 +245,7 @@ Tests and evals: [docs/reference.md#develop](docs/reference.md#develop).
   `kit:overnight`, firstmate for the coordinator, "Your AGENTS.md is a Neural Net" for
   `/kit:learn`: https://github.com/kunchenguid
 - Third-party tools considered, with decisions: [CATALOG.md](CATALOG.md).
+
+## License
+
+Public domain ([Unlicense](LICENSE)): use it, copy it, change it, no credit needed.

@@ -1,7 +1,7 @@
 #!/bin/sh
 # One-time setup of claude-kit on a machine. Re-running is safe.
 #   ./install.sh            register this clone as the marketplace (edits are live after /reload-plugins)
-#   ./install.sh --github   register the private GitHub repo instead (needs `gh auth login` or git credentials)
+#   ./install.sh --github   register the GitHub repo instead (needs `gh auth login` or git credentials)
 set -e
 cd "$(dirname "$0")"
 if [ "$1" = "--github" ]; then SRC="giovannigiofre/claude-kit"; else SRC="$(pwd)"; fi

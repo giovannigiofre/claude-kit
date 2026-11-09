@@ -2,7 +2,7 @@
 
 Read by `/kit:init` step 1. Each row is a check a machine runs; propose only the ones the repo
 has the tools for, time each once, and say what the repo lacks. Sources: the evidence collected
-for kit 2.0 (`docs/proposta-kit-2.0.md`): agent PRs leave 27 % of changed Python lines and 61 %
+for kit 2.0: agent PRs leave 27 % of changed Python lines and 61 %
 of changed Java lines executed by a test (Dipongkor et al. 2026), duplicated blocks grew 81 % in
 AI-era commits (GitClear 2026), a planted-test study found suites with 100 % line coverage that
 missed a fifth of planted bugs. Hence diff coverage and duplication in `verify`, affected tests
