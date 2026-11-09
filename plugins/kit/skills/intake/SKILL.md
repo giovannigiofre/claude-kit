@@ -10,7 +10,7 @@ argument-hint: <github owner/repo, URL or name>
 Candidate: $ARGUMENTS
 
 The kit lives at the marketplace named `claude-kit` (find its directory with
-`claude plugin marketplace list`). Its `CATALOG.md` is the record; README §4 is the procedure.
+`claude plugin marketplace list`). Its `CATALOG.md` is the record; the steps below are the procedure.
 
 1. **Look it up first.** If `CATALOG.md` already has the tool, report that decision and stop
    unless the user wants a re-evaluation (then say what changed).

@@ -24,6 +24,6 @@ Facts with file:line; "none" under a heading with nothing; no advice beyond thes
 What the lead does with the answer: a paraphrase that misses the intent means the brief is
 rewritten, not the thread briefed harder; MISSING and WRONG REFERENCES are fixed in the brief;
 NOT NEEDED is cut unless the user wants it; REUSE goes into PLACES. Ask the user only for a
-decision the brief cannot make alone. Log it (`items.py log <id> checked "fresh eyes: <n> gaps
-fixed"`). Skip it for small, well-specified items: it costs a subagent, and the thread itself
+decision the brief cannot make alone. Log it (`items.py log <id> queued "fresh eyes: <n> gaps
+fixed"`; the status word stays `queued`, so `next` still finds the item). Skip it for small, well-specified items: it costs a subagent, and the thread itself
 finds small gaps.

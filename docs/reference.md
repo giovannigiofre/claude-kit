@@ -8,14 +8,14 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
 {
   "check": "fast gate (< ~30 s): lint + format check (+ types); runs before Claude stops if files changed",
   "verify": "full gate: tests, evals, build; what 'done' means for threads, /kit:go and kit:overnight",
-  "checkTimeout": 540,
+  "checkTimeout": 540, "verifyTimeout": 1800,
   "maxStopRetries": 3,
   "onEdit": [{"glob": "**/*.py", "run": "uv run ruff format -q \"$FILE\"", "timeout": 120}],
   "protect": [
     {"glob": "data/raw/**", "mode": "no-overwrite", "reason": "raw files are immutable"},
     {"glob": "vendor/**", "mode": "read-only", "reason": "vendored code"}
   ],
-  "guard": {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40, "allowCommands": [],
+  "guard": {"protectedBranches": ["main", "master"], "allowCommands": [],
             "denyCommands": [{"pattern": "^npm install\\b", "reason": "pnpm only here"}], "askCommands": []},
   "watchdog": {"silentMin": 20, "bashDeadlineMin": 30, "permissionMin": 2},
   "llm": "on",
@@ -30,11 +30,15 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
     "merge": "user",
     "parallel": 3,
     "budget": "none",
-    "loops": [{"name": "babysit-prs", "every": "10m", "run": "/kit:go babysit"}]
+    "loops": [{"name": "tend-prs", "every": "10m", "run": "tend the threads' open PRs: failed CI, review comments, merge conflicts"}]
   }
 }
 ```
 
+- The file's presence opts the project in, `{}` included; every key is optional. The
+  session-start line names any key the kit does not know, with the nearest known name
+  (`unknown key "chek" (did you mean "check"?)`), and a `check`/`verify` that is not a string or a
+  `protect`/`onEdit` that is not a list; a misspelt key never fails silently.
 - `onEdit` commands run from the repo root; `$FILE` is the absolute path of the edited file,
   `$REL` the path relative to the repo. `**` matches across directories, `*` within one.
 - `protect`: `read-only` blocks every edit; `no-overwrite` allows new files and blocks edits to
@@ -46,7 +50,8 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   left the default branch, plus uncommitted ones; shell-quoted, space-separated; `echo
   "$KIT_CHANGED_FILES" | xargs -r ruff check` keeps names with spaces whole), `KIT_CHANGED_COUNT`
   and `KIT_GATE` in its environment, so `check` can look only at what changed. `gate.py` passes
-  the same.
+  the same. `checkTimeout` (540 s) bounds `check` wherever it runs, `verifyTimeout` (1800 s)
+  bounds `verify`; a gate that times out fails.
 - `guard`: on by default in a project with `kit.json`; `"off"` turns it off. `protectedBranches`
   defaults to main, master and the remote's default branch. `denyCommands` / `askCommands`: the
   project's own rules, `{"pattern": "<regex over the whole command>", "reason": "..."}` each
@@ -54,8 +59,12 @@ Committed with the project; `/kit:init` writes it from what the repo and its CI 
   optional per-session cap on subagents (ask past one, refuse past the other); the native
   `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` caps how many run at once. `allowCommands`: regexes the
   guard lets through. `attribution` (default `"block"`): blocks AI credits in commit messages, PR,
-  issue and comment text (git, `gh`, GitHub MCP tools) and commits under an AI git identity
-  (name "Claude", an `anthropic.com` email); `"allow"` turns that rule off. Pair it with
+  issue and comment text (git; the `gh` subcommands that write: create, edit, comment, review,
+  merge, `api` with a body; GitHub MCP tools) and commits under an AI git identity (name
+  "Claude", an `anthropic.com` email); reading with `gh pr view … | grep` is not a write.
+  `"allow"` turns that rule off. The `secrets` rule lets a store's own tool use it (`ssh -i`,
+  `kubectl --kubeconfig`, `aws`, `gh`, `docker`, `gcloud`, `gpg`) and still refuses reading it
+  with `cat`, `grep`, Read or Glob. Pair `attribution` with
   `"attribution": {"commit": "", "pr": "", "sessionUrl": false}` in `settings.json`, so Claude
   doesn't write the credits in the first place. `{"guard": "on"}` in `~/.claude/kit.json` guards projects without a
   `kit.json` too. The guard's `wait` rule refuses a foreground wait (sleep over
@@ -95,7 +104,8 @@ offers this rule (with `attribution` off) once per machine at session start and 
 Also per project, committed: `CLAUDE.md` (the project's rules, which win over the kit),
 `.claude/skills/verify/SKILL.md` (how to run and exercise the app; Claude Code runs a skill of
 that name before each commit), `.claude/loop.md` (what a bare `/loop` does for this project's
-PR: fix CI, answer reviews, sync with the base; it never merges), `.claude/review-decisions.md`
+PR: fix CI, answer reviews, sync with the base, reschedule itself while the PR is open; it never
+merges), `.claude/review-decisions.md`
 (findings you declined, so reviews don't raise them again). Gitignored: `.claude/evidence/`,
 `.claude/overnight/`, `.claude/lead/`.
 
@@ -170,11 +180,11 @@ resume from; the source of the idea is in CATALOG.md).
 .claude/lead/items/<id>/REPORT.md    the thread's final report (written by the SubagentStop hook, kit:implementer)
 .claude/lead/items/<id>/VERDICT.md   the verifier's report (SubagentStop, kit:verifier)
 .claude/lead/items/<id>/LOG.md       one line per event: queued, working, reported, verdict, review, done
-.claude/lead/items/done/<id>/        archived
+.claude/lead/items/done/<id>/        archived (a second item with the same id lands in done/<id>-2/)
 ```
 
 ```bash
-python3 <kit>/hooks/scripts/items.py new "<name>" --brief - --from lead|handoff   # id and folder printed
+python3 <kit>/hooks/scripts/items.py new "<name>" --brief - --from lead|handoff [--kind scout]  # id and folder printed
 python3 <kit>/hooks/scripts/items.py list [--status queued]
 python3 <kit>/hooks/scripts/items.py log <id> <status> [note]
 python3 <kit>/hooks/scripts/items.py show <id>
@@ -182,12 +192,19 @@ python3 <kit>/hooks/scripts/items.py done <id>
 ```
 
 A thread briefed with the BRIEF.md text carries the `ITEM:` line; when it finishes, the hook
-files its report under the item (`reported | done, 2 decision(s)` in the LOG); when the
-verifier finishes, its verdict (`verdict | FAIL scope=local:src/x.py`). The lead reads
-BRIEF.md again before re-briefing (you may have edited it) and VERDICT.md; a
-`FAIL scope=local:<paths>` becomes a scoped fix sent to the thread, not a new brief. `DECISION:`
-lines in a report are the thread's judgment calls, shown to you once so you can veto them.
-`.claude/lead/` is added to `.git/info/exclude` when the project does not ignore it.
+files its report under the item (`reported | done, 2 decision(s), agent <id>` in the LOG); when
+the verifier finishes, its verdict (`verdict | FAIL scope=local:src/x.py, reviewed <sha>, agent
+<id>`; the sha is the branch head the verifier read, so a later push makes the verdict stale).
+The hook finds the item from the main checkout even when the thread stops inside its worktree
+(the default), where `.claude/lead/` does not exist. The report filed is the one the thread
+handed back with SubagentHandback; its closing line is not the report. The lead reads BRIEF.md
+again before re-briefing (you may have edited it) and VERDICT.md; a `FAIL scope=local:<paths>`
+becomes a scoped fix sent to the thread, not a new brief. `DECISION:` lines in a report are the
+thread's judgment calls, shown to you once so you can veto them. `new` also appends a `queued`
+row to the board when one exists, so the status line and the coordinator see an item that
+`/kit:handoff` or `/kit:scout take` queued from another session; the session-start line says
+how many items wait on disk. `.claude/lead/` is added to `.git/info/exclude` when the project
+does not ignore it.
 
 `hooks/scripts/proposals.py`: candidate work found by read-only explorers (`/kit:scout`), one
 card per finding in `.claude/lead/proposals/<id>.md` (frontmatter: id, fingerprint, origin,
@@ -206,19 +223,26 @@ Threads start fresh: a `kit:implementer` sees its own system prompt, the project
 nothing of the coordinator's conversation. The brief is the whole channel. Two consequences the
 kit acts on:
 
-- **Effort per thread.** `kit:implementer` declares `effort: medium` (Opus 5.5's default) as
-  its floor, so a session running at `xhigh` does not spawn `xhigh` threads; the coordinator
-  passes `effort` on the Agent call: `low` for a brief with a checkable DONE WHEN, a small scope
-  and its PLACES listed, `medium` otherwise, `high` for ambiguous or architectural work. The call
-  value overrides the frontmatter and stays in effect when the thread is resumed (sub-agents
-  reference, Claude Code 2.1.292+); the values are `low`, `medium`, `high`, `xhigh`, `max`. Scouts
-  run at `low`, `kit:verifier` at `medium` (declared in its frontmatter; it used to inherit the
-  session's level). Anthropic's effort page puts subagents under `low` ("simpler tasks that need
-  the best speed and lowest costs, such as subagents") and says to run an effort sweep on your
-  own evals rather than carry a setting over. The sweep for the kit:
+- **Effort per thread.** `kit:implementer` declares `effort: medium` (Opus 5.5's default): the
+  level its threads run at whatever the session's, so an `xhigh` session does not spawn `xhigh`
+  threads (and a `low` one still gets `medium` threads; since 2.1.317 a subagent on another
+  model falls back to that model's default anyway). The coordinator passes `effort` on the Agent
+  call: `low` for a brief with a checkable DONE WHEN, a small scope and its PLACES listed,
+  `medium` otherwise, `high` for ambiguous or architectural work; after a `FAIL` that is not
+  `scope=local`, or a `BLOCKED`, it re-dispatches one level higher, never past `high` without
+  asking (Sun et al. 2026: starting low and escalating on a verified failure matched or beat a
+  fixed top effort at lower cost). The call value overrides the frontmatter and stays in effect
+  when the thread is resumed (sub-agents reference, Claude Code 2.1.292+); the values are `low`,
+  `medium`, `high`, `xhigh`, `max`. Scouts run at `low`, `kit:verifier` at `medium` (declared in
+  its frontmatter; it used to inherit the session's level). `CLAUDE_CODE_SUBAGENT_EFFORT`
+  (2.1.316) sets the level for subagents that name none, your own `.claude/agents` and the native
+  Explore and Plan agents; `CLAUDE_CODE_EFFORT_LEVEL` beats every frontmatter and call. Anthropic's
+  effort page puts subagents under `low` ("simpler tasks that need the best speed and lowest
+  costs, such as subagents") and says to run an effort sweep on your own evals rather than carry
+  a setting over. The sweep for the kit:
   `CLAUDE_CODE_EFFORT_LEVEL=low claude plugin eval . --case lead-verifies-before-done --runs 3 ...`
-  against the same at `medium` (the variable beats every frontmatter and call), comparing pass
-  rate and cost; change the default only on that evidence.
+  against the same at `medium`, comparing pass rate and cost; change the default only on that
+  evidence.
 - **Fresh eyes on a brief** (`skills/lead/fresh-eyes.md`): for an item that is large,
   architectural or reads two ways, one read-only subagent gets the brief alone and returns a
   paraphrase, what it would have to guess, what DONE WHEN does not need, what exists to reuse
@@ -243,8 +267,9 @@ commit of the same content keeps the hash), whether the gate itself changed file
 and the last 25 lines of output: a gate that ran is a claim until something records what it ran
 on, and this is what the PR's Evidence section and the verifier cite. Nothing blocks on it.
 Threads and the verifier are told the exact command at start (SubagentStart) and `/kit:go` runs
-it in step 4. `.claude/evidence/` is added to `.git/info/exclude` when the project does not
-ignore it. The Stop hook uses the same hash to know whether anything changed since its last
+it in step 4. Run from a linked worktree, the record is written under the main checkout's
+`.claude/evidence/`, so it outlives the worktree. `.claude/evidence/` is added to
+`.git/info/exclude` when the project does not ignore it. The Stop hook uses the same hash to know whether anything changed since its last
 passing check.
 
 ## Edits made through the shell
@@ -256,7 +281,9 @@ kit project the guard notes which files are modified or untracked and their mtim
 `onEdit` commands for its glob, and a protected one is reported (read-only: any change;
 no-overwrite: a change to a file that existed before) with the way to restore it; the hook
 reverts nothing itself. A command that changed more than 40 files is reported, not checked.
-Cost: one `git status` before and after each shell command.
+The before-image is kept per session and agent, so parallel threads in one checkout do not
+overwrite each other's. Cost: one `git status` before and after each shell command, only in a
+project that has `protect` or `onEdit`.
 
 ## Stalls
 
@@ -265,10 +292,12 @@ its 15 s tick (interactive sessions only) and wakes the coordinator with a promp
 
 - a running thread whose transcript has not moved for `silentMin` (20), skipped while it waits
   on its own subagent, background command or Monitor (a Monitor counts until its `timeout_ms`);
-- a thread past the duration its brief expected: an `EXPECT: 90m` (or `2h`) line in the brief;
+- a thread past the duration its brief expected: an `EXPECT: 90m` (or `2h`) line in the Agent
+  prompt the thread was started with (the mod reads that prompt, not BRIEF.md on disk);
 - a background command past its deadline (its Bash `timeout`, else `bashDeadlineMin`, 30) while
   its owner has been quiet for `silentMin`. A command whose description holds `(server)` is
-  meant to keep running and has none.
+  meant to keep running and has none. A background thread's command that runs past 3 minutes is
+  moved to the background by Claude Code itself (2.1.318) and counts as one of these.
 
 Each stall wakes at 1x, 2x and 4x its threshold, and the third wake also sends a native
 notification, and it stays quiet until real activity starts it over: the turn a wake itself
@@ -278,14 +307,17 @@ gets a "continue" nudge after 15, 30 and 60 s when the error clears on its own (
 server error, a short rate limit, `max_output_tokens`) and a notification plus a NEEDS YOU wake when it does not (a
 login, a usage limit). A thread that ends without its report reaching the coordinator (a refused
 or missing `SubagentHandback`) is told once by `subagent_stop.py` to send it; if it stops again
-without one, the coordinator is woken to SendMessage it. The facts live in memory, bounded to
-the work in flight; a module reload only makes the watchdog quieter.
+without one, the coordinator is woken to SendMessage it. The coordinator addresses a thread by
+the agent ID the Agent call returned (a name needs agent teams, which the kit does not enable;
+the ID also survives a restart, and the hooks write it into the item's LOG); a message reaches
+a thread even while its command runs (2.1.317: the command moves to the background). The facts
+live in memory, bounded to the work in flight; a module reload only makes the watchdog quieter.
 
 ## Permission prompts
 
 `permission.py` (PermissionRequest, matcher Bash) allows, without a prompt, a command that is
-exactly kit.json `check` or `verify`, or the kit's own `gate.py`, `lessons.py` or
-`compact_logs.py` by their real path. Nothing else is touched: the guard has already judged the
+exactly kit.json `check` or `verify`, or the kit's own `gate.py`, `lessons.py`, `items.py`,
+`proposals.py` or `compact_logs.py` by their real path. Nothing else is touched: the guard has already judged the
 command, and the permission system decides the rest. `/fewer-permission-prompts` (built in)
 writes a broader read-only allowlist to project settings if you want one.
 
@@ -304,8 +336,10 @@ config dir (`~/.claude` unless `CLAUDE_CONFIG_DIR` says otherwise):
 A repo is its normalized git origin, so every checkout and worktree of it shares one ledger (the
 slug is the auto mode one). Only kit code writes there; nothing in a repo can plant a lesson.
 
-**Capture** is deterministic and costs no tokens: a failed fast `check` (Stop), a guard denial,
-and a kit:verifier FAIL (SubagentStop: each problem headline becomes a candidate). The verdict
+**Capture** is deterministic and costs no tokens: a failed fast `check` (Stop) and a
+kit:verifier FAIL (SubagentStop: each problem headline becomes a candidate). A guard denial is
+counted as an event for the statistics but never becomes a lesson: the hook already enforces
+it, and a delivered copy would only spend the threads' budget. The verdict
 is read from the verifier's report: its final message, else the SubagentHandback report in its
 transcript. Verifier verdicts and revert commits are counted as events, for stats and the
 distiller; a verdict is tied to the branch its brief names (else its report, else a PR number),
@@ -313,7 +347,8 @@ and a PASS confirms only the last FAIL on the same branch (with no branch named,
 nothing). Each report counts once, so a verifier resumed with SendMessage records its next round
 too. The same key seen again is counted, not added; a repeat after the lesson was delivered
 counts as a miss. A new automatic lesson starts as a candidate and turns active on its second
-sighting, at most 3 a day per repo. Text that looks like a key or token is refused. A repo under a
+sighting, at most 3 a day per repo. Text that looks like a key or token is refused (a path with
+digits, a migration file name or a sha256 is not a token). A repo under a
 temp dir (`/tmp`, `/var/folders`, `$TMPDIR`; `KIT_TEMP_ROOTS` overrides the list) gets no ledger:
 tests and scratchpad probes teach nothing. Tests point `CLAUDE_CONFIG_DIR` at a temp dir.
 
@@ -346,8 +381,9 @@ most once a day per repo. A typical call costs about $0.001. The model can only 
 or retire existing lessons, and its text passes the same secret filter. It never runs in a
 headless session: overnight (`KIT_HEADLESS`), or any `CLAUDE_CODE_ENTRYPOINT` other than an
 interactive one (`cli`, `claude-vscode`, `claude-desktop`, `claude-desktop-3p`), so not in
-`claude -p` or the SDK. Turn it off with `KIT_LEARN_MODEL=0` or `"learn": {"model": false}` in
-kit.json.
+`claude -p` or the SDK; `CLAUDE_CODE_SESSION_ATTENDED=1` (set in an attended cloud session)
+counts as interactive whatever the entrypoint. Turn it off with `KIT_LEARN_MODEL=0` or
+`"learn": {"model": false}` in kit.json.
 
 **Promotion** (`promote.py`, run by the distiller): a lesson active in 2 real repos, whose wording
 passes the structural check (no repo name, org or path from the ledgers, no file name or path, no
@@ -418,22 +454,30 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
 - **Board** (`.claude/lead/board.md`):
 
   ```
-  SHIP: pr | PARALLEL: 3 | BUDGET: none
+  SHIP: pr | MERGE: user | PARALLEL: 3 | BUDGET: none
   RULES: <standing preferences you stated>
   NEEDS YOU: <id: question>; <id: question>
-  <id> | <ship|scout|overnight> | <goal> | DONE WHEN <check> | <status> | agent <name> | <branch/PR> | <last event>
+  <id> | <ship|scout|overnight> | <goal> | DONE WHEN <check> | <status> | agent <id> | <branch/PR> | <last event>
   ```
 
   Status: `queued`, `working`, `review`, `needs-you`, `landing`, `done`, `parked`. The status line
-  counts the `review` items (`N ready`) and the NEEDS YOU questions (`N need you`), re-reading
-  the board every 15 seconds, and the threads stopped on a question or a permission (`N
-  waiting`, from the engine's agent list). When a tick finds more ready items or questions than
-  the last one, the mod sends one native notification (`$.ui.notify`, Claude Code 2.1.295+;
-  silently skipped where the engine lacks it).
+  counts the `review` items (`N ready`), the NEEDS YOU questions and `needs-you` rows (`N need
+  you`) and the `queued` rows, re-reading the board every 15 seconds (a board written as a
+  Markdown table, or with capitalised statuses, counts the same), and the threads stopped on a
+  question or a permission (`N waiting`, from the engine's agent list). When a tick finds more
+  ready items or questions than the last one, the mod sends one native notification
+  (`$.ui.notify`, Claude Code 2.1.295+; silently skipped where the engine lacks it), unless you
+  were active in the terminal within the last minute; in loop mode the coordinator is told the
+  mod notifies, so you get one notice per event, not two.
 - **Safety**: `/kit-safety host|sandbox`. Sandbox writes the kit's block into
   `.claude/settings.local.json`; check it with `/sandbox`, add hosts under
   `sandbox.network.allowedDomains`. Where the sandbox can't start, commands run unsandboxed with
-  a warning rather than all failing.
+  a warning rather than all failing. `/kit-safety unattended on|off` (Claude Code 2.1.319) writes
+  `permissions.denyInsteadOfPrompting` into the same file: a tool call that would wait on a
+  permission prompt is denied and the turn goes on, in this session and its threads. For an
+  evening nobody will watch; off by default, since a denied action lowers a thread's chances
+  silently. `permissions.blockWritesOutsideWorkingDirectories` (2.1.314) is not for a kit
+  project: it refuses a thread's edits in another repo and removes the worktree tools.
 
 The mod needs Claude Code with mods (2.1.287+). Without it, the skills and hooks still work; use
 `/kit:lead` directly instead of loop mode.
@@ -447,8 +491,15 @@ python3 <kit>/skills/overnight/scripts/overnight.py "<objective>" --stop-when "<
 
 Each iteration runs `claude -p` in permission mode `auto` unless `--permission-mode` says
 otherwise, with `--permission-prompts none` (a headless session cannot answer a prompt: anything
-that would ask is denied at once; since Claude Code 2.1.302 `-p` would otherwise start in the
-manual mode). A Fable or Mythos model bills usage credits without asking in `-p`, so the runner
+that would ask is denied at once; since Claude Code 2.1.302 `-p` starts in the manual mode
+without it on third-party providers, with telemetry off or on a fresh install). Auto mode needs
+Anthropic's server check: with `DISABLE_TELEMETRY` or `CLAUDE_CODE_DISABLE_FEATURE_FLAGS` set,
+or behind an LLM gateway, every unchecked action is denied (2.1.319) and `claude -p` exits 1
+saying so; the runner stops at once with the cause (unset those variables, or
+`CLAUDE_CODE_AUTO_MODE_SERVER=0`) instead of spending three "no change" iterations, and does the
+same for a startup failure or a lost transcript. It also reads `credential_expires_at` from the
+first iteration's JSON and stops before a round that would outlive the claude.ai sign-in.
+A Fable or Mythos model bills usage credits without asking in `-p`, so the runner
 refuses `--model fable` unless `--allow-credits` is given. `--no-unattended-note` drops the
 kit's note about unattended runs from the system prompt (to measure whether a model still
 needs it); `--dry-run` prints the exact agent command.
@@ -460,6 +511,22 @@ is there to answer; an iteration that reports progress without a change is resum
 session up to `--max-continuations` times (default 2). Rate limits are waited out. Run files:
 `.claude/overnight/<run>/` (`objective.md`, `notes.md`, `log.jsonl`, `state.json`,
 `end-state.json`); `--resume <run dir>` continues a stopped run.
+
+## Cloud sessions
+
+A claude.ai/code session runs in a container where only the plugins of its environment exist,
+so the kit is there only when the environment's setup script installs it:
+`claude plugin marketplace add <checkout of claude-kit> && claude plugin install kit@claude-kit`,
+then `python3 <kit>/hooks/scripts/machine_setup.py --apply` (non-interactive; the session-start
+offer is skipped where `CLAUDE_CODE_REMOTE=true`). With it, the gates, the guard, the board, the
+items and the threads work as on your machine. Two things differ. The lesson ledger lives under
+`~/.claude`, which a container starts empty and loses at the end: cloud threads get no lessons
+and leave none (the ledger is per machine; a `/kit:learn promote` from your Mac is what carries a
+lesson across). And `.claude/lead/` is gitignored, so a cloud session and your Mac never see
+each other's board, items, evidence or proposal cards; two leads on one checkout both rewrite
+the board whole, last writer wins, while LOG appends and `done` are safe. The kit reads
+`CLAUDE_CODE_SESSION_ATTENDED=1` as "someone is at the keyboard" whatever the entrypoint, so an
+attended cloud session gets the lesson-review line and the model pass like a terminal one.
 
 ## Develop
 

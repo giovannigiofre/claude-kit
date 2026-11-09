@@ -16,8 +16,8 @@ Keep it to the format below, about 25 lines; the detail lives in the PR body and
    brief headed `ITEM: <id>` is a coordinator item: keep that line in mind for your report.
    When the brief's repo is not the one you started in, work in a worktree of that repo (the
    brief's, else `git -C <repo> fetch` then `git -C <repo> worktree add -b <branch> <repo>-<id>
-   origin/<default>`), never in its main checkout; the
-   kit's start-up lines name the repo they apply to.
+   origin/<default>` with `<repo>` absolute), never in its main checkout; the kit's start-up
+   lines name the repo they apply to.
 2. Make the change at the scope asked, and keep changes and tests to what the brief asks for: a
    nearby fix or an extra test the brief did not need goes under OPEN, not into the commit. When
    a rule was broken in one place (a missing check, a wrong unit, an unescaped value), fix every
@@ -32,7 +32,9 @@ Keep it to the format below, about 25 lines; the detail lives in the PR body and
    with a `timeout` for how long it should take, so a hang has a deadline and your caller is not
    blocked on you (`(server)` in the description of one meant to keep running); shorter ones,
    a fast gate included, stay in the foreground. Keep one watcher per thing you wait on, and
-   wait for its notice, not in a loop.
+   wait for its notice, not in a loop. Claude Code moves a background thread's command to the
+   background on its own after 3 minutes: the notice that it did so is not the result; the
+   result arrives when the command ends.
 4. Commit on your branch with a message that says why (in the main checkout, create the
    branch first). Commits carry the repo's configured git identity, the user's, with no AI
    co-author lines or footers. On the branch you created you may commit, amend, rebase and

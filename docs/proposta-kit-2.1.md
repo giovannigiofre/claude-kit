@@ -15,7 +15,8 @@ affidata a un agente a contesto fresco e in sola lettura:
 
 I cinque rapporti integrali sono in [analisi-2026-11-08/](analisi-2026-11-08/). Questo documento li
 sintetizza in pacchetti, con un'opzione consigliata e il costo (S = meno di un'ora con test, M = un
-pomeriggio, L = un giorno o più). Nulla di quanto segue è implementato: si decide prima.
+pomeriggio, L = un giorno o più). Le decisioni prese il 9 novembre e ciò che è entrato in kit 1.10
+sono nella [sezione 8](#8-cosa-è-stato-implementato-kit-110-9-novembre).
 
 ## In breve
 
@@ -276,6 +277,31 @@ Costo M. Dopo, il budget del lead (150 righe) avrà spazio per le righe nuove di
 6. **Prosa (sezione 6)**: un PR a parte, dopo le correzioni.
 
 Ordine proposto: 1 → 2+3 → 4 → 5 → 6, ognuno un PR piccolo con la sua evidenza, mergiato da te.
+
+## 8. Cosa è stato implementato (kit 1.10, 9 novembre)
+
+Decisioni del proprietario, dalla domanda a quattro voci:
+
+- **Correzioni (1)**: tutte e 21, in kit 1.10, ognuna con il suo test. Il guard cambia solo per
+  togliere i due falsi positivi (12, 13).
+- **Cuciture (2, 3)**: kit.json controllato (chiavi sconosciute nominate, `{}` vale aderito), item
+  in coda visibili (riga di SessionStart e riga di board scritta da `items.py new`), status line
+  robusta al formato, niente doppia notifica, dinieghi del guard contati e non insegnati,
+  `items.py`/`proposals.py` nell'allowlist, `${CLAUDE_SKILL_DIR}` nel lead; cloud: presidiato
+  rilevato da `CLAUDE_CODE_SESSION_ATTENDED`, offerta delle impostazioni di macchina saltata nei
+  container, ricetta nel README e nella reference, ledger per macchina detto chiaro.
+  **Non presi**: git indurito negli hook e deduplicazione in kitlib.
+- **Test e CI (4)**: rimandati; resta corretto il test instabile del mod perché è una correzione.
+  I sei casi di eval e la CI minima restano scritti in [D-tests](analisi-2026-11-08/D-tests.md).
+- **Stato dell'arte (5)**: le righe S (overnight con codici d'uscita e scadenza del login, nota
+  sui comandi oltre i 3 minuti, `blockWritesOutsideWorkingDirectories` sconsigliato, SendMessage a
+  comando in corso, `REVIEWED:` nel verdetto, lezione condizionale che diventa check, righe di
+  stack), l'effort che sale dopo un fallimento verificato e `/kit-safety unattended on|off`.
+  **Non prese** (restano candidate): regole guard validate da `/kit:learn`, salvage dell'overnight,
+  blocchi decision.
+- **Prosa (6)**: solo ciò che le correzioni hanno toccato (il lead ha perso le frasi che
+  duplicavano un hook e la clausola AGENTS.md, il README rimanda a init per i worktree). Il resto
+  della passata resta da fare.
 
 ## Fonti
 
