@@ -57,9 +57,9 @@ or merge is a project policy: also write it to `.claude/kit.json` `lead`.
 ## Each message
 
 Route it, reply, and hand control back. Finished threads wake you, and the kit's watchdog wakes
-you about a quiet one. To wait on CI or a deploy, arm one Monitor or background command per
-subject, before you tell the user "I'll let you know". An interim notice (a thread waiting on its
-own background work) needs no reply.
+you about a quiet or stuck one: look and recover as [stalls.md](stalls.md) says. To wait on CI or
+a deploy, arm one Monitor or background command per subject, before you tell the user "I'll let
+you know". An interim notice (a thread waiting on its own background work) needs no reply.
 
 - **A question:** answer in place, from the board and the threads' reports.
 - **New work:** one thread per independent piece; several unrelated tasks become several
