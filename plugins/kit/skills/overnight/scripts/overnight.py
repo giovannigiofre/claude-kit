@@ -26,6 +26,7 @@ import shlex
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 RUNS_DIR = Path(".claude") / "overnight"
@@ -59,6 +60,37 @@ CONTINUE = (
 )
 
 RATE_LIMIT = re.compile(r"rate.?limit|usage limit|hit your .{0,20}limit|session limit|weekly limit|overloaded|\b429\b", re.I)
+
+# Exits of `claude -p` that no later iteration can recover from, so the run stops at once with the
+# fix instead of spending --max-failures "no change" iterations. Each comes from the Claude Code
+# CHANGELOG (anthropics/claude-code, read 2026-11-09):
+#   2.1.314 "Fixed `claude -p` exiting with code 0 and no output when startup failed; it now prints
+#           the error and exits 1"
+#   2.1.317 "Fixed `claude -p` exiting 0 when a full disk or quota lost its transcript or
+#           ~/.claude.json writes; it now prints an error and, in text and json output, exits 1."
+#   2.1.319 "Fixed `claude -p` exiting 0 in auto mode when its actions were refused because no safety
+#           check was available: text and JSON output now exit 1" and "Changed auto mode with
+#           telemetry or feature flags off, including behind LLM gateways: calls the server can't
+#           check are asked about or denied, with no fallback to the built-in classifier; set
+#           `CLAUDE_CODE_AUTO_MODE_SERVER=0` to keep using it"
+# Where the text lands (the headless page): "When a failure happens inside the run, such as missing
+# authentication, Claude Code prints the failure as the result on stdout"; a startup failure prints
+# to stderr with no result at all. The 2.1.319 result also carries `stopped_by_permission_check`,
+# which the CLI's own result schema describes as "A permission check ended this turn by itself, and
+# nobody asked for the stop. Today only auto mode does so, after a run of responses for which it
+# got no usable safety verdict." The patterns are the 2.1.319 build's wording for each case.
+NO_SAFETY_CHECK = re.compile(r"no (?:usable )?safety (?:check|verdict)|auto mode (?:is )?unavailable|"
+                             r"auto mode[^.\n]{0,40}can.?.?t check|could not evaluate this action|"
+                             r"classifier unavailable|check had no usable answer|"
+                             r"safety check[^.\n]{0,80}(?:isn.t|is not|not) (?:running|available|getting through)", re.I)
+FULL_DISK = re.compile(r"could not save[^\n]{0,160}(?:disk is full|quota is used up|ENOSPC|EDQUOT)|"
+                       r"no space left on device|session_writes_lost", re.I)
+STARTUP_FAILED = re.compile(r"startup failed|refused to start|could not start|not logged in|claude auth login|"
+                            r"please run /login|failed to authenticate|authentication required|"
+                            r"invalid (?:api key|auth token)|not valid json", re.I)
+AUTO_MODE_FIX = ("auto mode has no server check here: unset DISABLE_TELEMETRY / CLAUDE_CODE_DISABLE_FEATURE_FLAGS, "
+                 "or set CLAUDE_CODE_AUTO_MODE_SERVER=0")
+LOGIN_MARGIN_S = 2 * 3600  # an iteration that outlives the claude.ai sign-in is wasted
 
 
 def git(root, *args, check=True):
@@ -150,6 +182,40 @@ def parse_report(data):
     return None
 
 
+def fatal_reason(data, text):
+    """Why no later iteration would do better, with the fix, or None. `data` is the JSON result
+    (empty when there was none), `text` the result, its errors and stderr."""
+    if data.get("stopped_by_permission_check") is True or NO_SAFETY_CHECK.search(text):
+        return AUTO_MODE_FIX
+    if data.get("subtype") == "session_writes_lost" or FULL_DISK.search(text):
+        return "the disk is full or over quota and claude -p lost its transcript: free space on that disk, then --resume"
+    match = STARTUP_FAILED.search(text)
+    if data.get("startup_failure_reason") or match:
+        why = data.get("startup_failure_reason")
+        if not why:
+            start = text.rfind("\n", 0, match.start()) + 1
+            end = text.find("\n", match.end())
+            why = text[start:end if end >= 0 else len(text)].strip()[:160]
+        return f"claude -p could not start ({why}): fix the login or settings it names, then --resume"
+    return None
+
+
+def parse_expiry(value):
+    """Epoch seconds of a result's `credential_expires_at`, or None. 2.1.318: "Added the date a
+    stored claude.ai sign-in ends to `claude auth status` (`loginExpiresAt`) and to `claude -p` JSON
+    results (`credential_expires_at`)"; the CLI writes it with toISOString(), so
+    2026-11-20T08:00:00.000Z. Fail-open: a missing or unreadable value is None and changes nothing."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        when = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.timestamp()
+
+
 def build_prompt(args, iteration, notes_path, gate):
     notes = notes_path.read_text(encoding="utf-8").strip() if notes_path.exists() else ""
     stop = args.stop_when or "none given: keep improving until the run's caps or failures end it"
@@ -220,12 +286,16 @@ def run_agent(args, prompt, root, budget_left, resume=None):
         data = {}
     cost = float(data.get("total_cost_usd") or 0.0)
     tokens = tokens_of(data.get("usage"))
+    expires = data.get("credential_expires_at")  # when the claude.ai sign-in ends (2.1.318); absent on an API key
     if out.returncode != 0 or data.get("is_error") or not data:
         err = (data.get("subtype") or "") + " " + (data.get("result") or out.stderr or out.stdout)[-400:]
-        return {"ok": False, "error": err.strip(), "cost": cost, "tokens": tokens,
+        errors = data.get("errors") if isinstance(data.get("errors"), list) else []
+        text = "\n".join(s for s in (data.get("result"), *map(str, errors), out.stderr, "" if data else out.stdout) if s)
+        return {"ok": False, "error": err.strip(), "cost": cost, "tokens": tokens, "expires": expires,
+                "fatal": fatal_reason(data, text),
                 "rate_limited": bool(RATE_LIMIT.search(err)), "budget": "budget" in (data.get("subtype") or "")}
     return {"ok": True, "report": parse_report(data), "cost": cost, "tokens": tokens,
-            "session": data.get("session_id")}
+            "session": data.get("session_id"), "expires": expires}
 
 
 def spend_cap_reached(args, state):
@@ -301,6 +371,7 @@ def main(argv=None):
                 setattr(args, key, val)
         state["failures"] = 0  # a resumed run gets a fresh failure streak
         state["stop_reason"] = None
+        state.pop("credential_expires_at", None)  # the sign-in may have been renewed; the first iteration reads it again
         root = Path(state["root"])
     else:
         if args.objective_file:
@@ -386,16 +457,30 @@ def main(argv=None):
             if state["failures"] >= args.max_failures:
                 state["stop_reason"] = f"{args.max_failures} consecutive failed iterations"
                 break
+            expiry = parse_expiry(state.get("credential_expires_at"))
+            if expiry is not None and expiry - time.time() < LOGIN_MARGIN_S:
+                print(f"overnight: WARNING the claude.ai sign-in ends at {state['credential_expires_at']}, in "
+                      f"{max(expiry - time.time(), 0) / 3600:.1f} h: an iteration that outlives it is wasted")
+                state["stop_reason"] = ("sign-in ends within 2 h: run `claude auth login` (or `claude setup-token` "
+                                        "for unattended jobs), then --resume")
+                break
             state["iteration"] += 1
             start = git(root, "rev-parse", "HEAD")
             left = None if args.max_usd is None else args.max_usd - state["cost"]
             res = run_agent(args, build_prompt(args, state["iteration"], notes_path, gate), root, left)
             state["cost"] += res["cost"]
             state["tokens"] += res["tokens"]
+            if res.get("expires"):
+                state["credential_expires_at"] = res["expires"]
             log.write(json.dumps({"iteration": state["iteration"], **res}) + "\n")
             log.flush()
 
             if not res["ok"]:
+                if res.get("fatal"):  # nothing a later iteration could do differently
+                    undo(root, start)
+                    note(f"run stopped - {res['fatal']}")
+                    state["stop_reason"] = res["fatal"]
+                    break
                 if res.get("rate_limited") and args.rate_limit_wait and rate_waits < args.max_rate_limit_waits:
                     rate_waits += 1
                     state["iteration"] -= 1
@@ -421,6 +506,7 @@ def main(argv=None):
             # "progress" with nothing changed is an early stop, not a result: resume the same
             # session and ask for the step, a bounded number of times
             nudges = 0
+            fatal = None
             while (report.get("status") == "progress" and not dirty(root) and res.get("session")
                    and nudges < args.max_continuations and not spend_cap_reached(args, state)):
                 nudges += 1
@@ -431,11 +517,17 @@ def main(argv=None):
                 log.write(json.dumps({"iteration": state["iteration"], "continuation": nudges, **more}) + "\n")
                 log.flush()
                 if not more["ok"]:
+                    fatal = more.get("fatal")
                     break
                 res = more
                 report = more["report"] or report
                 if git(root, "rev-parse", "HEAD") != start:
                     git(root, "reset", "-q", "--soft", start)
+            if fatal:
+                undo(root, start)
+                note(f"run stopped - {fatal}")
+                state["stop_reason"] = fatal
+                break
             status = report.get("status")
             summary = " ".join((report.get("summary") or "").split())[:120]
 

@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "overnight.py"
@@ -21,6 +22,10 @@ SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "overnight.py"
 #   blocked -> edits work.txt, reports blocked
 #   error   -> exits 1
 #   stall   -> changes nothing but reports progress (an early stop the runner resumes)
+#   nostart -> exits 1 the 2.1.314 way: nothing on stdout, the startup error on stderr
+#   nodisk  -> exits 1 the 2.1.317 way: edits work.txt, prints the result, then the full-disk error on stderr
+#   nocheck -> exits 1 the 2.1.319 way: auto mode refused every action for lack of a safety check
+# FAKE_EXPIRES, when set, is reported as credential_expires_at on every result.
 FAKE = r'''
 import json, os, sys
 from pathlib import Path
@@ -37,23 +42,37 @@ if action == "error":
     print("boom", file=sys.stderr); sys.exit(1)
 if action == "limit":
     print(json.dumps({"type": "result", "is_error": True, "result": "You've hit your session limit"})); sys.exit(1)
+if action == "nostart":
+    print("Not logged in. Run claude auth login to authenticate.", file=sys.stderr); sys.exit(1)
+if action == "nocheck":
+    print(json.dumps({"type": "result", "subtype": "success", "is_error": True, "stopped_by_permission_check": True,
+                      "safety_stops": 3, "permission_denials": [], "total_cost_usd": 0.1, "session_id": f"fake-{n}",
+                      "result": "Auto mode is unavailable: the server returned no safety verdict for 3 responses "
+                                "in a row, so this turn has ended."})); sys.exit(1)
 if action == "commitbad":
     import subprocess
     Path("bad.txt").write_text("x")
     subprocess.run(["git", "add", "-A"], check=True)
     subprocess.run(["git", "commit", "-qm", "agent commit"], check=True)
-if action in ("change", "done", "blocked", "blank"):
+if action in ("change", "done", "blocked", "blank", "nodisk"):
     with open("work.txt", "a") as fh: fh.write(f"step {n}\n")
 if action == "bad":
     Path("bad.txt").write_text("x")
 status = {"change": "progress", "bad": "progress", "noop": "no-op", "done": "done", "blocked": "blocked",
-          "blank": "progress", "commitbad": "progress", "stall": "progress"}[action]
+          "blank": "progress", "commitbad": "progress", "stall": "progress", "nodisk": "progress"}[action]
 summary = "   " if action == "blank" else f"{action} {n}"
+expires = os.environ.get("FAKE_EXPIRES")
 print(json.dumps({"type": "result", "is_error": False, "total_cost_usd": 0.5, "session_id": f"fake-{n}",
                   "usage": {"input_tokens": 100, "cache_creation_input_tokens": 50, "output_tokens": 10,
                             "cache_read_input_tokens": 9999},
                   "structured_output": {"status": status, "summary": summary,
-                                        "stop_condition_met": action == "done"}}))
+                                        "stop_condition_met": action == "done"},
+                  **({"credential_expires_at": expires} if expires else {})}))
+if action == "nodisk":
+    print("Error: Claude Code could not save this session's transcript under ~/.claude/projects because the disk "
+          "is full (ENOSPC). If you resume this session, part of the conversation may be missing. Free up space "
+          "on that disk before the next run.", file=sys.stderr)
+    sys.exit(1)
 '''
 
 
@@ -76,11 +95,11 @@ def env(d):
     return {**os.environ, "FAKE_STATE": str(d)}
 
 
-def run(d, fake, *args):
+def run(d, fake, *args, env_extra=None):
     out = subprocess.run([sys.executable, str(SCRIPT), "improve work.txt", "--agent-cmd",
                           f"{sys.executable} {fake}", "--gate", "test ! -e bad.txt",
                           "--rate-limit-wait", "0", *args],
-                         cwd=d, capture_output=True, text=True, timeout=120, env=env(d))
+                         cwd=d, capture_output=True, text=True, timeout=120, env={**env(d), **(env_extra or {})})
     assert out.returncode == 0, out.stderr + out.stdout
     run_dir = sorted((d / ".claude" / "overnight").iterdir())[-1]
     return out.stdout, json.loads((run_dir / "end-state.json").read_text()), run_dir
@@ -169,6 +188,62 @@ def test_agent_error_counts_as_failure():
     d, fake = repo(["error", "error", "error"])
     _, end, _ = run(d, fake)
     assert end["commits"] == [] and "3 consecutive" in end["stop_reason"], end
+
+
+def test_fatal_exit_reasons_stop_at_once():
+    # 2.1.314 / 2.1.317 / 2.1.319: an exit 1 that no later iteration can recover from ends the run with the fix
+    auto_fix = ("auto mode has no server check here: unset DISABLE_TELEMETRY / CLAUDE_CODE_DISABLE_FEATURE_FLAGS, "
+                "or set CLAUDE_CODE_AUTO_MODE_SERVER=0")
+    for action, expected in (("nocheck", auto_fix),
+                             ("nodisk", "the disk is full or over quota and claude -p lost its transcript: "
+                                        "free space on that disk, then --resume"),
+                             ("nostart", "claude -p could not start (Not logged in. Run claude auth login to "
+                                         "authenticate.): fix the login or settings it names, then --resume")):
+        d, fake = repo([action, "change", "done"])
+        out, end, run_dir = run(d, fake)
+        assert end["iteration"] == 1 and end["commits"] == [], (action, end)
+        assert end["stop_reason"] == expected, (action, end["stop_reason"])
+        assert f"overnight: stopped - {expected}" in out, (action, out)
+        assert clean(d) and "run stopped - " in (run_dir / "notes.md").read_text(), action
+    # the plain `error` fake still fails three times (test_agent_error_counts_as_failure)
+
+
+def test_fatal_reason_reads_the_text_too():
+    sys.path.insert(0, str(SCRIPT.parent))
+    import overnight
+    assert overnight.fatal_reason({}, "Auto mode unavailable - stopped after repeated responses with no safety verdict") \
+        == overnight.AUTO_MODE_FIX
+    assert overnight.fatal_reason({"stopped_by_permission_check": True}, "") == overnight.AUTO_MODE_FIX
+    assert "disk is full" in overnight.fatal_reason({}, "Error: Claude Code could not save changes this run made to "
+                                                        "~/.claude.json because your disk quota is used up (EDQUOT).")
+    assert "(config_file_invalid)" in overnight.fatal_reason({"startup_failure_reason": "config_file_invalid"}, "x")
+    assert overnight.fatal_reason({}, "boom") is None
+    assert overnight.fatal_reason({"result": "You've hit your session limit"}, "You've hit your session limit") is None
+    assert overnight.parse_expiry("2026-11-20T08:00:00.000Z") == datetime(2026, 11, 20, 8, tzinfo=timezone.utc).timestamp()
+    assert overnight.parse_expiry("2026-11-20T08:00:00+02:00") == datetime(2026, 11, 20, 6, tzinfo=timezone.utc).timestamp()
+    assert overnight.parse_expiry("soon") is None and overnight.parse_expiry(None) is None and overnight.parse_expiry(0) is None
+
+
+def test_login_expiry_stops_before_the_next_iteration():
+    def iso(hours):
+        return (datetime.now(timezone.utc) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    d, fake = repo(["change", "change", "done"])
+    out, end, run_dir = run(d, fake, env_extra={"FAKE_EXPIRES": iso(1)})
+    assert end["iteration"] == 1 and len(end["commits"]) == 1, end  # the first step is kept, no second one starts
+    assert end["stop_reason"].startswith("sign-in ends within 2 h"), end
+    assert "overnight: WARNING the claude.ai sign-in ends at " in out and "--resume" in out, out
+    # a resumed run reads the sign-in again (it may have been renewed)
+    out = subprocess.run([sys.executable, str(SCRIPT), "--resume", str(run_dir), "--agent-cmd", f"{sys.executable} {fake}"],
+                         cwd=d, capture_output=True, text=True, timeout=120, env={**env(d), "FAKE_EXPIRES": iso(24 * 30)})
+    assert out.returncode == 0, out.stderr
+    end2 = json.loads((run_dir / "end-state.json").read_text())
+    assert len(end2["commits"]) == 3 and end2["stop_reason"].startswith("stop condition met"), end2
+    d, fake = repo(["change", "change", "done"])
+    _, end, _ = run(d, fake, env_extra={"FAKE_EXPIRES": iso(24 * 30)})
+    assert end["iteration"] == 3 and len(end["commits"]) == 3, end
+    d, fake = repo(["change", "done"])
+    out, end, _ = run(d, fake, env_extra={"FAKE_EXPIRES": "not a date"})
+    assert end["iteration"] == 2 and len(end["commits"]) == 2 and "WARNING the claude.ai" not in out, "unparsable: changes nothing"
 
 
 def test_notes_reach_the_next_prompt():

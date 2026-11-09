@@ -80,7 +80,19 @@ iteration's system prompt gets a short note that nobody is there to answer, and 
 that reports progress with no change (an early stop that only announced the next step) is
 resumed with the same session, at most `--max-continuations` times (default 2). The
 agent reports `blocked` when a human decision is needed, which stops the run. Rate limits are
-waited out (`--rate-limit-wait`, default 900 s, up to 4 times in a row).
+waited out (`--rate-limit-wait`, default 900 s, up to 24 times in a row: six hours;
+`--max-rate-limit-waits` changes it).
+
+Three `claude -p` exits end the run at once, with the cause and the fix on the last line, instead
+of counting as three "no change" iterations (Claude Code 2.1.314-2.1.319): a startup failure, a
+transcript lost to a full disk, and auto mode refusing every action because no server-side safety
+check was available. The last one is an environment matter: with `DISABLE_TELEMETRY` or
+`CLAUDE_CODE_DISABLE_FEATURE_FLAGS` set, or behind an LLM gateway, auto mode has no check and
+denies everything; unset them, or set `CLAUDE_CODE_AUTO_MODE_SERVER=0` to keep the built-in
+classifier. The runner also keeps `credential_expires_at` from the first result (a claude.ai
+sign-in, 2.1.318) and stops before the next iteration once the sign-in ends within 2 hours; renew
+it with `claude auth login`, or use `claude setup-token` for unattended jobs. A missing or
+unreadable field changes nothing.
 
 Run files in `.claude/overnight/<run id>/` (kept out of git through `.git/info/exclude`):
 `objective.md`, `notes.md` (memory between iterations; the runner adds one line per outcome),
