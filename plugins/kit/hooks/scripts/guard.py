@@ -26,12 +26,17 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    chmod/chown outside the repo
   pipe-to-shell    a download piped into a shell or interpreter (curl ... | sh)
   secrets          reading credential stores (~/.ssh, ~/.aws, gh/docker/kube config, .netrc,
-                   ~/.gnupg, the macOS keychain) with Bash, Read, Grep or Glob, symlinks resolved
+                   ~/.gnupg, the macOS keychain) with Bash, Read, Grep or Glob, symlinks resolved;
+                   the store's own tool may name it (ssh -i ~/.ssh/key, kubectl --kubeconfig,
+                   aws, gh, docker, gcloud, gpg)
   agents           optional cap on subagents per session (guard.agentsAsk / guard.agentsDeny)
   attribution      the user is the only author: an AI credited in a commit message, a PR, an
                    issue or a comment (Co-Authored-By: Claude, "Generated with Claude Code", a
                    claude.ai session link), a commit made under an AI git identity, or git's
-                   identity set to one, by git, gh or a GitHub MCP tool;
+                   identity set to one, by git, gh or a GitHub MCP tool. For gh only what is
+                   published counts: the title, body, message or field values and files of a
+                   writing subcommand (pr/issue create, edit, comment, ...; api with POST, a
+                   field or --input); `gh pr view ... | grep "Generated with Claude"` reads;
                    guard.attribution = "allow" turns this rule off
   wait             a foreground wait that holds the turn (and, in a thread, its caller): sleep
                    over 60 s (guard.sleepMaxSec), a while/until loop that sleeps while it polls
@@ -52,13 +57,13 @@ Active when the project has .claude/kit.json (unless its "guard" is "off"), or e
    "allowCommands": ["^rm -rf /opt/my-build$"], "attribution": "block", "waits": true, "sleepMaxSec": 60,
    "denyCommands": [{"pattern": "^npm install(?! --frozen)", "reason": "use pnpm here"}], "askCommands": []}
 
-Before each Bash command in a project with kit.json it also notes which files are already
-modified and when (bash_edits.py, PostToolUse, compares and runs protect and onEdit on what
-the command changed), so an edit made with sed or a heredoc gets the same checks as one made
-with the Edit tool.
+Before each Bash command in a project whose kit.json has `protect` or `onEdit` it also notes
+which files are already modified and when, per session and agent (bash_edits.py, PostToolUse,
+compares and runs protect and onEdit on what the command changed), so an edit made with sed or
+a heredoc gets the same checks as one made with the Edit tool.
 
-
-Each denial is counted in the kit's lesson ledger (lessons.py) by its shape, once per session.
+Each denial is counted in the kit's lesson ledger (lessons.py) by its shape, once per session,
+as an event for the statistics; it never becomes a lesson (the hook enforces the rule itself).
 """
 
 import fnmatch
@@ -764,7 +769,18 @@ AI_CREDIT = re.compile(
 AI_NAMES = {"claude", "claude code", "claude[bot]", "claude-code"}
 COMMIT_SUBS = {"commit", "merge", "tag", "notes", "commit-tree", "cherry-pick", "revert", "am"}
 MAKES_COMMIT = {"commit", "merge", "commit-tree", "cherry-pick", "revert", "am"}
-GH_WRITES = {"pr", "issue", "release", "api", "gist"}
+# gh subcommands that publish text; `gh pr view`, `gh issue list --search ...` only read
+GH_WRITES = {("pr", "create"), ("pr", "edit"), ("pr", "comment"), ("pr", "review"), ("pr", "merge"),
+             ("pr", "close"), ("pr", "reopen"), ("issue", "create"), ("issue", "edit"), ("issue", "comment"),
+             ("issue", "close"), ("issue", "reopen"), ("release", "create"), ("release", "edit"),
+             ("gist", "create"), ("gist", "edit")}
+GH_TEXT_FLAGS = {"-b", "--body", "-t", "--title", "-m", "--message", "--subject", "-n", "--notes", "-d", "--desc",
+                 "-c", "--comment", "--comment-body", "-f", "-F", "--field", "--raw-field"}
+GH_VALUE_FLAGS = GH_TEXT_FLAGS | {"-R", "--repo", "--hostname", "-X", "--method", "--input", "--body-file",
+                                  "-q", "--jq", "--json", "-s", "--search", "-L", "--limit", "-l", "--label",
+                                  "-a", "--assignee", "-r", "--reviewer", "-B", "--base", "-H", "--head", "--header",
+                                  "-p", "--project", "-M", "--milestone", "-e", "--editor", "--template", "-A", "--author",
+                                  "-S", "--state", "--sort", "--order", "-T", "--target"}
 NO_AI = ("the user is the only author of commits, PRs and comments: no AI co-author trailer, no "
          "\"Generated with\" footer, no session link")
 
@@ -797,11 +813,65 @@ def message_files(args, cwd):
     return texts
 
 
+def gh_words(args):
+    """(positionals, {flag: [values]}) of a gh command: `--flag value` and `--flag=value` forms."""
+    positional, values, i = [], {}, 0
+    while i < len(args):
+        a = args[i]
+        if a.startswith("-") and "=" in a:
+            flag, value = a.split("=", 1)
+            values.setdefault(flag, []).append(value)
+        elif a.startswith("-"):
+            # a boolean flag that shares a letter (`-d` is --draft for pr create) must not eat the next flag
+            if a in GH_VALUE_FLAGS and i + 1 < len(args) and not args[i + 1].startswith("-"):
+                values.setdefault(a, []).append(args[i + 1])
+                i += 1
+            else:
+                values.setdefault(a, [])
+        else:
+            positional.append(a)
+        i += 1
+    return positional, values
+
+
+def gh_writes(positional, values):
+    """Whether a gh command publishes text: a writing subcommand, or `gh api` with a method that
+    writes, a field or an input file."""
+    sub = tuple(positional[:2])
+    if sub in GH_WRITES:
+        return True
+    if positional[:1] == ["api"]:
+        methods = [m.upper() for m in values.get("-X", []) + values.get("--method", [])]
+        return any(m in ("POST", "PATCH", "PUT") for m in methods) \
+            or any(f in values for f in ("-f", "-F", "--field", "--raw-field", "--input"))
+    return False
+
+
+def gh_texts(args, cwd, command):
+    """What a gh command would publish: the values of its text flags, the files it names, and the
+    whole command when a value comes from a here-document or a substitution the parser cannot
+    see into (its body is only in the command text)."""
+    positional, values = gh_words(args)
+    texts = [v for flag in GH_TEXT_FLAGS for v in values.get(flag, [])]
+    texts += message_files(args, cwd)
+    for path in values.get("--input", []):
+        target = expand(path, cwd) if path != "-" else UNKNOWN
+        if target is not UNKNOWN:
+            try:
+                texts.append(Path(target).read_text(encoding="utf-8", errors="replace")[:200_000])
+            except Exception:
+                pass
+    if "<<" in command or any("$(" in t or "`" in t for t in texts):
+        texts.append(command)
+    return texts
+
+
 def check_attribution(argv, cwd, command):
     name, args = Path(argv[0]).name, argv[1:]
     if name == "gh":
-        if args and args[0] in GH_WRITES and any(AI_CREDIT.search(t) for t in [command] + message_files(args, cwd)):
-            return ("deny", "attribution", f"gh {args[0]} text credits an AI; {NO_AI}")
+        positional, values = gh_words(args)
+        if gh_writes(positional, values) and any(AI_CREDIT.search(t) for t in gh_texts(args, cwd, command)):
+            return ("deny", "attribution", f"gh {' '.join(positional[:2])} text credits an AI; {NO_AI}")
         return None
     while args and args[0] in ("-C", "-c", "--git-dir", "--work-tree"):
         if args[0] == "-C" and len(args) > 1:
@@ -896,6 +966,13 @@ def secret_path(path):
     return None
 
 
+# the tool a credential store belongs to may be pointed at it (`ssh -i ~/.ssh/key`, `kubectl
+# --kubeconfig=~/.kube/config`): that is the tool using its own store, not Claude reading it
+STORE_OWNERS = {"~/.ssh": {"ssh", "scp", "sftp", "rsync", "ssh-add", "ssh-keygen", "ssh-copy-id"},
+                "~/.kube/config": {"kubectl", "helm"}, "~/.aws": {"aws"}, "~/.config/gh": {"gh"},
+                "~/.docker/config.json": {"docker"}, "~/.config/gcloud": {"gcloud"}, "~/.gnupg": {"gpg", "gpg2"}}
+
+
 def check_secrets(argv, cwd):
     name = Path(argv[0]).name
     if name == "security" and len(argv) > 1 and re.match(r"(find|dump)-(generic|internet)-password|dump-keychain",
@@ -915,7 +992,7 @@ def check_secrets(argv, cwd):
             if target is UNKNOWN:
                 continue
             found = secret_path(target)
-            if found:
+            if found and name not in STORE_OWNERS.get(found, ()):
                 return ("deny", "secrets", f"reads {found}")
     return None
 
@@ -1116,14 +1193,14 @@ def snapshot(root, session):
 
 def record_denial(cwd, rule, why, session):
     """Count the denial in the kit's lesson ledger by its shape (quoted words and paths dropped),
-    once per session: a second session hitting the same wall gets told up front."""
+    once per session, as an event for the statistics only: the rule is enforced by this hook on
+    every call, so it never becomes a lesson that spends a thread's budget."""
     try:
         import lessons
         lessons.LOCK_WAIT = 0.5  # the deny must land well inside the hook's timeout
         shape = re.sub(r"\s+", " ", re.sub(r"'[^']*'|\S*/\S*|\d+", "…", why)).strip()
         key = f"guard-{rule}-" + hashlib.sha1(shape.encode()).hexdigest()[:8]
-        lessons.capture(cwd, "guard", key, f"The kit guard blocks this ({rule}): {shape}. Plan another way "
-                        "instead of retrying it.", kind="pitfall", once_per=session)
+        lessons.capture(cwd, "guard", key, "", ref=shape, once_per=session)  # no text: an event, not a lesson
     except Exception:
         pass
 
@@ -1134,8 +1211,10 @@ def main():
     tool_input = data.get("tool_input") or {}
     cwd = Path(data.get("cwd") or os.getcwd())
     root = Path(os.path.normpath(str(kitlib.git_root(cwd) or cwd)))
-    if tool == "Bash" and kitlib.load_config(root)[0]:
-        snapshot(root, data.get("session_id") or "")
+    if tool == "Bash":
+        config = kitlib.load_config(root)[0]
+        if config is not None and (config.get("protect") or config.get("onEdit")):  # only when bash_edits.py will compare
+            snapshot(root, kitlib.state_key(data))
     active, opts = settings(root)
     if not active:
         return 0

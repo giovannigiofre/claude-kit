@@ -15,9 +15,11 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 
-def hook(name, repo, command, session, env):
+def hook(name, repo, command, session, env, agent=None):
     payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(repo), "session_id": session,
                "tool_response": {"stdout": "", "stderr": ""}}
+    if agent:
+        payload["agent_id"] = agent  # a subagent's call carries its id
     out = subprocess.run([sys.executable, str(SCRIPTS / name)], input=json.dumps(payload), capture_output=True,
                          text=True, timeout=60, env=env)
     return out.returncode, out.stderr
@@ -86,6 +88,23 @@ def main():
         check(code == 0 or "src/app.py" in err, "an edit between snapshot and command is attributed at most once")
         code, err = hook("bash_edits.py", repo, "true", "s2", env)
         check(code == 0 and not err, "without a fresh snapshot the hook stays silent")
+
+        # two agents in one session: B's snapshot between A's guard and A's command must not hide A's edit
+        hook("guard.py", repo, "echo 4 >> data/raw/a.csv", "s3", env, agent="A")
+        subprocess.run("echo 4 >> data/raw/a.csv", shell=True, cwd=str(repo), check=False)
+        hook("guard.py", repo, "true", "s3", env, agent="B")
+        code, err = hook("bash_edits.py", repo, "echo 4 >> data/raw/a.csv", "s3", env, agent="A")
+        check(code == 2 and "kit protect: data/raw/a.csv" in err, f"A's edit is still A's with B in between: {err}")
+        code, err = hook("bash_edits.py", repo, "true", "s3", env, agent="B")
+        check(code == 0 and not err, f"B changed nothing: {err}")
+        snapshots = home / "tmp" / "claude-kit"
+        check((snapshots / "s3.A.bash-snapshot.json").exists() and (snapshots / "s3.B.bash-snapshot.json").exists(),
+              f"one snapshot per session and agent: {sorted(p.name for p in snapshots.iterdir())}")
+
+        # a project with neither protect nor onEdit: the guard takes no snapshot (bash_edits has nothing to compare)
+        (repo / ".claude" / "kit.json").write_text(json.dumps({"check": "true"}))
+        hook("guard.py", repo, "echo 5 >> data/raw/a.csv", "s4", env)
+        check(not (snapshots / "s4.main.bash-snapshot.json").exists(), "no protect/onEdit: no snapshot file")
 
         # no kit.json: silent
         (repo / ".claude" / "kit.json").unlink()

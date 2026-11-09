@@ -35,11 +35,16 @@ def main():
         gate = SCRIPTS / "gate.py"
         elsewhere = Path(tmp) / "gate.py"
         elsewhere.write_text("print('not the kit')\n")
+        (Path(tmp) / "items.py").write_text("print('not the kit')\n")
         cases = [
             ("make lint", "allow"), ("make test", "allow"), ("  make test\n", "allow"),
             ("make lint && rm -rf x", "prompt"), ("make", "prompt"), ("make test; echo", "prompt"),
             (f"python3 {gate} verify", "allow"), (f'python3 "{gate}" status', "allow"),
             (f"python3 {gate} verify > out.txt", "prompt"), (f"python3 {elsewhere} verify", "prompt"),
+            (f'python3 "{SCRIPTS / "items.py"}" list --status queued', "allow"),
+            (f"python3 {SCRIPTS / 'items.py'} new \"Login page\" --brief - --from lead", "allow"),
+            (f"python3 {SCRIPTS / 'proposals.py'} take readme-install", "allow"),
+            (f"python3 {Path(tmp) / 'items.py'} list", "prompt"),  # a script of that name elsewhere is not the kit's
             (f"python3 {SCRIPTS / 'machine_setup.py'} --apply", "prompt"), ("rm -rf /", "prompt"),
         ]
         for command, want in cases:

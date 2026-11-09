@@ -79,17 +79,59 @@ def main():
         run({"cwd": str(repo), "source": "startup"})
         assert ident() == ["Bob", "bob@example.org"]
 
-        # the machine settings: offered until the user answers, never in a headless run
+        # the machine settings: offered until the user answers, never in a headless run or a cloud container
         fresh = Path(tmp) / "fresh-home"
         fresh.mkdir()
-        out = run({"cwd": str(repo), "source": "startup"}, home=fresh)
+        local = {"CLAUDE_CODE_REMOTE": ""}  # this test may itself run in a cloud container
+        out = run({"cwd": str(repo), "source": "startup"}, home=fresh, **local)
         assert "Kit setup" in out and "--apply" in out and "--decline" in out, out
-        assert "Kit setup" not in run({"cwd": str(repo), "source": "startup"}, home=fresh, KIT_HEADLESS="1")
-        assert "Kit setup" not in run({"cwd": str(repo), "source": "compact"}, home=fresh)
+        assert "Kit setup" not in run({"cwd": str(repo), "source": "startup"}, home=fresh, KIT_HEADLESS="1", **local)
+        assert "Kit setup" not in run({"cwd": str(repo), "source": "startup"}, home=fresh, CLAUDE_CODE_REMOTE="true"), \
+            "a cloud container's ~/.claude does not outlive the session: nothing to offer"
+        assert "Kit setup" not in run({"cwd": str(repo), "source": "compact"}, home=fresh, **local)
         script = SCRIPT.parent / "machine_setup.py"
         subprocess.run([sys.executable, str(script), "--apply"], env={**os.environ, "HOME": str(fresh)},
                        capture_output=True, check=True)
-        assert "Kit setup" not in run({"cwd": str(repo), "source": "startup"}, home=fresh), "applied: silent"
+        assert "Kit setup" not in run({"cwd": str(repo), "source": "startup"}, home=fresh, **local), "applied: silent"
+
+        # a kit.json that exists is the opt-in, even `{}`: the header line always prints
+        (repo / ".claude" / "kit.json").write_text("{}")
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert out.strip() == "kit harness active for this project (.claude/kit.json):", out
+        # a typo is named with the closest known key, at the top level and inside a section
+        (repo / ".claude" / "kit.json").write_text(json.dumps({"chek": "make lint", "verfy": "make test",
+                                                               "lead": {"baord": "docs/b.md", "notes": "n"},
+                                                               "guard": {"allowCommand": ["x"]}, "watchdog": {"silentMin": 5}}))
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert "kit harness active" in out and "make lint" not in out.split("unknown key")[0], out
+        assert "- unknown key `chek` in .claude/kit.json (did you mean `check`?): the kit ignores it" in out, out
+        assert "- unknown key `verfy` in .claude/kit.json (did you mean `verify`?): the kit ignores it" in out, out
+        assert "- unknown key `lead.baord` in .claude/kit.json (did you mean `lead.board`?): the kit ignores it" in out, out
+        assert "- unknown key `guard.allowCommand` in .claude/kit.json (did you mean `guard.allowCommands`?)" in out, out
+        assert "silentMin" not in out and "`notes`" not in out, "known keys are not flagged"
+        # a value of the wrong type is named, and does not crash the start
+        (repo / ".claude" / "kit.json").write_text(json.dumps({"check": ["make", "lint"], "protect": {"glob": "data/**"},
+                                                               "onEdit": "ruff"}))
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert "- `check` in .claude/kit.json should be a string (the shell command); it is ignored" in out, out
+        assert "- `protect` in .claude/kit.json should be a list of rules; it is ignored" in out, out
+        assert "- `onEdit` in .claude/kit.json should be a list of rules; it is ignored" in out, out
+        assert "fast check" not in out and "protected:" not in out, out
+
+        # items still queued on disk (a hand-off, a taken card) are counted, with the command that lists them
+        (repo / ".claude" / "kit.json").write_text(json.dumps({"check": "make lint"}))
+        items = SCRIPT.parent / "items.py"
+        for name in ("First handoff", "Second handoff"):
+            subprocess.run([sys.executable, str(items), "new", name, "--from", "handoff"], cwd=str(repo),
+                           capture_output=True, check=True)
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert f'- 2 queued item(s) on disk: python3 "{items}" list --status queued' in out, out
+        subprocess.run([sys.executable, str(items), "log", "first-handoff", "working", "thread A"], cwd=str(repo),
+                       capture_output=True, check=True)
+        assert "1 queued item(s)" in run({"cwd": str(repo), "source": "startup"})
+        subprocess.run([sys.executable, str(items), "log", "second-handoff", "done"], cwd=str(repo),
+                       capture_output=True, check=True)
+        assert "queued item" not in run({"cwd": str(repo), "source": "startup"}), "nothing queued: no line"
 
         # a newer kit installed than the one this session runs: one restart line per session
         plugin = SCRIPT.resolve().parents[2]

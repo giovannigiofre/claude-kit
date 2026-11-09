@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """SessionStart: tell Claude which kit gates this project has, make the user the git author when
-kit.json names them, offer the kit's machine settings once, re-apply the user's approved
-per-repo auto mode lines to user settings, import new memories into the kit's lesson ledger and
-hand the main session its lessons, the news of what the kit changed in them and, every
-lessons.REVIEW_DAYS, a line that the lesson review is due (lessons.py), and
-after a compaction put the coordinator's board back into context (stdout is added to context)."""
+kit.json names them, offer the kit's machine settings once (not in a cloud container, whose
+~/.claude is ephemeral: CLAUDE_CODE_REMOTE=true), re-apply the user's approved per-repo auto
+mode lines to user settings, import new memories into the kit's lesson ledger and hand the main
+session its lessons, the news of what the kit changed in them and, every lessons.REVIEW_DAYS, a
+line that the lesson review is due (lessons.py), and after a compaction put the coordinator's
+board back into context (stdout is added to context).
 
+A kit.json that exists is the opt-in, even `{}`: the "kit harness active" line is always printed
+then, with one line per key the kit does not know (and the closest known key), one per key of
+the wrong type, and one when items on disk are still `queued`."""
+
+import difflib
 import json
 import os
 import re
@@ -20,6 +26,59 @@ BOARD = ".claude/lead/board.md"
 SESSION_LESSONS = 1600  # about 400 tokens of the ledger's lessons for the main session
 MAX_BOARD_CHARS = 8000  # the contract's size: a board within it comes back whole
 BOARD_LINES, BOARD_BYTES = 60, 8000  # the board's contract (kit:lead)
+# every key a kit script, the mod or a skill reads, per section (docs/reference.md)
+KNOWN_KEYS = {
+    "": ("check", "verify", "checkTimeout", "verifyTimeout", "maxStopRetries", "onEdit", "protect", "guard",
+         "watchdog", "llm", "learn", "author", "lead"),
+    "lead": ("board", "notes", "read", "backlog", "ship", "merge", "parallel", "budget", "loops"),
+    "guard": ("protectedBranches", "agentsAsk", "agentsDeny", "allowCommands", "denyCommands", "askCommands",
+              "attribution", "waits", "sleepMaxSec"),
+    "watchdog": ("silentMin", "bashDeadlineMin", "permissionMin"),
+    "learn": ("model",),
+}
+TYPED_KEYS = {"check": (str, "a string (the shell command)"), "verify": (str, "a string (the shell command)"),
+              "protect": (list, "a list of rules"), "onEdit": (list, "a list of rules")}
+MAX_NOTES = 8
+
+
+def config_notes(config):
+    """One line per kit.json key the kit does not read (a typo stays silent otherwise) with the
+    closest known key, and one per key whose value has the wrong type."""
+    notes = []
+    for section, known in KNOWN_KEYS.items():
+        value = config if section == "" else config.get(section)
+        if not isinstance(value, dict):
+            continue
+        prefix = section + "." if section else ""
+        for key in value:
+            if key in known:
+                continue
+            close = difflib.get_close_matches(str(key), known, n=1, cutoff=0.6)
+            hint = f" (did you mean `{prefix}{close[0]}`?)" if close else ""
+            notes.append(f"- unknown key `{prefix}{key}` in .claude/kit.json{hint}: the kit ignores it")
+    for key, (kind, want) in TYPED_KEYS.items():
+        if key in config and not isinstance(config[key], kind):
+            notes.append(f"- `{key}` in .claude/kit.json should be {want}; it is ignored")
+    if len(notes) > MAX_NOTES:
+        notes = notes[:MAX_NOTES] + [f"- ... and {len(notes) - MAX_NOTES} more key(s) to check in .claude/kit.json"]
+    return notes
+
+
+def queued_line(root):
+    """Items on disk nothing shows yet (a hand-off, a taken proposal) until the lead takes them."""
+    try:
+        import items
+        queued = items.list_items(root, "queued")
+    except Exception:
+        return ""
+    if not queued:
+        return ""
+    script = Path(__file__).resolve().parent / "items.py"
+    return f"- {len(queued)} queued item(s) on disk: python3 \"{script}\" list --status queued"
+
+
+def as_list(config, key):
+    return config.get(key) if isinstance(config.get(key), list) else []
 
 
 def read_board(root, config):
@@ -144,12 +203,12 @@ def main():
     config, err = kitlib.load_config(root)
     if data.get("source") == "compact":
         print_board(root, config)
-    elif not os.environ.get("KIT_HEADLESS"):
-        offer_machine_setup()
+    elif not os.environ.get("KIT_HEADLESS") and os.environ.get("CLAUDE_CODE_REMOTE", "").lower() not in ("1", "true"):
+        offer_machine_setup()  # a cloud container's ~/.claude does not outlive the session: nothing to set up
     if err:
         print(err)
         return 0
-    if not config:
+    if config is None:
         return 0  # project has not opted in: stay silent
     if data.get("source") != "compact":  # after a compaction print_board says it
         warning = board_warning(read_board(root, config)[1])
@@ -168,19 +227,24 @@ def main():
     author_line = ensure_author(root, config)
     if author_line:
         lines.append(author_line)
-    if config.get("check"):
+    if isinstance(config.get("check"), str) and config["check"]:
         lines.append(f"- fast check (runs automatically before you stop): {config['check']}")
-    if config.get("verify"):
+    if isinstance(config.get("verify"), str) and config["verify"]:
         lines.append(f"- full verify (the gate for finished work): {config['verify']}")
-    for rule in config.get("protect", []):
-        lines.append(f"- protected: {rule.get('glob')} ({rule.get('mode', 'read-only')}) {rule.get('reason', '')}")
-    if config.get("onEdit"):
-        lines.append("- onEdit commands run after each edit of: " + ", ".join(r.get("glob", "?") for r in config["onEdit"]))
+    for rule in as_list(config, "protect"):
+        if isinstance(rule, dict):
+            lines.append(f"- protected: {rule.get('glob')} ({rule.get('mode', 'read-only')}) {rule.get('reason', '')}")
+    if as_list(config, "onEdit"):
+        lines.append("- onEdit commands run after each edit of: "
+                     + ", ".join(r.get("glob", "?") if isinstance(r, dict) else "?" for r in config["onEdit"]))
     lead = config.get("lead") or {}
     if isinstance(lead, dict) and lead.get("notes"):
         lines.append(f"- lead notes: {lead['notes']}")
-    if len(lines) > 1:
-        print("\n".join(lines))
+    lines.extend(config_notes(config))
+    queued = queued_line(root)
+    if queued:
+        lines.append(queued)
+    print("\n".join(lines))  # the header always: a kit.json of only unknown keys must not look like silence
     sys.stdout.flush()  # the gate lines stand even if the lessons run out of time
     for line in learned(root):
         print(line)

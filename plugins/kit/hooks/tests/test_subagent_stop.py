@@ -46,12 +46,14 @@ def main():
         server = dict(result("t0", "Command running in background"), toolUseResult={"backgroundTaskId": "bsrv"})
         run1 = [user("ITEM: B2. brief"), user(REMINDER), call("t0", "Bash", {"command": "npm run dev"}), server,
                 call("t1", "SubagentHandback", {"message": "r1"}), result("t1", DELIVERED)]
-        assert stop(tmp, run1) == {}, "a delivered report: the stop goes through"
-
         # the B2 case: resumed by the coordinator, the second hand-back refused, the run ends in plain text
         # while its dev server still runs
         resumed = run1 + [user("The coordinator sent a message while you were working: fix 1-6"), user(REMINDER),
                           call("t2", "SubagentHandback", {"message": "r2"}), result("t2", REFUSED)]
+        assert stop(tmp, resumed) == {}, "a project without .claude/kit.json gets no nudge: every hook is a no-op there"
+        (Path(tmp) / ".claude").mkdir()
+        (Path(tmp) / ".claude" / "kit.json").write_text("{}")  # present, even empty: opted in
+        assert stop(tmp, run1) == {}, "a delivered report: the stop goes through"
         nudge = stop(tmp, resumed)
         assert nudge.get("decision") == "block" and "SendMessage" in nudge["reason"], nudge
         assert stop(tmp, resumed, active=True) == {}, "nudged once: the second stop is the hooks module's"

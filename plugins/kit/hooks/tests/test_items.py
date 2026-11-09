@@ -57,6 +57,8 @@ def main():
         subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
         (repo / ".claude").mkdir()
         (repo / ".claude" / "kit.json").write_text(json.dumps({"check": "true"}))
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                        "commit", "-q", "--allow-empty", "-m", "init"], check=True)
 
         # new: a folder, BRIEF.md headed by ITEM, the first LOG line; the lead folder is excluded from git
         code, out, err = run(repo, "new", "Login page", "--brief", "-", "--from", "handoff",
@@ -72,15 +74,19 @@ def main():
         check(items.find_id("hello\nITEM: Login-Page\nmore") == "login-page", "find_id is case-insensitive")
         check(items.find_id("no item here") is None, "no id when absent")
 
-        # the hooks file the thread's report and the verifier's verdict under the item
+        # the hooks file the thread's report and the verifier's verdict under the item. The hand-back is
+        # the report; the closing text after it (last_assistant_message) is not
         t1 = Path(tmp) / "thread.jsonl"
-        transcript(t1, brief, handback="STATUS: done\nCHANGED: login.py\nDECISION: used cookies, not JWT\nOPEN: none")
+        transcript(t1, brief, final_text="Report delivered to the coordinator.",
+                   handback="STATUS: done\nCHANGED: login.py\nDECISION: used cookies, not JWT\nOPEN: none")
         code, err = hook(repo, {"cwd": str(repo), "agent_type": "kit:implementer", "agent_id": "a1",
-                               "agent_transcript_path": str(t1), "last_assistant_message": ""}, env)
+                               "agent_transcript_path": str(t1),
+                               "last_assistant_message": "Report delivered to the coordinator."}, env)
         check(code == 0, f"implementer hook exits 0: {err}")
         report = (folder / "REPORT.md").read_text()
-        check("STATUS: done" in report and "DECISION: used cookies" in report, "REPORT.md filed from the handback")
-        check("| reported | done, 1 decision(s)" in (folder / "LOG.md").read_text(), (folder / "LOG.md").read_text())
+        check(report.startswith("STATUS: done") and "DECISION: used cookies" in report and "delivered to" not in report,
+              f"REPORT.md holds the hand-back, not the closing line: {report!r}")
+        check("| reported | done, 1 decision(s), agent a1" in (folder / "LOG.md").read_text(), (folder / "LOG.md").read_text())
 
         t2 = Path(tmp) / "verifier.jsonl"
         transcript(t2, f"ITEM: login-page\nReview branch `feat/login` against: e2e passes",
@@ -89,7 +95,27 @@ def main():
                                "agent_transcript_path": str(t2), "last_assistant_message": ""}, env)
         check(code == 0, f"verifier hook exits 0: {err}")
         check((folder / "VERDICT.md").read_text().startswith("VERDICT: FAIL scope=local:login.py"), "VERDICT.md filed")
-        check("| verdict | FAIL scope=local:login.py" in (folder / "LOG.md").read_text(), "verdict logged with its scope")
+        check("| verdict | FAIL scope=local:login.py, agent v1" in (folder / "LOG.md").read_text(),
+              "verdict logged with its scope and agent")
+        # a verifier that states the commit it reviewed: noted, not compared
+        transcript(t2, "ITEM: login-page\nReview branch `feat/login`",
+                   handback="VERDICT: PASS\nREVIEWED: `4a24c23f0e1d`\nEVIDENCE:\n- gate ok\nPROBLEMS:\n- none\n")
+        hook(repo, {"cwd": str(repo), "agent_type": "kit:verifier", "agent_id": "v2",
+                    "agent_transcript_path": str(t2), "last_assistant_message": ""}, env)
+        check("| verdict | PASS, reviewed 4a24c23f0e1d, agent v2" in (folder / "LOG.md").read_text(),
+              (folder / "LOG.md").read_text())
+
+        # a thread stopping in its worktree (the hook's cwd) files under the main checkout's item
+        tree = Path(tmp) / "repo-wt"
+        subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "feat/wt", str(tree)], check=True)
+        t4 = Path(tmp) / "wt-thread.jsonl"
+        transcript(t4, "ITEM: login-page-2\nfooter", handback="STATUS: blocked\nOPEN: needs the design")
+        code, err = hook(repo, {"cwd": str(tree), "agent_type": "kit:implementer", "agent_id": "a3",
+                               "agent_transcript_path": str(t4), "last_assistant_message": ""}, env)
+        folder2 = repo / ".claude" / "lead" / "items" / "login-page-2"
+        check(code == 0 and (folder2 / "REPORT.md").read_text().startswith("STATUS: blocked"), f"filed from a worktree: {err}")
+        check("| reported | blocked, agent a3" in (folder2 / "LOG.md").read_text(), (folder2 / "LOG.md").read_text())
+        check(not (tree / ".claude" / "lead").exists(), "nothing created in the worktree")
 
         # a thread whose brief names no item files nothing
         t3 = Path(tmp) / "other.jsonl"
@@ -102,7 +128,8 @@ def main():
 
         # list, log, show, done
         code, out, _ = run(repo, "list")
-        check("login-page | verdict | BRIEF: a login page" in out and "login-page-2 | queued" in out, out)
+        check("login-page | verdict | BRIEF: a login page" in out and "login-page-2 | reported" in out, out)
+        run(repo, "log", "login-page-2", "queued", "re-queued")
         run(repo, "log", "login-page", "review", "PR #7 open")
         code, out, _ = run(repo, "list", "--status", "review")
         check(out.startswith("login-page | review |") and "login-page-2" not in out, out)
@@ -118,6 +145,31 @@ def main():
         check(items.find(repo, "login-page") is not None, "an archived item is still found")
         code, out, err = run(repo, "path", "nope")
         check(code == 1 and "no item" in err, "a missing item is an error")
+
+        # the board exists now: a new item gets a queued row in the lead's format (DONE WHEN from the brief)
+        code, out, _ = run(repo, "new", "Search box", "--brief", "-", "--from", "scout", "--kind", "scout",
+                           stdin="GOAL: a search box\n- DONE WHEN: results in 200ms\nSCOPE: ui\n")
+        rows = (lead / "board.md").read_text().splitlines()
+        check(rows[-1] == "search-box | scout | Search box | DONE WHEN results in 200ms | queued | agent - | - | from scout", rows)
+        run(repo, "new", "No done line", "--brief", "-", stdin="GOAL: just a goal\n")
+        check((lead / "board.md").read_text().splitlines()[-1]
+              == "no-done-line | ship | No done line | DONE WHEN see BRIEF.md | queued | agent - | - | from lead",
+              (lead / "board.md").read_text())
+        check("login-page-2 | ship | footer" in (lead / "board.md").read_text(), "existing rows are kept")
+
+        # done when done/<id> already exists (an item folder made by hand, or from another checkout
+        # of the same lead folder): the earlier archive is kept, the new one lands at done/<id>-2, -3
+        archived = folder.parent / "done" / "login-page"
+        (archived / "REPORT.md").write_text("the first round\n")
+        for n in (2, 3):
+            folder.mkdir()
+            (folder / "BRIEF.md").write_text("ITEM: login-page\nround two\n")
+            (folder / "LOG.md").write_text("- 2026-01-01T00:00:00Z | working\n")
+            code, out, _ = run(repo, "done", "login-page")
+            check(code == 0 and not folder.exists(), f"done round {n}: {code} {out}")
+            check((archived / "REPORT.md").read_text() == "the first round\n", "the first archive is untouched")
+            check((folder.parent / "done" / f"login-page-{n}" / "LOG.md").read_text().endswith("| done\n"),
+                  f"the next archive lands at done/login-page-{n}")
 
     print("items: all checks passed" if not failed else f"items: {failed} failures")
     return 1 if failed else 0

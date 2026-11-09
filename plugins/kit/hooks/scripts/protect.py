@@ -35,7 +35,7 @@ def main():
     if err:
         print(err, file=sys.stderr)
         return 0
-    if not config:
+    if config is None:
         return 0
     rel = kitlib.relpath(root, file_path)
     if rel is None:

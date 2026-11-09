@@ -21,6 +21,7 @@ CONFIG = TMP / "config"
 os.environ["CLAUDE_CONFIG_DIR"] = str(CONFIG)
 os.environ["KIT_LEARN_MODEL"] = "0"  # no test reaches a real model, the detached distiller included
 os.environ["TMPDIR"] = str(TMP / "tmp")
+os.environ.pop("CLAUDE_CODE_SESSION_ATTENDED", None)  # an attended cloud session would make every entrypoint interactive
 (TMP / "tmp").mkdir()
 sys.path.insert(0, str(SCRIPTS))
 import distill  # noqa: E402
@@ -113,9 +114,14 @@ def test_capture():
         out = hook("guard.py", {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(repo),
                                 "session_id": session})
         assert out.returncode == 2, out.stderr
-    guard = [r for r in rows(repo) if r["key"].startswith("guard-")]
-    assert len(guard) == 1 and guard[0]["seen"] == 2 and guard[0]["status"] == "active", guard
-    assert "/opt" not in guard[0]["text"], "the command shape, not the path"
+    slug = lessons.repo(repo)["slug"]
+    denials = [e for e in lessons.read_rows(lessons.file_of(slug, ".events")) if e["key"].startswith("guard-")]
+    assert len(denials) == 2 and {e["once"] for e in denials} == {"s1", "s2"}, denials
+    assert not any(r["key"].startswith("guard-") for r in rows(repo)), \
+        "a denial is an event for the statistics, once per session, never a lesson: the hook enforces the rule"
+    assert "/opt" not in json.dumps(denials), "the command shape, not the path"
+    for _ in range(2):  # an automatic lesson that uses up one of the day's activations
+        lessons.observe(slug, "earlier", "pitfall", "an earlier automatic lesson", "gate")
 
     (repo / "x.txt").write_text("changed")
     for session in ("a", "b"):
@@ -131,7 +137,7 @@ def test_capture():
                                   "last_assistant_message": report})
     found = [r for r in rows(repo) if r["key"].startswith("verifier-")]
     assert len(found) == 2 and all(r["seen"] == 2 for r in found), found
-    assert [r["status"] for r in found] == ["active", "candidate"], "3 activations a day: guard, gate, one more"
+    assert [r["status"] for r in found] == ["active", "candidate"], "3 activations a day: earlier, gate, one more"
     assert "Details follow" not in found[0]["text"], "the headline only"
 
 
@@ -185,6 +191,17 @@ def test_fail_then_pass():
             f.write("".join(json.dumps(r) + "\n" for r in lines))
         hook("subagent_stop.py", {"cwd": str(repo), "agent_type": "kit:verifier", "agent_id": agent,
                                   "agent_transcript_path": str(path), "last_assistant_message": "Cleanup next."})
+
+    # CLAUDE_CODE_SESSION_ATTENDED=1: someone is at the keyboard, whatever the entrypoint
+    os.environ.pop("CLAUDE_CODE_SESSION_ATTENDED", None)  # this test may itself run in an attended cloud session
+    os.environ["CLAUDE_CODE_ENTRYPOINT"] = "remote_mobile"
+    assert lessons.headless(), "an unknown entrypoint alone is headless"
+    os.environ["CLAUDE_CODE_SESSION_ATTENDED"] = "1"
+    assert not lessons.headless(), "attended: a person is watching"
+    os.environ["KIT_HEADLESS"] = "1"
+    assert lessons.headless(), "the overnight flag still wins"
+    for key in ("CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ATTENDED", "KIT_HEADLESS"):
+        os.environ.pop(key, None)
 
     assert subagent_stop.parse("VERDICT: FAIL\nPROBLEMS:\n1. the real one\n\nNOT CHECKED:\n1. load test\n") == \
         ("FAIL", ["the real one"]), "a later section is not a problem"
