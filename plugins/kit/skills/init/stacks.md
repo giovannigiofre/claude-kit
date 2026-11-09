@@ -21,6 +21,7 @@ single-file checker; `protect` covers what a thread should never rewrite.
 | check | `npx eslint --cache $KIT_CHANGED_FILES` with `eslint-config-next/core-web-vitals` (+ `/typescript`) | `<img>`, `<a>` to pages, hooks rules | `next lint` is gone in Next 16: flat `eslint.config.mjs` |
 | check | `npx vitest run --changed origin/main --passWithNoTests` | regressions on the diff | affected tests only; the full suite is in verify |
 | check | `gitleaks protect --staged --no-banner` | secrets about to be committed | under a second; the guard blocks `.env` and key files anyway |
+| check | `npm audit --omit=dev --audit-level=high` | known-vulnerable dependencies | Next.js 16.4.5 / 15.5.29 (3 Nov 2026) were security releases with seven advisories; a `/kit:scout` A card "dependency security release" is the other half |
 | verify | `npx next build` | server/client boundaries, build errors | the gate for "done" |
 | verify | `npx vitest run --coverage && diff-cover coverage/lcov.info --compare-branch origin/main --fail-under 80` | untested changed lines | diff-cover is a Python tool (`uvx diff-cover`) |
 | verify | `npx knip` | unused files, exports, dependencies | pin its version; medium false positives on dynamic imports |
@@ -37,16 +38,21 @@ single-file checker; `protect` covers what a thread should never rewrite.
 
 Worktrees: `.worktreeinclude` lists `.env.local`, `.env`, `supabase/.env`;
 `"worktree": {"symlinkDirectories": ["node_modules"]}` in `.claude/settings.json`. A thread needs
-its own database: Supabase CLI 2.119+ `supabase stack` (experimental: `[experimental] stack =
-true` in `config.toml`, fixed ports removed) gives each worktree its own ports and data, then
+its own database: Supabase CLI `supabase stack` (experimental, on the 4.x line since November
+2026: `[experimental] stack = true` in `config.toml`, fixed ports removed) gives each worktree its
+own ports and data, then
 `supabase status --env --override-name API_URL=NEXT_PUBLIC_SUPABASE_URL,ANON_KEY=NEXT_PUBLIC_SUPABASE_ANON_KEY > .env.local`;
-several stacks cost a few GB of RAM each, so `lead.parallel` of 2 or 3. The guard asks before
-`supabase db push`, `vercel --prod`, `wrangler deploy` and the other remote changes.
+several stacks cost a few GB of RAM each, so `lead.parallel` of 2 or 3. The guard has no deploy
+rule: if `supabase db push`, `vercel --prod` or `wrangler deploy` should be asked about, that is
+a `guard.askCommands` entry the user chooses.
 
 Evidence for a thread: a headless browser (`playwright-cli`, or Playwright MCP `--headless
 --isolated`), the Next.js dev server's MCP at `/_next/mcp` (routes, compilation issues, server
 logs), `logging.browserToTerminal` in `next.config`; Supabase logs through the read-only MCP
-(`?project_ref=<dev ref>&read_only=true`) or the local container. Never a production project ref.
+(`?project_ref=<dev ref>&read_only=true&features=…`: since MCP 0.16 the notebook tools, which run
+SQL, are on by default, so scope the features) or the local container. Never a production project
+ref. On Workers, the `cloudflare/skills` plugin's `workers-development` skill covers local
+debugging and wrangler's simulators are the test surface.
 
 ## Python (FastAPI, pipelines, data), on GCP
 
@@ -66,7 +72,9 @@ logs), `logging.browserToTerminal` in `next.config`; Supabase logs through the r
 | protect | `data/raw/**` no-overwrite | raw data is immutable | |
 | protect | `.env*` read-only | secrets are set by hand | |
 
-Property tests (`hypothesis`) for parsers, pricing and date logic belong in the suite, not in a
+Evidence for a thread on GCP: `gcloud logging read`, or the Cloud Logging MCP
+(`https://logging.googleapis.com/mcp`, GA; one project per connection). Property tests
+(`hypothesis`) for parsers, pricing and date logic belong in the suite, not in a
 gate line. Mutation testing (`mutmut`, `cosmic-ray`; `stryker --since` for TypeScript) is a
 nightly CI job, not a gate: minutes to hours, and the evidence for it is thin.
 

@@ -1,6 +1,6 @@
 ---
 name: init
-description: Sets up the kit in the current project - writes .claude/kit.json (fast check, full verify, per-file onEdit commands, protected paths, coordinator settings) from what the repo actually uses, a project e2e skill that says how to exercise the app, and proposes permissions and a safety profile. Use when starting to use the kit in a project or when the SessionStart notice says kit.json is missing.
+description: Sets up the kit in the current project - writes .claude/kit.json (fast check, full verify, per-file onEdit commands, protected paths, coordinator settings) from what the repo actually uses, a project verify skill that says how to exercise the app, and proposes permissions and a safety profile. Use when starting to use the kit in a project or when the SessionStart notice says kit.json is missing.
 disable-model-invocation: true
 ---
 
@@ -38,7 +38,9 @@ and its CI actually run, not guesses.
    Write `author` at the top level: the user's git identity as `"Name <email>"` (from their own
    recent commits or their global git config, never an AI's; confirm it with them). The kit's
    SessionStart hook sets it on the repo whenever git's identity is missing or an AI's, so every
-   commit, the threads' included, is theirs.
+   commit, the threads' included, is theirs. Prefer the GitHub noreply address: since Claude
+   Code 2.1.317 a tool call that would send the claude.ai account email to the network asks first,
+   so a git email equal to it means a prompt on every push and `gh` call in a thread.
 6. **A verify skill.** Write `.claude/skills/verify/SKILL.md` (about 20 lines, description "How
    to run and exercise <project> end to end to verify a change"): how to start the app or
    services (commands, ports, env, seed data), how to exercise each surface the way a user does
@@ -61,10 +63,10 @@ and its CI actually run, not guesses.
    items, failing checks, exact names, paths and numbers; drop tool output already acted on),
    unless there is one.
 9. **The maintenance loop**: write `.claude/loop.md` from [loop.md](loop.md) with the
-   project's values (name, git author, default branch, the kit's install path from
-   `claude plugin marketplace list --json`), and commit it. Claude Code's bare `/loop` reads it
-   instead of its built-in maintenance prompt, so a long CI or a review round is tended the way
-   this project wants: fix, gate, push, answer; never a merge.
+   project's values (name, git author, default branch, the `verify` command; no machine-specific
+   path, the file is committed), and commit it. Claude Code's bare `/loop` reads it instead of
+   its built-in maintenance prompt, so a long CI or a review round is tended the way this
+   project wants: fix, gate, push, answer, reschedule while the PR is open; never a merge.
 10. **Safety**, in three lines: the kit guard is on with `kit.json` (blocks deletes outside the
    repo, pushes to main, discarding uncommitted work, `sudo`, `curl | sh`, reading credentials;
    best effort, it reads shell text; `guard.denyCommands` / `askCommands` hold the project's own
@@ -92,21 +94,25 @@ and its CI actually run, not guesses.
 13. **Domain plugins**: if the repo has a frontend, or code that calls an LLM, offer `kit-ui` or
     `kit-llm` for this project now (`kit:extras` explains the install).
 14. Write `.claude/kit.json`, show it, and explain that it is committed so every clone and session
-    gets the same gates. Confirm the hooks fire: make a trivial edit to a file matching an
+    gets the same gates; the session-start line reports any key it does not know, with the
+    nearest known name. Confirm the hooks fire: make a trivial edit to a file matching an
     `onEdit` glob, revert it, and report what ran.
 
-Schema:
+Schema (every key optional; the file's presence, even `{}`, opts the project in):
 
 ```json
 {
   "check": "fast command, exit 0 = ok",
   "verify": "full command",
-  "checkTimeout": 540,
+  "checkTimeout": 540, "verifyTimeout": 1800,
   "maxStopRetries": 3,
   "onEdit": [{"glob": "**/*.py", "run": "...\"$FILE\"...", "timeout": 120}],
   "protect": [{"glob": "data/raw/**", "mode": "no-overwrite", "reason": "raw files are immutable"}],
-  "guard": {"protectedBranches": ["main"], "allowCommands": [], "denyCommands": []},
+  "guard": {"protectedBranches": ["main"], "allowCommands": [], "denyCommands": [], "askCommands": []},
+  "watchdog": {"silentMin": 20, "bashDeadlineMin": 30, "permissionMin": 2},
+  "learn": {"model": true}, "llm": "on",
   "author": "Name <email>",
-  "lead": {"read": ["docs/backlog.md"], "backlog": "docs/backlog.md", "notes": "...", "ship": "pr", "merge": "user", "parallel": 3}
+  "lead": {"read": ["docs/backlog.md"], "backlog": "docs/backlog.md", "notes": "...", "ship": "pr",
+           "merge": "user", "parallel": 3, "budget": "none", "loops": [], "board": ".claude/lead/board.md"}
 }
 ```

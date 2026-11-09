@@ -10,6 +10,7 @@
   per session; the same failure in a second session becomes a lesson.
 - The command gets KIT_CHANGED_FILES (the files this branch touched, shell-quoted) and
   KIT_CHANGED_COUNT, so a check can look only at them (`ruff check $KIT_CHANGED_FILES`).
+- Its timeout is kit.json `checkTimeout`, else kitlib.GATE_TIMEOUTS["check"] (540 s).
 """
 
 import hashlib
@@ -62,7 +63,7 @@ def main():
     if err:
         print(err, file=sys.stderr)
         return 0
-    if not config or not config.get("check"):
+    if config is None or not config.get("check"):
         return 0
     session = data.get("session_id", "")
     state = kitlib.load_state(session, "stop")
@@ -70,7 +71,7 @@ def main():
     if fp is None or fp == state.get("passed_fp"):
         return 0
     env = {"KIT_GATE": "check", **kitlib.changed_env(root)}  # a diff-aware check can read the file list
-    code, out = kitlib.run_shell(config["check"], root, env, timeout=int(config.get("checkTimeout", 540)))
+    code, out = kitlib.run_shell(config["check"], root, env, timeout=kitlib.gate_timeout(config, "check"))
     if code == 0:
         kitlib.save_state(session, "stop", {"passed_fp": fp, "fails": 0})
         return 0

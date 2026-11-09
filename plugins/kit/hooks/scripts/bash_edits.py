@@ -3,8 +3,9 @@
 
 In auto mode Claude is told to change files with sed, heredocs and short scripts rather than
 the Edit tool, so a hook matched on Write|Edit never sees those edits. Before each Bash command
-in a kit project the guard notes which files are modified or untracked and their mtimes
-(kitlib.dirty_snapshot); after it, this hook compares. A file the command changed gets the
+in a project with `protect` or `onEdit` the guard notes which files are modified or untracked
+and their mtimes (kitlib.dirty_snapshot), per session and agent (kitlib.state_key: threads
+running in parallel never share one); after it, this hook compares. A file the command changed gets the
 onEdit commands for its glob (formatters, validators), and a protected one is reported:
 read-only on any change, no-overwrite on a change to a file that existed before. The hook
 reverts nothing: Claude gets the report and restores the file. Silent when nothing changed,
@@ -36,13 +37,13 @@ def main():
     if err:
         print(err, file=sys.stderr)
         return 0
-    if not config or not (config.get("protect") or config.get("onEdit")):
+    if config is None or not (config.get("protect") or config.get("onEdit")):
         return 0
-    session = data.get("session_id") or ""
-    before = kitlib.load_state(session, "bash-snapshot")
+    key = kitlib.state_key(data)  # per session and agent: parallel threads never share a snapshot
+    before = kitlib.load_state(key, "bash-snapshot")
     if not isinstance(before, dict) or "files" not in before:
         return 0
-    kitlib.save_state(session, "bash-snapshot", {})  # used once: the next command gets a fresh one
+    kitlib.save_state(key, "bash-snapshot", {})  # used once: the next command gets a fresh one
     after = kitlib.dirty_snapshot(root)
     changed = changed_files(root, before.get("files") or {}, after)
     if not changed:

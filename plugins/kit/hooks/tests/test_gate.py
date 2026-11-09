@@ -116,6 +116,23 @@ def main():
         (repo / ".claude" / "kit.json").write_text(json.dumps({"verify": "true"}))
         check(gate_cmd(repo, "check")[0] == 3, "missing command exits 3")
 
+        # from a linked worktree: the gate runs on the worktree's tree and branch, the record lands
+        # under the main checkout, where it outlives the worktree
+        sh(repo, "add", "-A")
+        sh(repo, "commit", "-qm", "gate config")
+        tree = Path(tmp) / "wt"
+        sh(repo, "worktree", "add", "-q", "-b", "feat/wt", str(tree))
+        code, out = gate_cmd(tree, "verify")
+        record = repo / ".claude" / "evidence" / "feat" / "wt" / "gate-verify.json"
+        check(code == 0 and record.is_file() and str(record) in out, f"worktree record under the main checkout: {out}")
+        check(not (tree / ".claude" / "evidence").exists(), "nothing written under the worktree")
+        rec = json.loads(record.read_text())
+        check(rec["branch"] == "feat/wt" and rec["tree"] == gate.tree_hash(tree), f"the worktree's branch and tree: {rec}")
+        ok, why = gate.status(tree, "verify")
+        check(ok, f"status from the worktree reads the same record: {why}")
+        check(gate_cmd(tree, "status")[0] == 0, "status from the command line in the worktree")
+        check(sh(tree, "status", "--porcelain") == "", "the worktree stays clean: " + sh(tree, "status", "--porcelain"))
+
     print("gate: all checks passed" if not failed else f"gate: {failed} failures")
     return 1 if failed else 0
 

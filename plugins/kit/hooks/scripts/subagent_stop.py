@@ -11,16 +11,22 @@ counts as a miss.
 
 The verdict is parsed from the verifier's report (`VERDICT:` and the items under PROBLEMS):
 its final message, else, since a worker hands its report back through the SubagentHandback tool,
-the last such call in its transcript, else the last text there that holds a verdict. Only the
-problem's headline is kept, never the evidence. A verdict is tied to the branch its brief names
-(else a PR number), and a PASS confirms only the last FAIL on that same branch; with neither named
-it confirms nothing. Apart from the missing report, silent and never blocks a stop. A project
-without .claude/kit.json records nothing. Standard library only. `subagent_stop.py --missing
-<transcript>` exits 1 when that transcript's last run delivered no report (the hooks module asks).
+the last such call in its transcript, else the last text there that holds a verdict. A thread's
+report is the last SubagentHandback message of its transcript (its closing text, in
+`last_assistant_message`, is not the delivered report), else that text. Only the problem's
+headline is kept, never the evidence. A verdict is tied to the branch its brief names (else a PR
+number), and a PASS confirms only the last FAIL on that same branch; with neither named it
+confirms nothing. The LOG line of a filed report names the agent (`..., agent <id>`) and, for a
+verifier, the `REVIEWED: <sha>` its report states. Items are looked up in the main checkout: a
+thread stopping in its worktree (the hook's cwd) has no `.claude/lead/` of its own. Apart from
+the missing report, silent and never blocks a stop. A project without .claude/kit.json does
+nothing, the nudge included. Standard library only. `subagent_stop.py --missing <transcript>`
+exits 1 when that transcript's last run delivered no report (the hooks module asks).
 """
 
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -249,22 +255,26 @@ def from_transcript_any(path):
     return brief, handback or said
 
 
-def file_report(root, brief, report, agent_type):
+def file_report(root, brief, report, agent_type, agent_id=""):
     """A thread briefed with `ITEM: <id>` gets its report filed under the item (REPORT.md for a
-    kit:implementer, VERDICT.md for a kit:verifier), with one LOG line: the mailbox the
-    coordinator and the user read on disk. Silent when the brief names no item."""
+    kit:implementer, VERDICT.md for a kit:verifier), with one LOG line that names the agent: the
+    mailbox the coordinator and the user read on disk. A verifier's `REVIEWED: <sha>` line is
+    noted too. Silent when the brief names no item."""
     try:
         import items
         item_id = items.find_id(brief)
         if not item_id or not items.find(root, item_id):
             return
+        who = f", agent {agent_id}" if agent_id else ""
         if agent_type.endswith("verifier"):
             m = re.search(r"^\W*VERDICT:\s*([A-Z_]+(?:\s+scope=\S+)?)", report, re.M)
-            items.write(root, item_id, "VERDICT.md", report, "verdict", m.group(1) if m else "no verdict line")
+            sha = re.search(r"^\W*REVIEWED:\s*`?([0-9a-fA-F]{7,40})\b", report, re.M)
+            note = (m.group(1) if m else "no verdict line") + (f", reviewed {sha.group(1)}" if sha else "") + who
+            items.write(root, item_id, "VERDICT.md", report, "verdict", note)
         else:
             status = re.search(r"^\W*STATUS:\s*(\w+)", report, re.M)
             decisions = len(re.findall(r"^\s*(?:-\s*)?DECISION:", report, re.M))
-            note = (status.group(1) if status else "no status line") + (f", {decisions} decision(s)" if decisions else "")
+            note = (status.group(1) if status else "no status line") + (f", {decisions} decision(s)" if decisions else "") + who
             items.write(root, item_id, "REPORT.md", report, "reported", note)
     except Exception:
         pass
@@ -274,28 +284,33 @@ def main():
     if sys.argv[1:2] == ["--missing"]:
         return 1 if len(sys.argv) > 2 and missing_report(sys.argv[2]) else 0
     data = kitlib.read_input()
+    # the items live in the main checkout: a thread stopping in its worktree (cwd) has no .claude/lead/
+    cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    root = kitlib.main_checkout(cwd) or kitlib.project_root(data)
+    config, _ = kitlib.load_config(root)
+    if config is None:  # not opted in: no nudge, nothing filed
+        return 0
     transcript = data.get("agent_transcript_path")
     # once per stop: the second stop (stop_hook_active) is the hooks module's to report
     if transcript and not data.get("stop_hook_active") and missing_report(transcript):
         print(json.dumps({"decision": "block", "reason": NO_REPORT}))
         return 0
-    root = kitlib.project_root(data)
-    config, _ = kitlib.load_config(root)
     agent_type = str(data.get("agent_type") or "")
-    if not config or agent_type not in KIT_TYPES:
+    if agent_type not in KIT_TYPES:
         return 0
     report = data.get("last_assistant_message") or ""
+    agent_id = str(data.get("agent_id") or "")
     brief = ""
     if not agent_type.endswith("verifier"):  # a thread: file its report, nothing else to parse
         if data.get("agent_transcript_path"):
             brief, handed = from_transcript_any(data["agent_transcript_path"])
-            report = report or handed
-        file_report(root, brief, report, agent_type)
+            report = handed or report  # the hand-back is the report; the closing text is not
+        file_report(root, brief, report, agent_type, agent_id)
         return 0
     if data.get("agent_transcript_path"):
         brief, handed = from_transcript(data["agent_transcript_path"])
         report = report if HAS_VERDICT.search(report) else handed
-    file_report(root, brief, report, agent_type)
+    file_report(root, brief, report, agent_type, agent_id)
     verdict, problems = parse(report)
     if not verdict:
         return 0

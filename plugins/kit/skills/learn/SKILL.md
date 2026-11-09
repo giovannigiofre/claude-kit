@@ -51,7 +51,9 @@ Nothing copied.)
    - a `check`, `onEdit` or `protect` entry in `.claude/kit.json`, or for "never run X here" a
      `guard.denyCommands` / `guard.askCommands` entry (a regex over the command, with the reason);
    - a project skill in `.claude/skills/` when it matters only for one kind of task;
-   - a line in the repo's CLAUDE.md (or AGENTS.md) when every session needs it;
+   - a line in the repo's CLAUDE.md (or AGENTS.md) when every session needs it, worded as a
+     plain statement or a reason, never as a condition ("when X, do Y" is the wording agents
+     follow least, Tsuchida et al. 2026: a conditional lesson becomes a check or a guard rule);
    - the user's `~/.claude/CLAUDE.md` for a personal preference across projects.
 3. **Read the target first**, update rather than add, keep its tone. Look for lines no session
    needed and near-duplicates and propose removing them; keep always-loaded text (CLAUDE.md plus

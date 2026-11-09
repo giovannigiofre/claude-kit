@@ -155,10 +155,12 @@ def kit_version():
 
 def headless():
     """No person at the keyboard: overnight (KIT_HEADLESS), or any Claude Code entrypoint but an
-    interactive one (`claude -p` and the SDK are sdk-*, the GitHub action and others count too).
+    interactive one (`claude -p` and the SDK are sdk-*, the GitHub action and others count too),
+    unless CLAUDE_CODE_SESSION_ATTENDED=1 says someone is watching (a cloud session from the app).
     Unset means a person ran the script by hand. No model calls, no promotion when headless."""
     entry = os.environ.get("CLAUDE_CODE_ENTRYPOINT", "")
-    return bool(os.environ.get("KIT_HEADLESS")) or (entry != "" and entry not in INTERACTIVE)
+    attended = os.environ.get("CLAUDE_CODE_SESSION_ATTENDED") == "1"
+    return bool(os.environ.get("KIT_HEADLESS")) or (not attended and entry != "" and entry not in INTERACTIVE)
 
 
 def cc_slug(path):

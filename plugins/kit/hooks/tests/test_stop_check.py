@@ -73,6 +73,14 @@ def main():
             failed += 1
             print(f"FAIL a new session starts a fresh count: {err[:120]}")
 
+        # an empty kit.json is opted in, but has no check to run: silent, and no run
+        (repo / ".claude" / "kit.json").write_text("{}")
+        before = runs.read_text()
+        code, err = stop(repo, "s3", tmp)
+        if code != 0 or err or runs.read_text() != before:
+            failed += 1
+            print(f"FAIL `{{}}` has no check: nothing runs, nothing said: {code} {err[:80]}")
+
     print("stop_check: all checks passed" if not failed else f"stop_check: {failed} failures")
     return 1 if failed else 0
 

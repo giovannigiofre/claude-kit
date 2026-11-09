@@ -28,7 +28,7 @@ the model can't do alone, re-checked when a new model lands.
 | First PR in a project | answer once | "Do I merge PRs once they're green, or do you always review them first?"; the answer is saved in `kit.json` (`lead.merge`) |
 | Finishing by hand | `/kit:go` | PR with intent, live evidence (the gate run is recorded on the exact tree), what was fixed, risk; keeps CI green; merges if the project allows it |
 | Evening | "tonight keep doing X until Y" | `kit:overnight`: a fresh session per small step, a commit only when the gate passes, caps or none |
-| Weekly | `/kit:learn sweep` | turns repeated corrections into checks or rules, and prunes instructions that no longer help (at most 4 changes, each approved) |
+| Every two weeks or so | `/kit:learn` | when the session-start line says the review is due: turns repeated corrections into checks or rules, and prunes instructions that no longer help (at most 4 changes, each approved); capture and distilling run on their own, `sweep` reads transcripts for repeated corrections |
 
 Your time goes to the two ends: saying what you want, and judging the PR. The middle is the
 threads' job.
@@ -48,15 +48,17 @@ force-push as the work needs. Every commit and PR is yours: `kit.json` `author` 
 identity, and nothing credits an AI. Who merges is per project: you, or the coordinator for green,
 reviewed, not-high-risk PRs. Medium- or high-risk work gets a review by
 `kit:verifier` in a fresh context before it reaches you. When a thread finishes while you're away,
-the coordinator sends a notification (desktop, or phone with Remote Control).
+the kit sends one notification (desktop, or phone with Remote Control).
 
-**The status line.** `kit: loop · host · $1.20 · 2 running · 1 waiting · 1 overnight · 1 ready ·
-1 need you`, read again every 15 seconds (`waiting`: a thread stopped on a question or a
-permission). When the board gains a ready item or a question, the kit sends one native
-notification where Claude Code offers one. Mode per project (`/kit-mode`): **Light** (a normal
-session), **Loop** (every typed message goes to the coordinator; the default in a project with
-`kit.json`) or **Ask** (a discussion: read and reason, no code changes, docs may be edited).
-Safety per project (`/kit-safety`): **Host** or **Sandbox**.
+**The status line.** `loop · host · $1.20 · 2 running · 1 waiting · 1 overnight · 2 queued ·
+1 ready · 1 need you`, read again every 15 seconds (`waiting`: a thread stopped on a question or
+a permission; `unattended` appears after the safety profile while that is on). When the board gains a ready item or a question, the kit sends one native
+notification where Claude Code offers one, unless you were just typing in that terminal. Mode
+per project (`/kit-mode`): **Light** (a normal session), **Loop** (every typed message goes to
+the coordinator; the default in a project with `kit.json`) or **Ask** (a discussion: read and
+reason, no code changes, docs may be edited). Safety per project (`/kit-safety`): **Host** or
+**Sandbox**, plus `unattended on` for an evening nobody watches (a permission prompt becomes a
+denial and the thread goes on).
 
 ---
 
@@ -91,9 +93,10 @@ Safety per project (`/kit-safety`): **Host** or **Sandbox**.
                          lessons from the ledger, most repeated and newest first (about 600
                          tokens max); the hook sees only the session's repo, so it names it,
                          and a thread sent to another repo knows the lines are not for it
-   SubagentStop          turns a kit:verifier FAIL into candidate lessons; gate failures, guard
-                         denials are captured too (no tokens), all into
-                         ~/.claude/kit-lessons/, outside every repo (see docs/reference.md)
+   SubagentStop          files each thread's report and each verdict under its item (from a
+                         worktree too); turns a kit:verifier FAIL into candidate lessons; gate
+                         failures are captured too, guard denials only counted (no tokens), all
+                         into ~/.claude/kit-lessons/, outside every repo (see docs/reference.md)
    SessionEnd            runs the distiller in the background once 5 new events are pending
                          (merge, retire shipped fixes, propose retiring stale lessons and
                          hardening; each told once, with undo)
@@ -113,7 +116,7 @@ Safety per project (`/kit-safety`): **Host** or **Sandbox**.
 | `/kit:handoff` | A discussion's conclusion becomes a brief (an item on disk) sent to the coordinator, an open session, a new background session, or kept as a proposal card |
 | `/kit:scout` | Read-only explorers write deduplicated proposal cards; `take <id>` queues one as an item |
 | `/kit:go` | Intent → sync → test like a user → `/code-review` → `/simplify` → risk → PR → CI green |
-| `/kit:init` | Sets up a project (kit.json, e2e skill, safety, permissions) |
+| `/kit:init` | Sets up a project (kit.json, verify skill, loop.md, safety, permissions) |
 | `/kit:learn` | Tidies the lesson ledger (merge, retire shipped fixes, proposals to retire or harden, undo); `promote` turns a lesson seen across repos into a kit PR; corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
 | `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
 | `kit:implementer` | A thread: one item from brief to PR in its own worktree (another repo's included); effort set per thread by the coordinator (low for a clear, small brief, medium otherwise, high for ambiguous work) |
@@ -171,17 +174,20 @@ estimates otherwise pick the cheap, brittle option and test only in units:
 
 **Every new project:** `cd project && claude`, then `/kit:init`. Read `.claude/kit.json`, adjust
 it, commit it. The hooks do nothing in a project without it, so a user-scope install never
-changes a project you haven't opted in. Details of every key: [docs/reference.md](docs/reference.md).
-Facts every thread needs (how to set up a worktree, the integration-test command) go in a
-gitignored `CLAUDE.local.md`: threads load it like CLAUDE.md, while kit.json `lead.notes` reaches
-only the coordinator. In a repo with AGENTS.md and no CLAUDE.md, start it with `@AGENTS.md`: a
-CLAUDE.local.md otherwise stops Claude Code reading AGENTS.md. List the gitignored files a fresh
-worktree needs (`.env`, `CLAUDE.local.md`, `.claude/kit.json` when it is not committed) in
-`.worktreeinclude` (gitignore syntax); Claude Code copies them into every worktree it creates, a
-manual `git worktree add` excepted.
+changes a project you haven't opted in; a key the kit does not know is named at session start.
+Details of every key: [docs/reference.md](docs/reference.md). Facts every thread needs (how to
+set up a worktree, the integration-test command) go in a gitignored `CLAUDE.local.md`: threads
+load it like CLAUDE.md, while kit.json `lead.notes` reaches only the coordinator; `/kit:init`
+step 6 covers the worktree details (`.worktreeinclude`, the `@AGENTS.md` first line).
 
 **Update:** `git pull` in the clone (or `claude plugin marketplace update claude-kit`), then
 `/reload-plugins`. Bump `version` in the plugin's `plugin.json` when behaviour changes.
+
+**Cloud sessions** (claude.ai/code) start from the environment's plugins, so the kit is there
+only when the environment's setup script installs it; the lesson ledger is per machine and a
+container starts empty, and the board lives in the checkout's gitignored `.claude/lead/`, so a
+cloud session and your machine never see each other's items. The recipe and the consequences:
+[docs/reference.md](docs/reference.md#cloud-sessions).
 
 **Pause:** `claude plugin disable kit@claude-kit` everywhere, or delete `.claude/kit.json` in one
 project.
@@ -195,11 +201,16 @@ project.
   by the value the same command set it to once, a `$(mktemp -d)` one as inside its folder),
   pushes or force pushes to main, `git reset --hard` or `clean` over uncommitted work,
   `sudo`, `curl … | sh`, and reading `~/.ssh`, `~/.aws`, gh, docker or kube config and the
-  keychain. It also keeps you the only author: it blocks a commit, PR, issue or comment that
-  credits an AI (`Co-Authored-By: Claude`, "Generated with Claude Code", a session link), through
-  git, `gh` or the GitHub MCP tools, and a commit made under an AI git identity. A project can
-  add its own rules (`guard.denyCommands` / `askCommands`: a regex over the command and the
-  reason). It reads shell text, so it is best effort.
+  keychain (a store's own tool may use it: `ssh -i`, `kubectl --kubeconfig`). It also keeps you
+  the only author: it blocks a commit, PR, issue or comment that credits an AI (`Co-Authored-By:
+  Claude`, "Generated with Claude Code", a session link), through git, the `gh` subcommands that
+  write or the GitHub MCP tools, and a commit made under an AI git identity. A project can add
+  its own rules (`guard.denyCommands` / `askCommands`: a regex over the command and the reason);
+  it has no deploy rule of its own. It reads shell text, so it is best effort.
+  `/kit-safety unattended on` adds Claude Code's `permissions.denyInsteadOfPrompting` for an
+  evening: a permission prompt becomes a denial and the work goes on; `off` removes it. Not for a
+  kit project: `permissions.blockWritesOutsideWorkingDirectories`, which refuses a thread's edits
+  in another repo and removes the worktree tools.
 - **Sandbox** (overnight runs, unfamiliar repos): the same guard plus Claude Code's Bash sandbox
   in `.claude/settings.local.json` (writes in the project and temp, network to GitHub, package
   registries and the Anthropic API, credential folders unreadable). `kit:overnight` passes it to

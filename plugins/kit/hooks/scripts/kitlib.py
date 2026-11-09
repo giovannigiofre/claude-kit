@@ -64,14 +64,48 @@ def project_root(data, path_hint=None):
 
 
 def load_config(root):
-    """Return (config, error). config is None when the project has no kit.json."""
+    """Return (config, error). config is None when the project has no kit.json; a kit.json that
+    is present means the project opted in, even an empty `{}` (callers test `config is None`)."""
     path = Path(root) / ".claude" / "kit.json"
     if not path.is_file():
         return None, None
     try:
-        return json.loads(path.read_text(encoding="utf-8")), None
+        config = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # a broken config must be visible, not silently ignored
         return None, f"kit: cannot read {path}: {exc}"
+    if not isinstance(config, dict):
+        return None, f"kit: {path} must hold a JSON object"
+    return config, None
+
+
+def main_checkout(cwd):
+    """The repository's main checkout (a linked worktree resolves to it), else the checkout of
+    cwd, else None outside git. The items, the evidence and the lessons are keyed by it."""
+    root = git_root(cwd)
+    if not root:
+        return None
+    common = git_out(root, "rev-parse", "--path-format=absolute", "--git-common-dir", timeout=10)
+    common = Path(common) if common else None
+    if common and common.name == ".git" and (common.parent / ".git").is_dir():
+        return common.parent
+    return root
+
+
+GATE_TIMEOUTS = {"check": 540, "verify": 1800}  # seconds; kit.json checkTimeout / verifyTimeout override
+
+
+def gate_timeout(config, name):
+    """The timeout of gate `name`: kit.json `checkTimeout` / `verifyTimeout`, else GATE_TIMEOUTS."""
+    try:
+        return int((config or {}).get(name + "Timeout") or GATE_TIMEOUTS[name])
+    except (TypeError, ValueError):
+        return GATE_TIMEOUTS[name]
+
+
+def state_key(data):
+    """The state a hook keeps for one agent: `<session>.<agent id or main>`, so threads running
+    in parallel in one session (each hook input carries its agent_id) never share a file."""
+    return f"{data.get('session_id') or 'nosession'}.{data.get('agent_id') or 'main'}"
 
 
 def config_dir():
@@ -94,17 +128,32 @@ SECRET = re.compile(
     re.I,
 )
 OPAQUE = re.compile(r"[A-Za-z0-9+/_=-]{32,}")
-COMMIT_SHA = re.compile(r"(?<![A-Za-z0-9])[0-9a-fA-F]{40}(?![A-Za-z0-9])")
+# a commit SHA (40 hex) or a sha256 (64 hex), bare or in a URL or `sha=`
+HEX_DIGEST = re.compile(r"(?<![A-Za-z0-9])(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})(?![A-Za-z0-9])")
+EXTENSION = re.compile(r"^\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|json|ya?ml|toml|md|txt|sql|html?|css|scss|sh|go|rs"
+                       r"|rb|java|kt|swift|c|h|cpp|hpp|cs|php|ex|exs|vue|svelte|lock|cfg|ini|env|csv|xml|prisma)"
+                       r"(?![A-Za-z0-9])", re.I)
+WORDS = re.compile(r"[a-z]{2,}_[a-z]{2,}|[a-z]{3,}-[a-z]{3,}")  # snake_case or a slug-of-words
+
+
+def pathlike(run, after):
+    """A run of OPAQUE that is a path or a name, not a token: snake_case words or a slug inside
+    it, a known file extension right after it, or a `/` in a run with the few capitals and no
+    `+`/`=` of a path (a random base64 key has about 40% capitals)."""
+    if WORDS.search(run) or EXTENSION.match(after):
+        return True
+    return "/" in run and "+" not in run and "=" not in run and sum(c.isupper() for c in run) <= len(run) // 5
 
 
 def looks_secret(text):
     """True when text holds something shaped like a key, token or password. A long opaque run of
-    letters and digits counts, except a plain 40-hex commit SHA and a slug of words."""
+    letters and digits counts, except a hex digest (a commit SHA, a sha256), a slug of words and a
+    path (see `pathlike`): `src/api/v2/handlers/user_profile.py` is not a key."""
     if SECRET.search(text):
         return True
-    text = COMMIT_SHA.sub(" ", text)  # a commit SHA, bare or in a URL or `sha=`, is not a secret
-    return any(re.search(r"\d", m) and re.search(r"[A-Za-z]", m)
-               and not re.search(r"[a-z]{3,}-[a-z]{3,}", m) for m in OPAQUE.findall(text))
+    text = HEX_DIGEST.sub(" ", text)
+    return any(re.search(r"\d", m.group()) and re.search(r"[A-Za-z]", m.group())
+               and not pathlike(m.group(), text[m.end():m.end() + 8]) for m in OPAQUE.finditer(text))
 
 
 def glob_to_regex(glob):
@@ -197,12 +246,16 @@ def dirty_snapshot(root, limit=5000):
     left out. At most `limit` entries; {} outside git."""
     out = git_out(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", strip=False)
     files = {}
-    for entry in out.split("\0"):
+    entries = out.split("\0")
+    skip = False
+    for entry in entries:
+        if skip:  # the entry after a rename or copy is the old name, as its own NUL-ended entry
+            skip = False
+            continue
         if len(entry) < 4 or entry[:2] in ("D ", " D", "DD"):
             continue
-        rel = entry[3:]
-        if " -> " in rel:  # a rename: the new name is what exists now
-            rel = rel.split(" -> ", 1)[1]
+        skip = "R" in entry[:2] or "C" in entry[:2]
+        rel = entry[3:]  # with -z a rename is `R  new\0old\0`: this entry is the new name
         try:
             files[rel] = os.stat(Path(root) / rel).st_mtime_ns
         except OSError:

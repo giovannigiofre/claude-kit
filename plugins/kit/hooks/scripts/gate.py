@@ -10,10 +10,14 @@ A gate that ran is a claim until something records what it ran on. The record,
 the hash of the tree it ran on (committed and uncommitted content, ignored files left out) and the
 last lines of its output: the evidence a PR body and a reviewer can cite, and `status` tells
 whether the last run still covers the tree as it is now. Threads, /kit:go and the verifier run
-the gate through this script for that reason. Nothing blocks on it.
+the gate through this script for that reason. Nothing blocks on it. Run from a linked worktree,
+the gate runs on that worktree's tree and branch, and the record is written under the main
+checkout's .claude/evidence/, so it outlives the worktree.
 
 The gate command gets KIT_CHANGED_FILES (the files this branch touched, shell-quoted) and
-KIT_CHANGED_COUNT, so a `check` can be diff-aware. Standard library only, Python 3.9+.
+KIT_CHANGED_COUNT, so a `check` can be diff-aware. Its timeout is kit.json `checkTimeout` /
+`verifyTimeout`, else kitlib.GATE_TIMEOUTS (540 s for check, 1800 s for verify). Standard
+library only, Python 3.9+.
 """
 
 import json
@@ -102,8 +106,13 @@ def ensure_excluded(root):
         pass
 
 
+def evidence_root(root):
+    """Where the records live: the main checkout, also for a linked worktree of it."""
+    return kitlib.main_checkout(root) or Path(root)
+
+
 def record_path(root, name, branch=None):
-    return Path(root) / EVIDENCE / (branch or branch_name(root)) / f"gate-{name}.json"
+    return evidence_root(root) / EVIDENCE / (branch or branch_name(root)) / f"gate-{name}.json"
 
 
 def read_record(root, name, branch=None):
@@ -125,7 +134,7 @@ def run(root, name, config, timeout=None):
     tree_before = tree_hash(root)
     env = {"KIT_GATE": name, **kitlib.changed_env(root)}
     started = time.time()
-    code, out = kitlib.run_shell(command, root, env, timeout=int(timeout or config.get("checkTimeout" if name == "check" else "verifyTimeout", 1800)))
+    code, out = kitlib.run_shell(command, root, env, timeout=int(timeout or kitlib.gate_timeout(config, name)))
     duration = round(time.time() - started, 1)
     tree_after = tree_hash(root)
     tail = out.strip().splitlines()[-TAIL_LINES:]
@@ -140,7 +149,7 @@ def run(root, name, config, timeout=None):
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(record, indent=1) + "\n", encoding="utf-8")
-        where = path.relative_to(root)
+        where = path.relative_to(root) if evidence_root(root) == root else path  # a worktree: the main checkout's
     except OSError as exc:
         where = f"(not written: {exc})"
     sys.stdout.write(kitlib.tail(out, 200) + ("\n" if out.strip() else ""))
@@ -200,7 +209,7 @@ def main(argv=None):
     if cmd not in NAMES:
         print(f"kit gate: unknown gate `{cmd}` (check, verify, status)", file=sys.stderr)
         return 3
-    if not config:
+    if config is None:
         print("kit gate: this project has no .claude/kit.json (run /kit:init)", file=sys.stderr)
         return 3
     timeout = None

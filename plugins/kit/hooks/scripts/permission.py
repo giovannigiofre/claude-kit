@@ -3,10 +3,11 @@
 
 kit.json `check` and `verify` are commands the user wrote and committed, and the kit's hooks
 already run them unasked; a prompt before Claude runs one by hand is a click for nothing. The
-same for the kit's own scripts that read, record or tidy (gate.py, lessons.py, compact_logs.py).
-Only an exact `check` or `verify`, or one of those scripts by its real path, is allowed here;
-anything else stays with the permission system (and the guard has already had its say).
-Standard library only.
+same for the kit's own scripts that read, record or tidy (gate.py, lessons.py, compact_logs.py)
+and the coordinator's board tools (items.py, proposals.py), which write only under
+.claude/lead/. Only an exact `check` or `verify`, or one of those scripts by its real path, is
+allowed here; anything else stays with the permission system (and the guard has already had
+its say). Standard library only.
 """
 
 import json
@@ -18,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kitlib  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parents[2]
-SCRIPTS = {"gate.py", "lessons.py", "compact_logs.py"}
+SCRIPTS = {"gate.py", "lessons.py", "compact_logs.py", "items.py", "proposals.py"}
 PYTHON = {"python", "python3"}
 
 
@@ -50,7 +51,7 @@ def main():
         return 0
     root = kitlib.project_root(data)
     config, _ = kitlib.load_config(root)
-    if not config:
+    if config is None:
         return 0
     command = str((data.get("tool_input") or {}).get("command") or "")
     if allowed(command, config):

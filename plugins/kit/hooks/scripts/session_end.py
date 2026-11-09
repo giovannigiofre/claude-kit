@@ -15,7 +15,7 @@ def main():
     data = kitlib.read_input()
     root = kitlib.project_root(data)
     config, _ = kitlib.load_config(root)
-    if not config:
+    if config is None:
         return 0
     try:
         import distill

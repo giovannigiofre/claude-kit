@@ -8,11 +8,14 @@
     .claude/lead/items/<id>/VERDICT.md   the verifier's report (SubagentStop, kit:verifier)
     .claude/lead/items/<id>/LOG.md       one line per event, append-only
     .claude/lead/items/done/<id>/        archived when the item is done; its board row moves
-                                         to .claude/lead/archive.md
+                                         to .claude/lead/archive.md (an earlier archive of the
+                                         same id is kept: done/<id>-2, -3, ...)
 
 The board stays the index; these files are what survives a compaction, a restart or a look from
 another session (`cat` them). BRIEF.md starts with `ITEM: <id>`: a thread briefed with its text
-carries the id, and the hooks file its report under it. Standard library only.
+carries the id, and the hooks file its report under it. `new` also appends a `queued` row to the
+board when it exists (`<id> | <kind> | <name> | DONE WHEN <first DONE WHEN line of the brief> |
+queued | agent - | - | from <source>`), so a handed-off or taken item is seen. Standard library only.
 
     python3 items.py new <slug> [--brief FILE|-] [--from lead|handoff|scout] [--kind ship|scout]
     python3 items.py list [--status queued|working|review|needs-you|done]
@@ -131,7 +134,8 @@ def status_of(path):
 
 
 def new(root, name, brief="", source="lead", kind="ship"):
-    """Make an item: the folder, BRIEF.md headed by `ITEM: <id>`, the first LOG line. Returns the id."""
+    """Make an item: the folder, BRIEF.md headed by `ITEM: <id>`, the first LOG line, and, when
+    the board exists, a `queued` row on it (so the lead and the status line see it). Returns the id."""
     root = Path(root)
     base = items_dir(root)
     base.mkdir(parents=True, exist_ok=True)
@@ -148,7 +152,29 @@ def new(root, name, brief="", source="lead", kind="ship"):
         body = f"ITEM: {item_id}\nKIND: {kind}\n\n" + ITEM_LINE.sub("", body).strip()
     (folder / "BRIEF.md").write_text(body + "\n", encoding="utf-8")
     log(root, item_id, "queued", f"from {source}")
+    board_row(root, item_id, kind, name, body, source)
     return item_id
+
+
+def done_when(brief):
+    """The first `DONE WHEN` line of a brief, without its label, else "see BRIEF.md"."""
+    m = re.search(r"^\s*(?:[-*]\s*)?DONE WHEN:?\s*(.+?)\s*$", brief or "", re.M | re.I)
+    return m.group(1) if m else "see BRIEF.md"
+
+
+def board_row(root, item_id, kind, name, brief, source):
+    """Append the item's row to the board in the lead's row format, when the board exists."""
+    board = board_file(root)
+    if not board.is_file():
+        return False
+    row = f"{item_id} | {kind} | {' '.join(str(name).split())} | DONE WHEN {done_when(brief)} | queued | agent - | - | from {source}\n"
+    try:
+        text = board.read_text(encoding="utf-8")
+        with open(board, "a", encoding="utf-8") as f:
+            f.write(("" if not text or text.endswith("\n") else "\n") + row)
+    except OSError:
+        return False
+    return True
 
 
 def write(root, item_id, name, text, status, note=""):
@@ -187,8 +213,10 @@ def done(root, item_id):
     archive_row(root, item_id)
     target = item_path(root, item_id, done=True)
     target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists():
-        shutil.rmtree(target)
+    n = 2
+    while target.exists():  # an earlier item of the same id is kept: done/<id>-2, -3, ...
+        target = item_path(root, f"{item_id}-{n}", done=True)
+        n += 1
     shutil.move(str(p), str(target))
     return True
 

@@ -133,6 +133,22 @@ MORE = [
     ('git commit -m "do not read ~/.aws"', "allow"),
     ("ls -la ~/.ssh", "block"),
     ("tar czf /tmp/k.tgz $HOME/.ssh", "block"),
+    # the store's own tool may be pointed at it; anything else reading it is still denied
+    ("ssh -i ~/.ssh/id_ed25519 deploy@host uptime", "allow"),
+    ("scp -i ~/.ssh/deploy_key dist.tgz deploy@host:/srv", "allow"),
+    ("rsync -e 'ssh -i ~/.ssh/deploy_key' -a dist/ host:/srv/", "allow"),
+    ("kubectl --kubeconfig=~/.kube/config get pods", "allow"),
+    ("helm --kubeconfig ~/.kube/config list", "allow"),
+    ("aws --profile prod s3 ls", "allow"),
+    ("AWS_SHARED_CREDENTIALS_FILE=~/.aws/credentials aws s3 ls", "allow"),
+    ("docker --config ~/.docker/config.json pull img", "allow"),
+    ("gcloud --configuration=~/.config/gcloud/configurations/x auth list", "allow"),
+    ("gpg --homedir ~/.gnupg --list-keys", "allow"),
+    ("cat ~/.ssh/id_ed25519", "block"),
+    ("grep -r key ~/.aws", "block"),
+    ("cat ~/.kube/config", "block"),
+    ("python3 -c 'print(1)' ~/.ssh/id_rsa", "block"),
+    ("kubectl apply -f ~/.ssh/id_rsa", "block"),  # kubectl owns ~/.kube, not ~/.ssh
     ("npm test 2>&1 | tail -20", "allow"),
     ("cat <<'EOF' > notes.md\nrm -rf ~ is in this text\nEOF", "allow"),
     ("git checkout -- src/app.py", "allow"),
@@ -363,6 +379,19 @@ def main():
         ('git config user.name "Claude Dupont"', "allow"),
         ('gh pr create --title "fix" --body "Intent: fix the login redirect"', "allow"),
         ('grep -r "Co-Authored-By: Claude" .', "allow"),
+        # gh: only what a writing subcommand publishes counts; reading or searching for the pattern is the check itself
+        ('gh pr view 12 --json body -q .body | grep -i "generated with claude"', "allow"),
+        ('gh issue list --search "Co-Authored-By: Claude"', "allow"),
+        ('gh api repos/o/r/pulls/12 --jq .body | grep -c "claude.ai/code/session_" || true', "allow"),
+        ('gh pr create --body "Generated with Claude Code"', "block"),
+        ('gh pr create -d -t "fix" -b "Co-Authored-By: Claude <noreply@anthropic.com>"', "block"),
+        ('gh -R o/r issue comment 3 --body "🤖 Generated with [Claude Code](https://claude.com/claude-code)"', "block"),
+        ('gh pr edit 12 --body="Generated with Claude Code"', "block"),
+        ('gh api -X POST repos/o/r/issues/3/comments -f body="Generated with Claude Code"', "block"),
+        ('gh api repos/o/r/issues/3/comments -f body="Generated with Claude Code"', "block"),  # a field posts
+        ('gh release create v1 --notes "Generated with Claude Code"', "block"),
+        ('gh pr create --title fix --body "$(cat <<\'EOF\'\nfix\n\nGenerated with Claude Code\nEOF\n)"', "block"),
+        ('gh pr create --body "fix" && echo "Generated with Claude Code"', "allow"),  # the echo publishes nothing
     ]
     for command, want in attribution:
         got = verdict(h7, r7, command)
@@ -374,6 +403,12 @@ def main():
     if verdict(h7, r7, f"git commit -F {msg}") != "block":
         failed += 1
         print("FAIL a commit message file that credits an AI must be blocked")
+    for command, want in ((f"gh pr create --title fix --body-file {msg}", "block"),
+                          (f"gh api -X POST repos/o/r/issues --input {msg}", "block"),
+                          (f"gh pr view 12 --json body > {msg}", "allow")):
+        if verdict(h7, r7, command) != want:
+            failed += 1
+            print(f"FAIL gh body file {want}: {command!r}")
     subprocess.run(["git", "-C", str(r7), "config", "user.name", "Claude"], check=True)
     subprocess.run(["git", "-C", str(r7), "config", "user.email", "noreply@anthropic.com"], check=True)
     if verdict(h7, r7, 'git commit -m "fix"') != "block":
