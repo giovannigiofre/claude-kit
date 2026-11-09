@@ -28,13 +28,21 @@ Keep it to the format below, about 25 lines; the detail lives in the PR body and
    the obvious test, lint and build commands. Where there is a surface, exercise
    it the way a user would (run the CLI, call the API, load the page; a project `verify` skill,
    or an older `e2e` one, says how, including setting up a fresh worktree). Save what proves it
-   under `.claude/evidence/<branch>/`. A command that takes over a minute runs in the background
-   with a `timeout` for how long it should take, so a hang has a deadline and your caller is not
-   blocked on you (`(server)` in the description of one meant to keep running); shorter ones,
-   a fast gate included, stay in the foreground. Keep one watcher per thing you wait on, and
-   wait for its notice, not in a loop. Claude Code moves a background thread's command to the
-   background on its own after 3 minutes: the notice that it did so is not the result; the
-   result arrives when the command ends.
+   under `.claude/evidence/<branch>/`. Run commands in the foreground with a `timeout` for how
+   long they should take (up to 10 minutes), so a hang has a deadline. Only a longer one runs in
+   the background, with a `timeout` too (`(server)` in the description of one meant to keep
+   running), and it must end on its own: never one whose exit waits on something you do later,
+   such as a loop holding a lock until you remove a file, because while you wait on it you cannot
+   act. Keep one watcher per thing you wait on, and wait for its notice, not in a loop. Claude
+   Code moves a background thread's command to the background on its own after 3 minutes: the
+   notice that it did so is not the result; the result arrives when the command ends. When you
+   are woken with background commands still out, read their output files first (`tail -c 2000`;
+   a finished one ends with `[exited with code N]`): the file is the result.
+   - A lock has one taker at a time: run the whole step under it as one command (`lockf <lock>
+     <command>`). If that command is refused, stop and report; never hold the lock in a loop.
+   - A step that may ask the person (a `git push` under an ask rule, anything outside the
+     worktree) runs in the foreground: in the background its prompt waits unseen, and messages
+     to you queue behind it.
 4. Commit on your branch with a message that says why (in the main checkout, create the
    branch first). Commits carry the repo's configured git identity, the user's, with no AI
    co-author lines or footers. On the branch you created you may commit, amend, rebase and

@@ -495,3 +495,119 @@ test('a permission request a hook beneath answered is no prompt: no "waited for 
   await clock.advance(3 * 60_000)
   expect(notices.length).toBe(1)
 })
+
+// Files with an mtime each, for fs.stat: a thread's transcript and its commands' output files.
+function stats(on: On, files: Record<string, string>, mtimes: Record<string, number>) {
+  on('fs.stat', (_, e: any) => (mtimes[e.path] === undefined ? { deny: `ENOENT ${e.path}` }
+    : { value: { kind: 'file', size: (files[e.path] ?? '').length, mtimeMs: mtimes[e.path], isLink: false } }))
+  on('ui.notify', () => ({ value: { isSent: true, channel: 'terminal' } }))
+}
+
+// 2026-11-09: the coordinator stopped a thread and resumed it with SendMessage; 15 s later the
+// watchdog said it "has written nothing for 57 min", counting from its last tool call before.
+test('a resumed thread\'s silence counts from the resume, not from its last tool call before the stop', async ($, on) => {
+  const agents = [{ id: 'a1', description: 'PRIV-12', type: 'kit:implementer', status: 'running' }]
+  const { clock } = world(on, {}, agents)
+  const texts = wakes(on)
+  stats(on, {}, { '/tasks/a1.output': 1_000_000 })
+  on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1', outputFile: '/tasks/a1.output' } }))
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { backgroundTaskId: 'b1' } }))
+  on('tool.call', { tool: 'TaskStop' }, () => ({ result: {} }))
+  on('agent.spawn', () => ({ model: 'opus', agentId: 'a1' }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Agent', prompt: 'ITEM: P12', description: 'PRIV-12', run_in_background: true } as any)
+  await $.tool.call({ tool: 'Bash', command: 'pnpm test:api', description: 'API suite', timeout: 7_200_000, run_in_background: true, agentId: 'a1' } as any)
+  await clock.advance(57 * 60_000)
+  expect(texts).toEqual([]) // it waits on its own command, within its deadline
+  await $.tool.call({ tool: 'TaskStop', task_id: 'b1' } as any)
+  await ($ as any).agent.spawn({ tool_use_id: 't2', prompt: 'Resume: your suite passed', description: 'PRIV-12',
+    subagentType: 'kit:implementer', background: true, fork: false, parentModel: 'opus', provider: { plugin: 'engine', tier: 'core' },
+    resume: { agentId: 'a1' } })
+  await clock.advance(15_000)
+  expect(texts).toEqual([])
+  await clock.advance(20 * 60_000)
+  expect(texts.length).toBe(1)
+  expect(texts[0]).toContain('has written nothing for 20 min')
+})
+
+test('a thread the mod lost its record of (it finished, then was resumed) is still timed by its transcript', async ($, on) => {
+  const agents = [{ id: 'a1', description: 'PRIV-12', type: 'kit:implementer', status: 'running' }]
+  const { clock } = world(on, {}, agents)
+  const texts = wakes(on)
+  const mtimes: Record<string, number> = { '/tasks/a1.output': 1_000_000 }
+  stats(on, {}, mtimes)
+  on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1', outputFile: '/tasks/a1.output' } }))
+  on('tool.call', { tool: 'Bash' }, () => ({ result: {} }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Agent', prompt: 'ITEM: P12', description: 'PRIV-12', run_in_background: true } as any)
+  agents[0].status = 'completed' // it reported: the tick forgets it
+  await clock.advance(15_000)
+  agents[0].status = 'running' // a SendMessage resumed it
+  await $.tool.call({ tool: 'Bash', command: 'pnpm check', agentId: 'a1' } as any)
+  for (let m = 1; m <= 25; m++) {
+    if (m <= 10) mtimes['/tasks/a1.output'] = clock.now() // it writes for 10 min, no tool call finishes
+    await clock.advance(60_000)
+  }
+  expect(texts).toEqual([])
+  await clock.advance(6 * 60_000)
+  expect(texts.length).toBe(1)
+  expect(texts[0]).toContain('has written nothing for 20 min')
+})
+
+test('a command whose output file ends with the exit line no longer hides a quiet thread: the wake names it, the holder and the prompt', async ($, on) => {
+  const agents = [{ id: 'a1', description: 'PRIV-12', type: 'kit:implementer', status: 'running' }]
+  const files: Record<string, string> = { '/tasks/b1.output': 'Tests  298 passed (298)\n' }
+  const { clock } = world(on, files, agents)
+  const texts = wakes(on)
+  const mtimes: Record<string, number> = { '/tasks/a1.output': 1_000_000, '/tasks/b1.output': 1_000_000, '/tasks/b2.output': 1_000_000 }
+  stats(on, files, mtimes)
+  let task = 'b2'
+  on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1', outputFile: '/tasks/a1.output' } }))
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { backgroundTaskId: task } }))
+  on('classic.PermissionRequest', () => ({}))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Agent', prompt: 'ITEM: P12', description: 'PRIV-12', run_in_background: true } as any)
+  await $.tool.call({ tool: 'Bash', command: 'sh hold.sh', description: 'Hold the stack lock for the push (server)', run_in_background: true, agentId: 'a1' } as any)
+  task = 'b1'
+  await $.tool.call({ tool: 'Bash', command: 'lockf x pnpm test:api', description: 'API suite under the lock', timeout: 3_600_000, run_in_background: true, agentId: 'a1' } as any)
+  await ($ as any).classic.PermissionRequest({ agent_id: 'a1', tool_name: 'Bash', tool_input: { command: 'git push origin fix/x' } })
+  await clock.advance(3 * 60_000)
+  files['/tasks/b1.output'] += '\n[exited with code 0]\n'
+  mtimes['/tasks/b1.output'] = clock.now()
+  await clock.advance(16 * 60_000)
+  expect(texts).toEqual([])
+  await clock.advance(2 * 60_000)
+  expect(texts.length).toBe(1)
+  expect(texts[0]).toContain('thread PRIV-12 (a1) has written nothing for 20 min')
+  expect(texts[0]).toContain('on a permission prompt (Bash git push origin fix/x): only the person can answer it')
+  expect(texts[0]).toContain('b1 "API suite under the lock" ended 17 min ago and it has not acted since (its output ends: Tests  298 passed (298) / [exited with code 0])')
+  expect(texts[0]).toContain('b2 "Hold the stack lock for the push (server)" is a holder')
+})
+
+test('a thread parked on a command that ended is woken for within minutes, and dropped once its notice lands', async ($, on) => {
+  const agents = [{ id: 'a1', description: 'PRIV-12', type: 'kit:implementer', status: 'waiting' }]
+  const files: Record<string, string> = { '/tasks/b1.output': '' }
+  const { clock } = world(on, files, agents)
+  const texts = wakes(on)
+  const mtimes: Record<string, number> = { '/tasks/a1.output': 1_000_000, '/tasks/b1.output': 1_000_000 }
+  stats(on, files, mtimes)
+  on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1', outputFile: '/tasks/a1.output' } }))
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { backgroundTaskId: 'b1' } }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Agent', prompt: 'ITEM: P12', description: 'PRIV-12', run_in_background: true } as any)
+  await $.tool.call({ tool: 'Bash', command: 'pnpm test:e2e', description: 'e2e', timeout: 3_600_000, run_in_background: true, agentId: 'a1' } as any)
+  await clock.advance(2 * 60_000)
+  files['/tasks/b1.output'] = '  18 passed (8.4m)\n\n[exited with code 0]\n'
+  mtimes['/tasks/b1.output'] = clock.now()
+  await clock.advance(4 * 60_000)
+  expect(texts).toEqual([])
+  await clock.advance(60_000)
+  expect(texts.length).toBe(1)
+  expect(texts[0]).toContain('has waited 5 min on its own background work, but nothing it waits on will wake it')
+  expect(texts[0]).toContain('the notice was lost or the thread is blocked')
+  expect(texts[0]).toContain('To resume it: TaskStop a1, then SendMessage a1')
+  // the notice lands (its transcript moves): the command is no longer on record
+  mtimes['/tasks/a1.output'] = clock.now()
+  await clock.advance(60 * 60_000)
+  expect(texts.length).toBe(1)
+})
