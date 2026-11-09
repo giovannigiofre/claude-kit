@@ -22,7 +22,7 @@
 //   failed on the API. It wakes the coordinator (a prompt of its own) or notifies the person;
 //   it never approves, stops or retries anything itself, and on any error it stays quiet.
 import type { EngineInterface, Register, Timer } from 'claude-code'
-import { CONTINUE_NOTE, RETRY_DELAYS_MS, bound, expectedMs, failureKind, permissionWaits, stalls, watchConfig } from './watchdog'
+import { CONTINUE_NOTE, RETRY_DELAYS_MS, bound, expectedMs, failureKind, isHolder, outputEnd, permissionWaits, stalls, watchConfig } from './watchdog'
 import type { Job, PermissionWait, Strike, Thread } from './watchdog'
 
 type KitMode = 'light' | 'loop' | 'ask'
@@ -392,7 +392,12 @@ async function refreshStatus($: $): Promise<void> {
 // only makes the watchdog quieter). Every map is pruned to the work in flight and bounded.
 const threadsSeen = new Map<string, { outputFile?: string; startedAt: number; expectMs?: number }>()
 const activity = new Map<string, number>() // 'main' or a thread's id -> its last action
-const jobs = new Map<string, { id: string; owner?: string; label: string; startedAt: number; timeoutMs?: number; endsAt?: number }>()
+const jobs = new Map<string, { id: string; owner?: string; label: string; startedAt: number; timeoutMs?: number; endsAt?: number
+  holder?: boolean; output?: string; seenMtime?: number; readMtime?: number; endedAt?: number; ending?: string }>()
+// Claude Code's task files for this session, `<dir>/<id>.output`: a thread's transcript and a
+// background command's output. Learnt from the first thread the coordinator starts.
+let tasksDir: string | undefined
+const OUTPUT_READ_MAX = 1_000_000 // bytes: a larger output file is never read for its end
 const strikes = new Map<string, Strike>()
 const permissions = new Map<string, PermissionWait>()
 const nudged = new Set<string>() // threads subagent_stop.py told to hand their report back
@@ -438,16 +443,23 @@ async function watchTick($: $): Promise<void> {
   for (const a of agents as any[]) {
     const seen = threadsSeen.get(a.id)
     let activeAt = activity.get(a.id)
-    if (seen && seen.outputFile) {
+    // a live thread with no record here (resumed after it finished, or started before a reload)
+    // still has its transcript beside the others'
+    const isLive = ['running', 'pending', 'waiting'].includes(a.status)
+    const transcript = seen?.outputFile ?? (isLive && tasksDir ? `${tasksDir}/${a.id}.output` : undefined)
+    if (transcript) {
       try {
-        const mtime = (await $.fs.stat(seen.outputFile)).mtimeMs
+        const mtime = (await $.fs.stat(transcript)).mtimeMs
         activeAt = Math.max(activeAt ?? 0, mtime)
       } catch {
         // no transcript yet: its tool calls are the heartbeat
       }
     }
+    // a permission prompt it has not moved past (permissionWaits drops the others below)
+    const p = permissions.get(a.id)
+    const prompt = p && (activeAt ?? 0) <= p.since + 1000 ? { tool: p.tool, detail: p.detail, since: p.since } : undefined
     threads.push({ id: a.id, name: a.name || a.description || a.id, status: a.status, parentId: a.parentId,
-      activeAt, startedAt: seen?.startedAt, expectMs: seen?.expectMs })
+      activeAt, startedAt: seen?.startedAt, expectMs: seen?.expectMs, prompt })
   }
   const live = new Set(threads.filter(t => ['running', 'pending', 'waiting'].includes(t.status)).map(t => t.id))
   for (const id of [...threadsSeen.keys()]) if (!live.has(id)) threadsSeen.delete(id)
@@ -455,13 +467,43 @@ async function watchTick($: $): Promise<void> {
   for (const [id, j] of [...jobs]) {
     if ((j.owner && !live.has(j.owner)) || now - j.startedAt > JOB_MAX_AGE_MS || (j.endsAt && now > j.endsAt)) jobs.delete(id)
   }
+  await noteEnds($, threads)
   const list: Job[] = [...jobs.values()].map(j => ({ id: j.id, owner: j.owner, label: j.label, startedAt: j.startedAt,
     // "(server)" in a command's description: meant to keep running, so it has no deadline
-    deadlineMs: /\(server\)/i.test(j.label) ? 0 : j.timeoutMs ?? w.bashDeadlineMin * 60_000 }))
+    deadlineMs: /\(server\)/i.test(j.label) ? 0 : j.timeoutMs ?? w.bashDeadlineMin * 60_000,
+    holder: j.holder, endedAt: j.endedAt, ending: j.ending }))
   const wakes = stalls(now, threads, list, activity, strikes, w)
   if (wakes.length) await wake($, wakes.map(x => x.text).join('\n\n'))
   for (const x of wakes) if (x.notify) await notify($, x.text.replace(/^kit watchdog: /, '').split('. ')[0] + '.')
   for (const p of permissionWaits(now, permissions, threads, w)) await notify($, p.text)
+}
+
+// A background command whose output file ends with Claude Code's exit line has ended, whatever its
+// owner heard of it. Read once the file has stopped growing for a tick; dropped once its owner
+// acted after the end (its transcript moves when the notice arrives).
+async function noteEnds($: $, threads: Thread[]): Promise<void> {
+  for (const [id, j] of [...jobs]) {
+    if (j.endedAt !== undefined) {
+      const ownerAt = j.owner ? threads.find(t => t.id === j.owner)?.activeAt : activity.get('main')
+      if ((ownerAt ?? 0) > j.endedAt) jobs.delete(id)
+      continue
+    }
+    if (!j.output) continue
+    try {
+      const st = await $.fs.stat(j.output)
+      if (st.mtimeMs === j.seenMtime && st.mtimeMs !== j.readMtime && st.size <= OUTPUT_READ_MAX) {
+        j.readMtime = st.mtimeMs
+        const ending = outputEnd(String(await $.fs.read(j.output)))
+        if (ending) {
+          j.endedAt = st.mtimeMs
+          j.ending = ending
+        }
+      }
+      j.seenMtime = st.mtimeMs
+    } catch {
+      // no output file (yet, or not here): the command counts as running
+    }
+  }
 }
 
 // What a tool call tells the watchdog: a thread or a background command started or stopped, and
@@ -474,6 +516,7 @@ async function noteTool($: $, e: any, r: any): Promise<void> {
     // a thread already on record (agent.spawn saw it start, or this call resumed it) keeps its
     // start and its brief's EXPECT: a resume is the same thread, not a new one
     const seen = threadsSeen.get(res.agentId)
+    if (typeof res.outputFile === 'string' && /[\\/]/.test(res.outputFile)) tasksDir = res.outputFile.replace(/[\\/][^\\/]*$/, '')
     threadsSeen.set(res.agentId, { outputFile: res.outputFile ?? seen?.outputFile, startedAt: seen?.startedAt ?? now,
       expectMs: seen?.expectMs ?? expectedMs(String(e.prompt ?? '')) })
     bound(threadsSeen)
@@ -482,7 +525,9 @@ async function noteTool($: $, e: any, r: any): Promise<void> {
     // Bash's own `timeout` (ms) is the command's declared deadline; Claude Code applies it to a
     // background command only in an unattended session, so in the terminal this is the check
     jobs.set(res.backgroundTaskId, { id: res.backgroundTaskId, owner: e.agentId, label, startedAt: now,
-      timeoutMs: typeof e.timeout === 'number' && e.timeout > 0 ? e.timeout : undefined })
+      timeoutMs: typeof e.timeout === 'number' && e.timeout > 0 ? e.timeout : undefined,
+      holder: isHolder(`${e.description ?? ''} ${e.command ?? ''}`),
+      output: tasksDir ? `${tasksDir}/${res.backgroundTaskId}.output` : undefined })
     bound(jobs)
   } else if (e.tool === 'Monitor' && res && res.taskId) {
     // its owner waits on it and Claude Code ends it at its timeout: a job until then. The result
@@ -561,11 +606,15 @@ export const register: Register = on => {
 
   // A thread starting: its record (start, the EXPECT of its brief) begins here. A resumed run
   // (SendMessage to a thread that finished or stopped) fires this event too, with e.resume set:
-  // it is the same thread, so it is neither recorded nor timed again.
+  // it is the same thread, so it is neither recorded nor timed again, but it just acted: its
+  // silence counts from here, not from its last tool call before the stop.
   on('agent.spawn', async ($, e: any, next) => {
     const r: any = await next(e)
     try {
-      if (!e.resume && r && !r.deny && r.agentId && !threadsSeen.has(r.agentId)) {
+      if (e.resume && r && !r.deny) {
+        const id = String(e.resume.agentId ?? r.agentId ?? '')
+        if (id) activity.set(id, await $.clock.now())
+      } else if (r && !r.deny && r.agentId && !threadsSeen.has(r.agentId)) {
         threadsSeen.set(r.agentId, { startedAt: await $.clock.now(), expectMs: expectedMs(String(e.prompt ?? '')) })
         bound(threadsSeen)
       }

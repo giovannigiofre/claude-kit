@@ -43,6 +43,7 @@ export type Thread = {
   activeAt?: number // the latest of its transcript's mtime and its last tool call
   startedAt?: number
   expectMs?: number
+  prompt?: { tool: string; detail: string; since: number } // a permission prompt it waits on
 }
 
 export type Job = {
@@ -51,13 +52,36 @@ export type Job = {
   label: string
   startedAt: number
   deadlineMs: number // 0: a server or watcher meant to keep running, never checked
+  holder?: boolean // it waits on its owner's own later action (isHolder): it never ends by itself
+  endedAt?: number // its output file ends with Claude Code's exit line, written then
+  ending?: string // that line, after the last result lines above it (outputEnd)
+}
+
+// Claude Code ends a finished background command's output file with "[exited with code N]" (or
+// "[killed]"): that line, after the two result lines above it, or undefined while it runs.
+export function outputEnd(text: string): string | undefined {
+  const m = /\[(exited with code -?\d+|killed)\]\s*$/.exec(text || '')
+  if (!m) return undefined
+  const above = text.slice(0, m.index).split('\n').map(l => l.trim()).filter(Boolean).slice(-2)
+  return [...above.map(l => l.slice(0, 100)), `[${m[1]}]`].join(' / ')
+}
+
+// A hold loop: a command that only ends when its owner acts again (removes a file, kills it), so
+// an owner that waits on it waits on itself. Its description or its command says so.
+export function isHolder(text: string): boolean {
+  return /\bhold(s|ing|er)?\b|\bwhile\s+\[\s+-[efs]\s|\buntil\s+\[\s+!\s+-[efs]\s|\bsleep\s+infinity\b|\btail\s+-f\s+\/dev\/null\b/i.test(text || '')
 }
 
 export type Strike = { count: number; since: number }
 export type Wake = { subject: string; text: string; notify: boolean }
 
 const LIVE = new Set(['running', 'pending'])
+// A thread parked on its own background work, all of which has ended or never will: the notice
+// that would wake it is due within seconds, so a few minutes without it is a stall.
+export const STUCK_MIN = 5
 const mins = (ms: number) => Math.round(ms / MIN)
+// what a thread can wait on: a command that is running, has a deadline and ends by itself
+const pending = (j: Job) => j.deadlineMs > 0 && !j.holder && j.endedAt === undefined
 
 // What has stalled since the last tick. `strikes` is updated in place and pruned to the subjects
 // that still exist, so it stays as small as the work in flight. `activity` holds the last time the
@@ -82,17 +106,30 @@ export function stalls(now: number, threads: Thread[], jobs: Job[], activity: Ma
     wakes.push({ subject, text: text(count), notify: count === MAX_STRIKES })
   }
 
+  // parked on its own background work (Claude Code's `waiting`), none of which will wake it
+  for (const t of live) {
+    if (t.status !== 'waiting' || live.some(c => c.parentId === t.id)) continue
+    const own = jobs.filter(j => j.owner === t.id)
+    if (own.length === 0 || own.some(pending)) continue
+    const k = strikes.get(`stuck:${t.id}`)?.count ?? 0
+    const since = Math.max(t.activeAt ?? 0, ...own.map(j => j.endedAt ?? j.startedAt))
+    strike(`stuck:${t.id}`, now - since >= STUCK_MIN * MIN * 2 ** k, since, count =>
+      `kit watchdog: thread ${t.name} (${t.id}) has waited ${mins(now - since)} min on its own background work, ` +
+      `but nothing it waits on will wake it.` + notes(now, t, jobs) + last(count, STUCK_MIN * 2 ** count))
+  }
+
   for (const t of threads) {
     if (!LIVE.has(t.status)) continue
     // a thread waiting on its own subagent or background command is the child's to watch; a
-    // server it left running (deadline 0) is not something it waits on
-    if (live.some(c => c.parentId === t.id) || jobs.some(j => j.owner === t.id && j.deadlineMs > 0)) continue
+    // server it left running (deadline 0), a holder or a command that ended is not something
+    // it waits on
+    if (live.some(c => c.parentId === t.id) || jobs.some(j => j.owner === t.id && pending(j))) continue
     const k = strikes.get(`silent:${t.id}`)?.count ?? 0
     if (w.silentMin > 0 && t.activeAt !== undefined) {
       const quiet = now - t.activeAt
       strike(`silent:${t.id}`, quiet >= w.silentMin * MIN * 2 ** k, t.activeAt, count =>
-        `kit watchdog: thread ${t.name} (${t.id}) has written nothing for ${mins(quiet)} min. Check it ` +
-        `(read the end of its transcript); nudge it with SendMessage if it is stuck, or stop it with TaskStop.` +
+        `kit watchdog: thread ${t.name} (${t.id}) has written nothing for ${mins(quiet)} min.` +
+        (notes(now, t, jobs) || ` Check it (read the end of its transcript); nudge it with SendMessage if it is stuck, or stop it with TaskStop.`) +
         last(count, w.silentMin * 2 ** count))
     }
     if (t.expectMs && t.startedAt !== undefined) {
@@ -109,7 +146,7 @@ export function stalls(now: number, threads: Thread[], jobs: Job[], activity: Ma
   // its owner sits waiting on it, quiet for silentMin
   const owners = new Map<string, Job[]>()
   for (const j of jobs) {
-    if (!(j.deadlineMs > 0) || (j.owner && !liveIds.has(j.owner))) continue // a gone owner: kit.tsx drops it
+    if (!pending(j) || (j.owner && !liveIds.has(j.owner))) continue // a gone owner: kit.tsx drops it
     owners.set(j.owner ?? 'main', [...(owners.get(j.owner ?? 'main') ?? []), j])
   }
   for (const [owner, own] of owners) {
@@ -121,11 +158,35 @@ export function stalls(now: number, threads: Thread[], jobs: Job[], activity: Ma
       `kit watchdog: ${owner === 'main' ? 'this session' : `thread ${live.find(t => t.id === owner)?.name} (${owner})`} has waited ${mins(now - ownerAt)} min on ` +
       late.map(j => `background command ${j.id} "${j.label}" (${mins(now - j.startedAt)} min, deadline ${mins(j.deadlineMs)})`).join(', ') +
       `. Read its output file; stop it with TaskStop if it hangs, or leave it if it is still making progress.` +
+      (owner === 'main' ? '' : notes(now, live.find(t => t.id === owner), jobs)) +
       last(count, w.silentMin * 2 ** count))
   }
 
   for (const key of [...strikes.keys()]) if (!seen.has(key)) strikes.delete(key)
   return wakes
+}
+
+// What else holds a quiet thread, each with what the coordinator can do about it without reading
+// the transcript: a permission prompt, a command that ended unnoticed, a holder.
+function notes(now: number, t: Thread | undefined, jobs: Job[]): string {
+  if (!t) return ''
+  const out: string[] = []
+  if (t.prompt) {
+    out.push(` It has waited ${mins(now - t.prompt.since)} min on a permission prompt (${`${t.prompt.tool} ${t.prompt.detail}`.trim()}): ` +
+      `only the person can answer it, so put it under NEEDS YOU; a message to the thread only queues behind it.`)
+  }
+  const own = jobs.filter(j => j.owner === t.id)
+  for (const j of own.filter(j => j.endedAt !== undefined)) {
+    out.push(` Its background command ${j.id} "${j.label}" ended ${mins(now - j.endedAt!)} min ago and it has not acted ` +
+      `since (its output ends: ${j.ending ?? 'an exit line'}): the notice was lost or the thread is blocked.`)
+  }
+  for (const j of own.filter(j => j.holder && j.endedAt === undefined)) {
+    out.push(` Its background command ${j.id} "${j.label}" is a holder: it ends only when the thread acts again, so the ` +
+      `thread must not wait on it; remove what it waits for, or stop it with TaskStop ${j.id}.`)
+  }
+  if (out.length === 0) return ''
+  return out.join('') + ` To resume it: TaskStop ${t.id}, then SendMessage ${t.id} with what it missed (the result lines, ` +
+    `the answer); a stopped thread resumes from its transcript. Tell it to run the rest in the foreground.`
 }
 
 function last(count: number, nextMin: number): string {

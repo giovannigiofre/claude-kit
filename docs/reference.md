@@ -297,7 +297,20 @@ its 15 s tick (interactive sessions only) and wakes the coordinator with a promp
 - a background command past its deadline (its Bash `timeout`, else `bashDeadlineMin`, 30) while
   its owner has been quiet for `silentMin`. A command whose description holds `(server)` is
   meant to keep running and has none. A background thread's command that runs past 3 minutes is
-  moved to the background by Claude Code itself (2.1.318) and counts as one of these.
+  moved to the background by Claude Code itself (2.1.318) and counts as one of these;
+- a thread that waits (status `waiting`) on its own background work when none of it can wake
+  it, for `5` min: every command has ended, or what is left is a holder.
+
+A command has ended when its output file (next to the threads' transcripts) ends with Claude
+Code's `[exited with code N]` or `[killed]` line; the mod reads it (up to 1 MB, once it has
+stopped growing) and drops the command once its owner acts again. An ended command no longer
+hides a quiet thread. A holder is a loop that ends only when its thread acts (a `hold` in the
+description, `while [ -e f ]`, `until [ ! -f f ]`, `sleep infinity`): it never hides a quiet
+thread, whatever its label. A silent or stuck wake names what it found: the ended command with
+its last output lines, the holder, a permission prompt the thread is inside, and the recovery
+(`TaskStop`, then `SendMessage` with what the thread missed). A thread resumed by SendMessage
+counts its silence from the resume, and one the mod has no record of (it finished before) is
+still timed by its transcript.
 
 Each stall wakes at 1x, 2x and 4x its threshold, and the third wake also sends a native
 notification, and it stays quiet until real activity starts it over: the turn a wake itself

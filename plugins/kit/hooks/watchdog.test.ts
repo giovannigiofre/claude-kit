@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { WATCH_DEFAULTS, failureKind, permissionWaits, stalls, watchConfig } from './watchdog'
+import { STUCK_MIN, WATCH_DEFAULTS, failureKind, isHolder, outputEnd, permissionWaits, stalls, watchConfig } from './watchdog'
 import type { Strike } from './watchdog'
 
 const MIN = 60_000
@@ -72,4 +72,67 @@ test('API failures: overload retries, a login or a usage limit needs the person;
   expect(failureKind('rate_limit', "You've hit your weekly limit · resets 4pm (Europe/Zurich)")).toBe('person')
   expect(failureKind('rate_limit', 'Request rate limited')).toBe('retry')
   expect(watchConfig({ watchdog: { silentMin: 45, bashDeadlineMin: 'x', permissionMin: 0 } })).toEqual({ silentMin: 45, bashDeadlineMin: 30, permissionMin: 0 })
+})
+
+// 2026-11-09: a thread's command had ended (its output file said so) while the watchdog still
+// said it waited on it; its real block was a permission prompt, beside a lock holder it started.
+test('the end of an output file: Claude Code\'s exit line with the result lines above it, nothing while it runs', async () => {
+  expect(outputEnd('EXIT=0\n Test Files  28 passed (28)\n      Tests  298 passed (298)\n\n[exited with code 0]\n'))
+    .toBe('Test Files  28 passed (28) / Tests  298 passed (298) / [exited with code 0]')
+  expect(outputEnd('boom\n[exited with code 1]')).toBe('boom / [exited with code 1]')
+  expect(outputEnd('[killed]\n')).toBe('[killed]')
+  expect(outputEnd('Tests  12 passed\nstill running')).toBe(undefined)
+  expect(outputEnd('')).toBe(undefined)
+})
+
+test('a hold loop is a holder, by its description or its command; an ordinary watcher is not', async () => {
+  expect(isHolder('Hold the stack lock for the push (server)')).toBe(true)
+  expect(isHolder("lockf -t 7200 /tmp/x.lock sh -c 'touch a.held; while [ -e a.hold ]; do sleep 5; done'")).toBe(true)
+  expect(isHolder('until [ ! -f /tmp/release ]; do sleep 1; done')).toBe(true)
+  expect(isHolder('sleep infinity')).toBe(true)
+  expect(isHolder('Run the API suite under the lock')).toBe(false)
+  expect(isHolder('until [ -f .next/ready ]; do sleep 1; done')).toBe(false)
+  expect(isHolder('Threshold sweep')).toBe(false)
+})
+
+test('a command that ended no longer hides a quiet thread: the wake says it ended, names the holder and the prompt', async () => {
+  const strikes = new Map<string, Strike>()
+  const thread = { id: 'a1', name: 'PRIV-12', status: 'running', activeAt: T0,
+    prompt: { tool: 'Bash', detail: 'git push origin fix/priv-12', since: T0 } }
+  const jobs = [
+    { id: 'b1', owner: 'a1', label: 'Rerun the API suite under the lock', startedAt: T0 - 3 * MIN, deadlineMs: 30 * MIN,
+      endedAt: T0 - MIN, ending: 'Tests  298 passed (298) / [exited with code 0]' },
+    { id: 'b2', owner: 'a1', label: 'Hold the stack lock for the push (server)', startedAt: T0, deadlineMs: 0, holder: true },
+  ]
+  expect(stalls(T0 + 19 * MIN, [thread], jobs, new Map(), strikes, WATCH_DEFAULTS)).toEqual([])
+  const wakes = stalls(T0 + 20 * MIN, [thread], jobs, new Map(), strikes, WATCH_DEFAULTS)
+  expect(wakes.map(x => x.subject)).toEqual(['silent:a1'])
+  const text = wakes[0].text
+  expect(text).toContain('has waited 20 min on a permission prompt (Bash git push origin fix/priv-12): only the person can answer it')
+  expect(text).toContain('b1 "Rerun the API suite under the lock" ended 21 min ago')
+  expect(text).toContain('its output ends: Tests  298 passed (298) / [exited with code 0]')
+  expect(text).toContain('b2 "Hold the stack lock for the push (server)" is a holder')
+  expect(text).toContain('To resume it: TaskStop a1, then SendMessage a1 with what it missed')
+  // the same command still running: the thread waits on it, and the job check speaks instead
+  const running = [{ ...jobs[0], endedAt: undefined, ending: undefined }]
+  expect(stalls(T0 + 20 * MIN, [thread], running, new Map(), new Map(), WATCH_DEFAULTS)).toEqual([])
+})
+
+test('a thread parked on its own background work that has all ended (or is a holder) is a lost-notice stall within minutes', async () => {
+  const strikes = new Map<string, Strike>()
+  const thread = { id: 'a1', name: 'PRIV-12', status: 'waiting', activeAt: T0 }
+  const ended = [{ id: 'b1', owner: 'a1', label: 'pnpm test:e2e', startedAt: T0, deadlineMs: 30 * MIN,
+    endedAt: T0 + 10 * MIN, ending: '18 passed (8.4m) / [exited with code 0]' }]
+  const at = (m: number, jobs: any[] = ended) => stalls(T0 + m * MIN, [thread], jobs, new Map(), strikes, WATCH_DEFAULTS)
+  expect(at(10 + STUCK_MIN - 1)).toEqual([])
+  const first = at(10 + STUCK_MIN)
+  expect(first.map(x => x.subject)).toEqual(['stuck:a1'])
+  expect(first[0].text).toContain('has waited 5 min on its own background work, but nothing it waits on will wake it')
+  expect(first[0].text).toContain('ended 5 min ago and it has not acted since (its output ends: 18 passed (8.4m) / [exited with code 0]): the notice was lost')
+  expect(at(10 + 2 * STUCK_MIN).length).toBe(1) // 2x
+  expect(at(10 + 4 * STUCK_MIN).map(x => x.notify)).toEqual([true]) // 4x: the person is told
+  // still running, within its deadline: Claude Code will wake it; a holder alone: it never will
+  expect(stalls(T0 + 20 * MIN, [thread], [{ ...ended[0], endedAt: undefined }], new Map(), new Map(), WATCH_DEFAULTS)).toEqual([])
+  const holder = [{ id: 'b2', owner: 'a1', label: 'lockf x sh -c "while [ -e h ]; do sleep 5; done"', startedAt: T0, deadlineMs: 120 * MIN, holder: true }]
+  expect(stalls(T0 + STUCK_MIN * MIN, [thread], holder, new Map(), new Map(), WATCH_DEFAULTS).map(x => x.subject)).toEqual(['stuck:a1'])
 })
