@@ -50,9 +50,9 @@ reviewed, not-high-risk PRs. Medium- or high-risk work gets a review by
 `kit:verifier` in a fresh context before it reaches you. When a thread finishes while you're away,
 the kit sends one notification (desktop, or phone with Remote Control).
 
-**The status line.** `loop · host · $1.20 · 2 running · 1 waiting · 1 overnight · 1 ready ·
-1 need you`, read again every 15 seconds (`waiting`: a thread stopped on a question or a
-permission). When the board gains a ready item or a question, the kit sends one native
+**The status line.** `loop · host · $1.20 · 2 running · 1 waiting · 1 overnight · 2 queued ·
+1 ready · 1 need you`, read again every 15 seconds (`waiting`: a thread stopped on a question or
+a permission; `unattended` appears after the safety profile while that is on). When the board gains a ready item or a question, the kit sends one native
 notification where Claude Code offers one, unless you were just typing in that terminal. Mode
 per project (`/kit-mode`): **Light** (a normal session), **Loop** (every typed message goes to
 the coordinator; the default in a project with `kit.json`) or **Ask** (a discussion: read and

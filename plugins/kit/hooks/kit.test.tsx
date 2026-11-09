@@ -49,6 +49,8 @@ test('light mode adds nothing; loop mode hands every prompt to the coordinator; 
   expect(JSON.stringify(turnedOn)).toContain('Loop mode on')
   await $.prompt.submit({ text: 'add a login page' } as any)
   expect((seen.at(-1) ?? []).join(' ')).toContain('coordinator')
+  // the mod is the one that pings the person about the board: the coordinator is told so
+  expect((seen.at(-1) ?? []).join(' ')).toContain('The kit mod notifies the user when the board gains a ready or needs-you row; do not send PushNotification for that yourself.')
 
   await $.command.run({ command: 'kit-mode', args: 'light' } as any)
   await $.prompt.submit({ text: 'what changed?' } as any)
@@ -209,12 +211,72 @@ test('a thread waiting for an answer counts on the line; a board that gains work
   ].join('\n')
   await clock.advance(15000)
   expect(lines.at(-1)).toContain('1 ready · 1 need you')
-  expect(notices.length).toBeLessThanOrEqual(1)
-  if (notices.length) expect(notices[0].text).toContain('kit: 1 ready for review, 1 needs you')
+  // one native notification for the gain, with both counts
+  expect(notices.length).toBe(1)
+  expect(notices[0].text).toBe('kit: 1 ready for review, 1 needs you. See the board (.claude/lead/board.md) or ask the coordinator.')
 
   await clock.advance(15000)
   expect(lines.at(-1)).toContain('1 ready · 1 need you')
-  expect(notices.length).toBeLessThanOrEqual(1)
+  expect(notices.length).toBe(1) // the same board again: nothing new to say
+})
+
+test('the board may be a Markdown table, capitalise a status or drop a cell; needs-you and queued rows count', async ($, on) => {
+  const files: Record<string, string> = {
+    '/repo/.claude/lead/board.md': [
+      'SHIP: pr | PARALLEL: 3 | BUDGET: none',
+      '| id | kind | goal | done when | status | agent | branch/PR | last event |',
+      '|---|---|---|---|---|---|---|---|',
+      '| A1 | ship | login | DONE WHEN e2e passes | Review | agent A1 | PR #3 | CI green |',
+      '| A2 | ship | grid | DONE WHEN snapshot | needs-you | agent A2 | - | which region? |',
+      '| A3 | scout | search | DONE WHEN cards | queued | - | - | handed off |',
+      '| A4 | ship | export | DONE WHEN csv | queued | - | - | - |',
+    ].join('\n'),
+  }
+  const { clock } = world(on, files)
+  const lines: (string | undefined)[] = []
+  on('ui.status', (_, e) => {
+    lines.push(e.text)
+    return { value: undefined }
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  // no NEEDS YOU line: the needs-you row still counts
+  expect(lines.at(-1)).toBe('light · host · $1.50 · 2 queued · 1 ready · 1 need you')
+
+  // plain rows: one without its DONE WHEN cell and a bold status, one whose question is both a
+  // NEEDS YOU entry and a needs-you row (counted once)
+  files['/repo/.claude/lead/board.md'] = [
+    'NEEDS YOU: A2: which region?',
+    'A1 | ship | login | **review** | agent A1 | PR #3 | CI green',
+    'A2 | ship | grid | DONE WHEN snapshot | NEEDS-YOU | agent A2 | - | which region?',
+    'A3 | scout | search | DONE WHEN cards | working | agent A3 | - | started',
+  ].join('\n')
+  await clock.advance(15000)
+  expect(lines.at(-1)).toBe('light · host · $1.50 · 1 ready · 1 need you')
+})
+
+test('no notification for a board change while the person is typing here; one once they have been quiet a minute', async ($, on) => {
+  const files: Record<string, string> = {
+    '/repo/.claude/lead/board.md': 'NEEDS YOU: none\nA1 | ship | login | DONE WHEN e2e | working | agent A1 | - | started',
+  }
+  const { clock } = world(on, files)
+  const notices: string[] = []
+  on('ui.notify', (_, e: any) => {
+    notices.push(e.text)
+    return { value: { isSent: true, channel: 'terminal' } }
+  })
+  on('ui.status', () => ({ value: undefined }))
+  on('prompt.submit', (_, e) => ({ text: e.text }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'how is A1 going?' } as any)
+
+  files['/repo/.claude/lead/board.md'] = 'NEEDS YOU: none\nA1 | ship | login | DONE WHEN e2e | review | agent A1 | PR #3 | CI green'
+  await clock.advance(15000)
+  expect(notices).toEqual([]) // they typed 15 s ago: the status line is in front of them
+
+  await clock.advance(60_000)
+  files['/repo/.claude/lead/board.md'] = 'NEEDS YOU: A1: which region?\nA1 | ship | login | DONE WHEN e2e | review | agent A1 | PR #3 | CI green'
+  await clock.advance(15000)
+  expect(notices).toEqual(['kit: 1 needs you. See the board (.claude/lead/board.md) or ask the coordinator.'])
 })
 
 test('a pane an older kit left open is closed on session start', async ($, on) => {
@@ -319,7 +381,9 @@ test('a transient API failure gets a continue nudge after 15 s; a login failure 
 })
 
 test('the watchdog\'s own wake turn is not activity: a forgotten background command wakes three times, then notifies once', async ($, on) => {
-  const { clock } = world(on)
+  // thresholds in minutes (kit.json `watchdog`), so the strikes at 1x, 2x and 4x the deadline
+  // land at 2, 4 and 8 min: a dozen simulated minutes and some 50 ticks, not 8 hours and 1,920
+  const { clock } = world(on, { '/repo/.claude/kit.json': JSON.stringify({ watchdog: { bashDeadlineMin: 2, silentMin: 1 } }) })
   const texts = wakes(on)
   const notices: string[] = []
   on('ui.notify', (_, e: any) => {
@@ -330,7 +394,7 @@ test('the watchdog\'s own wake turn is not activity: a forgotten background comm
   on('turn.complete', (_, e: any) => ({ text: e.answer }))
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   await $.tool.call({ tool: 'Bash', command: 'npm run dev', description: 'Start the dev server', run_in_background: true } as any)
-  for (let i = 0; i < 8 * 60; i++) {
+  for (let i = 0; i < 12; i++) {
     const before = texts.length
     await clock.advance(60_000)
     // each wake is a turn of the main session: it reads the output and answers
@@ -338,6 +402,77 @@ test('the watchdog\'s own wake turn is not activity: a forgotten background comm
   }
   expect(texts.length).toBe(3)
   expect(notices.length).toBe(1)
+})
+
+test('a resumed thread is the same thread: its start and its brief\'s EXPECT are not counted again', async ($, on) => {
+  const agents = [{ id: 'a1', description: 'B2 grid', type: 'kit:implementer', status: 'running' }]
+  const { clock } = world(on, { '/repo/.claude/kit.json': JSON.stringify({ watchdog: { silentMin: 0 } }) }, agents)
+  const texts = wakes(on)
+  on('agent.spawn', () => ({ model: 'sonnet', agentId: 'a1' }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  const spawn = (extra: any) => ($ as any).agent.spawn({
+    tool_use_id: 't1', prompt: 'ITEM: B2\nEXPECT: 30m', description: 'B2 grid', subagentType: 'kit:implementer',
+    background: true, fork: false, parentModel: 'sonnet', provider: { plugin: 'engine', tier: 'core' }, ...extra,
+  })
+  await spawn({})
+  await clock.advance(20 * 60_000)
+  expect(texts).toEqual([])
+  // SendMessage to it: agent.spawn fires again with e.resume; the clock of its EXPECT does not restart
+  await spawn({ prompt: 'how far are you?', resume: { agentId: 'a1' } })
+  await clock.advance(9 * 60_000)
+  expect(texts).toEqual([])
+  await clock.advance(60_000)
+  expect(texts.length).toBe(1)
+  expect(texts[0]).toContain('thread B2 grid (a1) has run 30 min, past the 30 min its brief expected')
+})
+
+test('/kit-safety unattended writes permissions.denyInsteadOfPrompting beside other keys, off removes only that, and the status says so', async ($, on) => {
+  const { written } = world(on, { '/repo/.claude/settings.local.json': JSON.stringify({ permissions: { allow: ['Bash(npm test)'] }, model: 'opus' }) })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  const before = await $.command.run({ command: 'kit-safety', args: '' } as any)
+  expect(JSON.stringify(before)).toContain('Kit safety for this project: host · unattended: off')
+
+  const on1 = await $.command.run({ command: 'kit-safety', args: 'unattended on' } as any)
+  expect(JSON.stringify(on1)).toContain('Unattended on for this project')
+  expect(JSON.stringify(on1)).toContain('a tool call that would wait on a permission prompt is denied instead and the turn continues')
+  const local = JSON.parse(written['/repo/.claude/settings.local.json'] ?? '{}')
+  expect(local.permissions.denyInsteadOfPrompting).toBe(true)
+  expect(local.permissions.allow).toEqual(['Bash(npm test)'])
+  expect(local.model).toBe('opus')
+  const status = await $.command.run({ command: 'kit-safety', args: '' } as any)
+  expect(JSON.stringify(status)).toContain('host · unattended: on')
+
+  const off = await $.command.run({ command: 'kit-safety', args: 'unattended off' } as any)
+  expect(JSON.stringify(off)).toContain('Unattended off')
+  const after = JSON.parse(written['/repo/.claude/settings.local.json'] ?? '{}')
+  expect(after.permissions.denyInsteadOfPrompting).toBeUndefined()
+  expect(after.permissions.allow).toEqual(['Bash(npm test)'])
+  expect(after.model).toBe('opus')
+  expect(JSON.stringify(await $.command.run({ command: 'kit-safety', args: '' } as any))).toContain('unattended: off')
+})
+
+test('the status line says unattended while the project\'s settings.local.json has the flag on', async ($, on) => {
+  world(on, { '/repo/.claude/settings.local.json': JSON.stringify({ permissions: { denyInsteadOfPrompting: true } }) })
+  const lines: (string | undefined)[] = []
+  on('ui.status', (_, e) => {
+    lines.push(e.text)
+    return { value: undefined }
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  expect(lines.at(-1)).toBe('light · host · unattended · $1.50')
+  await $.command.run({ command: 'kit-safety', args: 'unattended off' } as any)
+  expect(lines.at(-1)).toBe('light · host · $1.50')
+  await $.command.run({ command: 'kit-safety', args: 'unattended on' } as any)
+  expect(lines.at(-1)).toBe('light · host · unattended · $1.50')
+})
+
+test('/kit-safety unattended on creates settings.local.json when there is none, and off leaves it empty', async ($, on) => {
+  const { written } = world(on)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'kit-safety', args: 'unattended on' } as any)
+  expect(JSON.parse(written['/repo/.claude/settings.local.json'] ?? 'null')).toEqual({ permissions: { denyInsteadOfPrompting: true } })
+  await $.command.run({ command: 'kit-safety', args: 'unattended off' } as any)
+  expect(JSON.parse(written['/repo/.claude/settings.local.json'] ?? 'null')).toEqual({})
 })
 
 test('a permission request a hook beneath answered is no prompt: no "waited for your permission" push', async ($, on) => {

@@ -476,7 +476,8 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
   `permissions.denyInsteadOfPrompting` into the same file: a tool call that would wait on a
   permission prompt is denied and the turn goes on, in this session and its threads. For an
   evening nobody will watch; off by default, since a denied action lowers a thread's chances
-  silently. `permissions.blockWritesOutsideWorkingDirectories` (2.1.314) is not for a kit
+  silently; the status line shows `unattended` while it is on, so a forgotten switch is visible
+  the next morning. `permissions.blockWritesOutsideWorkingDirectories` (2.1.314) is not for a kit
   project: it refuses a thread's edits in another repo and removes the worktree tools.
 
 The mod needs Claude Code with mods (2.1.287+). Without it, the skills and hooks still work; use
