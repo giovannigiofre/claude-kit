@@ -56,7 +56,8 @@ and its CI actually run, not guesses.
    `.claude/settings.json` saves a reinstall per thread. A Next.js 16.3+ app writes its own agent block into `AGENTS.md`
    (bundled docs under `node_modules/next/dist/docs/`): check it is there.
 7. **gitignore**: `.claude/evidence/` (proof from `/kit:go` and threads), `.claude/overnight/`
-   (run logs) and `.claude/lead/` (the board), unless the user wants the board shared.
+   (run logs), `.claude/kit.local.json` (this machine's unattended git choices) and
+   `.claude/lead/` (the board), unless the user wants the board shared.
    `.claude/review-decisions.md` stays committed so every clone skips declined findings.
 8. **Compaction**: add a short `# Compact instructions` section to CLAUDE.md (keep the goal,
    constraints and decisions stated exactly, user preferences, in-flight work and branches, open
@@ -93,12 +94,23 @@ and its CI actually run, not guesses.
     `python3 $S --set -`; `--remove` forgets the repo.
 13. **Domain plugins**: if the repo has a frontend, or code that calls an LLM, offer `kit-ui` or
     `kit-llm` for this project now (`kit:extras` explains the install).
-14. Write `.claude/kit.json`, show it, and explain that it is committed so every clone and session
-    gets the same gates; the session-start line reports any key it does not know, with the
-    nearest known name. Confirm the hooks fire: make a trivial edit to a file matching an
-    `onEdit` glob, revert it, and report what ran.
+14. Write `.claude/kit.json` and show it. It is personal by default (the kit is the user's, for
+    their own work on the project): keep it out of Git through the repo's own
+    `.git/info/exclude`, never `.gitignore`, which is shared. Add the line `/.claude/kit.json` to
+    the file `git rev-parse --git-path info/exclude` names (in the main checkout), unless
+    `git check-ignore -q .claude/kit.json` says it is ignored already, and tell the user: "kit.json
+    stays on this machine (in .git/info/exclude); worktrees read the main checkout's". Then offer the
+    other choice with AskUserQuestion, the personal one first and marked as the default: **Keep it
+    personal** or **Share it with the team (commit it)**, so every clone gets the same gates and
+    hooks. Only on "share" remove that exclude line and commit the file. A kit.json Git already
+    tracks stays tracked: say so, and stop sharing it only if the user asks (`git rm --cached`, a
+    commit that removes it from everyone's checkout). Personal preferences that must never be
+    shared (unattended git steps) live in `.claude/kit.local.json` either way. The session-start
+    line reports any key it does not know, with the nearest known name. Confirm the hooks fire:
+    make a trivial edit to a file matching an `onEdit` glob, revert it, and report what ran.
 
-Schema (every key optional; the file's presence, even `{}`, opts the project in):
+Schema (every key optional; the file's presence, even `{}`, opts the project in; a linked worktree
+without one uses its main checkout's):
 
 ```json
 {

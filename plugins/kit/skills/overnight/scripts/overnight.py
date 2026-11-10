@@ -127,8 +127,20 @@ def slugify(text, limit=32):
     return slug[:limit].strip("-") or "run"
 
 
-def kit_gate(root):
+def kit_config(root):
+    """The checkout's .claude/kit.json, else its main checkout's: kit.json is personal and kept out
+    of git by default, so a linked worktree has none of its own."""
     path = Path(root) / ".claude" / "kit.json"
+    if path.exists():
+        return path
+    common = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", check=False)
+    if common and Path(common).name == ".git" and (Path(common).parent / ".claude" / "kit.json").exists():
+        return Path(common).parent / ".claude" / "kit.json"
+    return path
+
+
+def kit_gate(root):
+    path = kit_config(root)
     try:
         cfg = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     except Exception:

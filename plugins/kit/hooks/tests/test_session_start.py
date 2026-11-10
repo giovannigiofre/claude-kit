@@ -143,6 +143,20 @@ def main():
         assert notice not in run({"cwd": str(repo), "source": "compact", "session_id": "upd"}, TMPDIR=tmp), "said once"
         (HOME / ".claude" / "plugins" / "installed_plugins.json").unlink()
 
+        # kit.json is personal (kept out of git), so a linked worktree has none: the main checkout's turns it on
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.org"]
+        subprocess.run(git + ["-C", str(repo), "commit", "-q", "--allow-empty", "-m", "base"], check=True)
+        tree = Path(tmp) / "wt"
+        subprocess.run(git + ["-C", str(repo), "worktree", "add", "-q", "-b", "feat/x", str(tree)], check=True)
+        assert not (tree / ".claude" / "kit.json").exists()
+        out = run({"cwd": str(tree), "source": "startup"})
+        assert "kit harness active" in out and "make lint" in out, f"worktree uses the main checkout's: {out}"
+        bare = Path(tmp) / "bare"
+        subprocess.run(["git", "init", "-q", str(bare)], check=True)
+        subprocess.run(git + ["-C", str(bare), "commit", "-q", "--allow-empty", "-m", "base"], check=True)
+        subprocess.run(git + ["-C", str(bare), "worktree", "add", "-q", "-b", "feat/y", str(Path(tmp) / "bare-wt")], check=True)
+        assert run({"cwd": str(Path(tmp) / "bare-wt"), "source": "startup"}) == "", "no kit.json anywhere: off"
+
         (repo / ".claude" / "kit.json").write_text("{broken")
         out = run({"cwd": str(repo), "source": "startup"})
         assert "cannot read" in out, "a broken kit.json is reported, not ignored"

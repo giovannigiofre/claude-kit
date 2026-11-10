@@ -43,12 +43,17 @@ Keep it to the format below, about 25 lines; the detail lives in the PR body and
    - A step that may ask the person (a `git push` under an ask rule, anything outside the
      worktree) runs in the foreground: in the background its prompt waits unseen, and messages
      to you queue behind it.
+   - A brief line `UNATTENDED: push=… rebase=… merge=…` means nobody answers a prompt until the
+     person is back: a step set to `ask` you do not run; commit, and report it under OPEN as
+     `needs push` (or rebase, merge), STATUS partial. `allow`: run it as usual.
 4. Commit on your branch with a message that says why (in the main checkout, create the
    branch first). Commits carry the repo's configured git identity, the user's, with no AI
    co-author lines or footers. On the branch you created you may commit, amend, rebase and
-   force-push with `--force-with-lease` as often as the work needs; never push to or rewrite the
-   default branch or a branch you didn't create.
-5. Ship mode `pr`: push the branch and open a PR (`gh pr create`) whose body has **Intent** (what
+   force-push with `--force-with-lease` as often as the work needs (not a rebase or push that an
+   `UNATTENDED:` line sets to ask); never push to or rewrite the default branch or a branch you
+   didn't create.
+5. Ship mode `pr` (a push that `UNATTENDED:` sets to ask waits, step 3): push the branch and open
+   a PR (`gh pr create`) whose body has **Intent** (what
    was asked and why), **Evidence** (one line per scenario: pass or fail, the evidence file;
    attach screenshots and logs with `--attach <file>`, gh 2.99+),
    **Fixed along the way**, and **Risk** (low, medium or high, with one line on blast radius,

@@ -170,8 +170,12 @@ estimates otherwise pick the cheap, brittle option and test only in units:
 - For a bug fix, first reproduce the bug end to end, as the user meets it, not only in a unit test.
 ```
 
-**Every new project:** `cd project && claude`, then `/kit:init`. Read `.claude/kit.json`, adjust
-it, commit it. The hooks do nothing in a project without it, so a user-scope install never
+**Every new project:** `cd project && claude`, then `/kit:init`. Read `.claude/kit.json` and adjust
+it. It is personal by default: the kit is yours, for your own work on the project, so `/kit:init`
+keeps the file out of Git in the repo's `.git/info/exclude` (not the shared `.gitignore`), and a
+worktree without one reads the main checkout's; commit it only if you choose to share it with the
+team. Preferences that are never shared (the unattended git steps) live in `.claude/kit.local.json`.
+The hooks do nothing in a project without it, so a user-scope install never
 changes a project you haven't opted in; a key the kit does not know is named at session start.
 Details of every key: [docs/reference.md](docs/reference.md). Facts every thread needs (how to
 set up a worktree, the integration-test command) go in a gitignored `CLAUDE.local.md`: threads
@@ -206,7 +210,16 @@ project.
   its own rules (`guard.denyCommands` / `askCommands`: a regex over the command and the reason);
   it has no deploy rule of its own. It reads shell text, so it is best effort.
   `/kit-safety unattended on` adds Claude Code's `permissions.denyInsteadOfPrompting` for an
-  evening: a permission prompt becomes a denial and the work goes on; `off` removes it. Not for a
+  evening: a permission prompt becomes a denial and the work goes on; `off` removes it. Whether
+  threads may push, rebase and merge while you are away is a per-repo choice the coordinator asks
+  once, at the first unattended run, and keeps in the repo's gitignored `.claude/kit.local.json`
+  (`ask` until you say otherwise). For `allow`, the kit names the permission rule to add, and
+  any ask or deny rule elsewhere, such as a committed `Bash(git push*)` ask, that keeps the step
+  at `ask` because an allow rule cannot override one. It shows the change as a diff; you edit the
+  file, or ask the coordinator to, and approve its edit with two buttons. Any change to a Claude
+  Code settings file asks you in Claude Code's own prompt, headed «Sovrascrittura dei settings di
+  Claude Code:», in every mode, and a background thread's is refused.
+  Not for a
   kit project: `permissions.blockWritesOutsideWorkingDirectories`, which refuses a thread's edits
   in another repo and removes the worktree tools.
 - **Sandbox** (overnight runs, unfamiliar repos): the same guard plus Claude Code's Bash sandbox

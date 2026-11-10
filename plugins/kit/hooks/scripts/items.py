@@ -23,6 +23,15 @@ queued | agent - | - | from <source>`), so a handed-off or taken item is seen. S
     python3 items.py report|verdict <id> [FILE|-]
     python3 items.py show|path <id>
     python3 items.py done <id>
+    python3 items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow]
+
+`unattended` prints this repo's unattended git preferences as the brief line `UNATTENDED: push=..
+rebase=.. merge=..`, saying when they are not set yet; with arguments it saves them in the main
+checkout's gitignored .claude/kit.local.json (kitlib.unattended_prefs). The line carries the
+effective value: a saved `allow` prints as `ask`, with the file and rule to change, while a deny or
+ask rule in any settings scope matches the step or no allow rule covers it (kitlib.unattended_effective).
+It then prints a PROPOSAL, the settings change per file as a JSON diff, which it never applies
+(kitlib.unattended_proposal).
 """
 
 import json
@@ -280,6 +289,42 @@ def main(argv=None):
             print(f"{r['id']} | {r['status'] or '?'} | {r['brief']} | {r['note']}")
         if not rows:
             print("items: none" + (f" with status {status}" if status else ""))
+        return 0
+    if cmd == "unattended":
+        changes = {}
+        for arg in rest:
+            step, _, value = arg.partition("=")
+            if step not in kitlib.UNATTENDED_STEPS or value not in ("ask", "allow"):
+                print(f"items: unattended takes push=, rebase=, merge= each ask or allow, not {arg!r}", file=sys.stderr)
+                return 2
+            changes[step] = value
+        if changes:
+            try:
+                kitlib.save_unattended(root, changes)
+            except ValueError as exc:
+                print(f"items: {exc}", file=sys.stderr)
+                return 1
+        _, is_set, path = kitlib.unattended_prefs(root)
+        effective, notes = kitlib.unattended_effective(root)
+        line = "UNATTENDED: " + " ".join(f"{k}={effective[k]}" for k in kitlib.UNATTENDED_STEPS)
+        print(line + (f"  (from {path})" if is_set else "  (not set for this repo: ask the user, then save the answer)"))
+        for k in kitlib.UNATTENDED_STEPS:
+            if k in notes:
+                print(notes[k])
+        proposal = kitlib.unattended_proposal(root)
+        if proposal:
+            print("PROPOSAL, not applied: this command never writes settings. Only when the owner asks, the "
+                  "coordinator shows this diff and makes it with one Edit per file, which Claude Code asks the owner "
+                  "to approve; the owner can also edit the file by hand.")
+            for p in proposal:
+                what = [f'remove "{r}" from permissions.{b}' for b, r in p["remove"]]
+                what += [f'add "{r}" to permissions.allow' for r in p["add"]]
+                print(f"- {p['file']}" + (" (committed: the change reaches everyone who works in this repo)"
+                                          if p["committed"] else "") + ": " + "; ".join(what))
+                for r in p["broad"]:
+                    print(f'  "{r}" also asks for other commands: removing it drops that prompt too; '
+                          f"a narrower rule may be what the owner wants")
+                print(p["diff"])
         return 0
     if cmd in ("log", "report", "verdict", "done", "show", "path"):
         if not rest:

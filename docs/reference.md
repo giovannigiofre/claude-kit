@@ -2,7 +2,13 @@
 
 ## `.claude/kit.json`
 
-Committed with the project; `/kit:init` writes it from what the repo and its CI run.
+`/kit:init` writes it from what the repo and its CI run. It is personal by default: init adds
+`/.claude/kit.json` to the repo's `.git/info/exclude` (never the shared `.gitignore`), and the
+user may choose to commit it instead, so every clone gets the same gates. Every reader (the hooks,
+the mod, `gate.py`, the overnight runner, kit-llm) takes a checkout's own kit.json, else its main
+checkout's, so a linked worktree, which has no copy of an excluded file, runs with the main
+checkout's; with neither the kit stays off. The owner's personal choices that are never shared
+(the unattended git steps) live in `.claude/kit.local.json` beside it.
 
 ```json
 {
@@ -107,7 +113,8 @@ that name before each commit), `.claude/loop.md` (what a bare `/loop` does for t
 PR: fix CI, answer reviews, sync with the base, reschedule itself while the PR is open; it never
 merges), `.claude/review-decisions.md`
 (findings you declined, so reviews don't raise them again). Gitignored: `.claude/evidence/`,
-`.claude/overnight/`, `.claude/lead/`.
+`.claude/overnight/`, `.claude/lead/`, `.claude/kit.local.json` (the kit adds each to
+`.git/info/exclude` when it writes there and the project does not ignore it).
 
 ### Auto mode environment, per repo
 
@@ -189,7 +196,37 @@ python3 <kit>/hooks/scripts/items.py list [--status queued]
 python3 <kit>/hooks/scripts/items.py log <id> <status> [note]
 python3 <kit>/hooks/scripts/items.py show <id>
 python3 <kit>/hooks/scripts/items.py done <id>
+python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow]
 ```
+
+`unattended`: the owner's git preferences for unattended runs in this repo, in the main
+checkout's `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "ask", "rebase": "ask",
+"merge": "ask"}}}`), which the command adds to `.git/info/exclude`: local to this machine and
+repo, never global, never committed. Without arguments it prints the brief line `UNATTENDED:
+push=ask rebase=ask merge=ask` and whether it is set; a missing, broken or misspelt value is
+`ask`. The coordinator asks only when an unattended run starts and nothing is set, saves the
+answer and briefs every thread of the run with that line ([unattended.md](../plugins/kit/skills/lead/unattended.md)).
+A thread does not run a step set to `ask` and hands back `needs push` (rebase, merge); `allow`
+runs it. The line carries the effective value, so a saved `allow` prints as `ask` with a note
+naming what to change. Claude Code checks deny, then ask, then allow rules, and the first match
+wins whichever scope it is in. So the command checks the rules in managed settings, the user's
+`~/.claude/settings.json`, and the repo's `.claude/settings.json` and `settings.local.json`
+against the step's commands, in the forms the kit prescribes (`git push -u`, `--force-with-lease`,
+`gh pr merge --squash --delete-branch`); a tool-name glob such as `*` counts as matching, and so
+do the kit guard's own `guard.denyCommands` / `askCommands` in kit.json. A matching deny or ask
+rule (a committed `Bash(git push*)` ask, say)
+keeps the step at `ask`: the note names the rule and its file, and says that an allow rule in
+`settings.local.json` cannot override it. With no allow rule covering the step, the note names
+the rules to add to `.claude/settings.local.json` (`Bash(git push:*)`, `Bash(git rebase:*)`,
+`Bash(gh pr merge:*)` and `Bash(git merge:*)`). A settings file that does not parse also keeps
+the step at `ask`. A deny rule refuses without a prompt, so one that refuses only some forms (a
+project that forbids force pushes) is named in the note and the step stays `allow`; one that
+refuses every form keeps it at `ask`. The command then prints a PROPOSAL, never applied by it: per
+settings file, the ask rules to remove (never a deny rule) and the rules to add (to `settings.local.json`),
+a warning when a rule also matches other commands, whether the file is committed, and a diff. The
+coordinator applies it only when the owner asks, after an AskUserQuestion with the diff as a
+preview, through an ordinary Edit that `settings_guard.py` turns into Claude Code's own prompt
+(Permission prompts).
 
 A thread briefed with the BRIEF.md text carries the `ITEM:` line; when it finishes, the hook
 files its report under the item (`reported | done, 2 decision(s), agent <id>` in the LOG); when
@@ -296,7 +333,8 @@ its 15 s tick (interactive sessions only) and wakes the coordinator with a promp
   prompt the thread was started with (the mod reads that prompt, not BRIEF.md on disk);
 - a background command past its deadline (its Bash `timeout`, else `bashDeadlineMin`, 30) while
   its owner has been quiet for `silentMin`. A command whose description holds `(server)` is
-  meant to keep running and has none. A background thread's command that runs past 3 minutes is
+  meant to keep running and has none. A thread still within its brief's EXPECT is not woken
+  about a command that only passed the `bashDeadlineMin` guess, only one past its own `timeout`. A background thread's command that runs past 3 minutes is
   moved to the background by Claude Code itself (2.1.318) and counts as one of these;
 - a thread that waits (status `waiting`) on its own background work when none of it can wake
   it, for `5` min: every command has ended, or what is left is a holder.
@@ -326,13 +364,56 @@ the ID also survives a restart, and the hooks write it into the item's LOG); a m
 a thread even while its command runs (2.1.317: the command moves to the background). The facts
 live in memory, bounded to the work in flight; a module reload only makes the watchdog quieter.
 
+Claude Code itself sends a task notice each time a thread stops with background work still
+running ("Agent X is waiting on its own background work"; the result says it has not reported
+yet). It changes nothing for the coordinator, yet each one was a turn: 144 in one 24-hour
+session. The mod drops it at `prompt.submit` before it becomes a turn, and the transcript shows
+one dim line saying so. Only a notice whose every `<task-notification>` block is such an interim
+one, with nothing beside it but Claude Code's preamble, is dropped; a thread's report, a
+command's notice, a mix or the same text typed by the person passes. The thread's report comes
+later under the same task id, and the `stuck` check above covers work that ended without waking
+it. What the kit cannot change: Claude Code still emits the notice, and without the mod (a
+session that has not loaded it) each one still wakes the coordinator.
+
 ## Permission prompts
 
 `permission.py` (PermissionRequest, matcher Bash) allows, without a prompt, a command that is
 exactly kit.json `check` or `verify`, or the kit's own `gate.py`, `lessons.py`, `items.py`,
-`proposals.py` or `compact_logs.py` by their real path. Nothing else is touched: the guard has already judged the
+`proposals.py` or `compact_logs.py` by their real path, unless the command changes a settings
+file (below). Nothing else is touched: the guard has already judged the
 command, and the permission system decides the rest. `/fewer-permission-prompts` (built in)
 writes a broader read-only allowlist to project settings if you want one.
+
+`settings_guard.py` (PreToolUse: Write, Edit, MultiEdit, NotebookEdit, Bash, Monitor) answers
+`ask` in every permission mode for a change to a Claude Code settings file: `settings*.json` in
+any `.claude` folder or in `CLAUDE_CONFIG_DIR`, and the managed settings, in any case. Like
+every kit hook it acts only in a project with kit.json (a worktree's, else its main checkout's).
+A shell command counts when it names one, quotes and backslashes inside the name included, and is
+not a plain read (`cat`, `grep`, `jq`, `git diff`, …, alone or piped into one another, with no
+redirection or chain). A bare `settings.json` counts only in a Claude folder: the cwd is one, the
+command `cd`s into one, or it writes and names one; a thread's worktree below
+`.claude/worktrees/` is not one. A Claude folder itself (`.claude/`, `~/.claude`, a glob in one,
+`/Library/Application Support/ClaudeCode/`) counts when the part of the command that names it (split at `;`, `&&`, `||`, `&`) may write. This
+check fails safe: a stage counts as writing unless its first word is known not to write, which
+means a reader, `echo`, `mkdir`, a loop or block keyword, or git `status`/`add`/`commit`/`push`/…
+(`perl -e`, `ruby -e` and a `case` clause count as writing).
+The first word is the one found after `(`, `{`, `then`, `do`, wrappers such as `sudo`, `nice`,
+`timeout` and `xargs`, and assignments. The string run by `bash|sh|zsh -c` and `eval` is judged in
+turn. So `cp -r x .claude/`, `bash -c 'cp x .claude/'`, `( cp -r x .claude/ )`, `node x.js --out
+.claude` and a redirection ask, while `git add .claude/`, `grep -rn x .claude/ | head`, `bash -c 'ls
+.claude/'` and `ls .claude/ && npm test` pass. Names are matched one word at a time, so the time
+taken grows with the command's length, not its square. A command with a word over 8 KB (a base64
+blob) is not read: it asks if it mentions `.claude`, `CLAUDE_CONFIG_DIR`, `settings` or
+`ClaudeCode`, and otherwise gets no answer. A slow hook would pass the 10 s timeout, where Claude
+Code runs the tool without asking. The
+prompt's reason starts «Sovrascrittura dei settings di Claude Code:», then the file (home as `~`)
+and the change in Italian, within 220 characters. From a subagent the answer is `deny`, since
+nobody sees a background thread's prompt; Claude Code's `statusline-setup`, which runs in the
+foreground to edit `~/.claude/settings.json`, gets `ask`. It never answers `allow`; an error,
+kitlib missing included, answers `ask`. Limits: it reads shell text, so it does not see a name
+built at run time (from variables, a script's own code) or a command that rewrites the whole
+tree (`git checkout -- .`, `git stash`, `git reset --hard`); and `machine_setup.py --apply`
+(autoMode) and `/kit-safety` write settings without a tool call naming the file.
 
 ## Lessons
 
@@ -558,6 +639,7 @@ python3 plugins/kit/hooks/tests/test_gate.py
 python3 plugins/kit/hooks/tests/test_stop_check.py
 python3 plugins/kit/hooks/tests/test_bash_edits.py
 python3 plugins/kit/hooks/tests/test_permission.py
+python3 plugins/kit/hooks/tests/test_settings_guard.py
 python3 plugins/kit/hooks/tests/test_items.py
 python3 plugins/kit/hooks/tests/test_proposals.py
 python3 plugins/kit/hooks/tests/test_session_start.py

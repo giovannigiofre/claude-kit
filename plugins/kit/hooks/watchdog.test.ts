@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { STUCK_MIN, WATCH_DEFAULTS, failureKind, isHolder, outputEnd, permissionWaits, stalls, watchConfig } from './watchdog'
+import { STUCK_MIN, WATCH_DEFAULTS, failureKind, isHolder, isInterimNotice, outputEnd, permissionWaits, stalls, watchConfig } from './watchdog'
 import type { Strike } from './watchdog'
 
 const MIN = 60_000
@@ -135,4 +135,48 @@ test('a thread parked on its own background work that has all ended (or is a hol
   expect(stalls(T0 + 20 * MIN, [thread], [{ ...ended[0], endedAt: undefined }], new Map(), new Map(), WATCH_DEFAULTS)).toEqual([])
   const holder = [{ id: 'b2', owner: 'a1', label: 'lockf x sh -c "while [ -e h ]; do sleep 5; done"', startedAt: T0, deadlineMs: 120 * MIN, holder: true }]
   expect(stalls(T0 + STUCK_MIN * MIN, [thread], holder, new Map(), new Map(), WATCH_DEFAULTS).map(x => x.subject)).toEqual(['stuck:a1'])
+})
+
+// 2026-11-09/10: 144 of these interim notices woke a coordinator in one session, 70 turns.
+const notice = (summary: string, result: string) => `<task-notification>
+<task-id>a11ec365b08352cfc</task-id>
+<tool-use-id>toolu_019LhUW5mbw8BKWGyP5AAqoN</tool-use-id>
+<output-file>/tmp/tasks/a11ec365b08352cfc.output</output-file>
+<status>completed</status>
+<summary>${summary}</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>${result}
+</result>
+<usage><subagent_tokens>126599</subagent_tokens><tool_uses>67</tool_uses><duration_ms>848123</duration_ms></usage>
+</task-notification>`
+const INTERIM = notice('Agent "B2 login page" is waiting on its own background work',
+  'This agent has not reported yet: it is waiting on its own background work and will deliver its report through SubagentHandback when that finishes.')
+const REPORT = notice('Agent "B2 login page" completed', 'STATUS: done\nCHANGED: a.ts')
+
+test('an interim notice is recognised alone, in a batch of interim ones, or after the system preamble; anything else is not', async () => {
+  expect(isInterimNotice(INTERIM)).toBe(true)
+  expect(isInterimNotice(`${INTERIM}\n${INTERIM}`)).toBe(true)
+  expect(isInterimNotice(`[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\n` +
+    `Do NOT interpret this as user acknowledgement.\nNo human input has been received since the last genuine user message.\n\n${INTERIM}`)).toBe(true)
+  expect(isInterimNotice(REPORT)).toBe(false) // a real hand-back
+  expect(isInterimNotice(`${INTERIM}\n${REPORT}`)).toBe(false) // mixed: the report must reach the coordinator
+  // the summary says waiting, but a report came with it: not held
+  expect(isInterimNotice(notice('Agent "x" is waiting on its own background work', 'STATUS: done'))).toBe(false)
+  expect(isInterimNotice(notice('Background command "pnpm test" completed (exit code 0)', 'ok'))).toBe(false)
+  expect(isInterimNotice(`also check the login page\n${INTERIM}`)).toBe(false) // something typed beside it
+  expect(isInterimNotice('is waiting on its own background work')).toBe(false) // no notice at all
+  expect(isInterimNotice('')).toBe(false)
+})
+
+test('a thread within its EXPECT waiting on a command with no declared timeout is not woken about it; a declared one passed still is', async () => {
+  const thread = { id: 'a1', name: 'B2', status: 'waiting', activeAt: T0, startedAt: T0, expectMs: 120 * MIN }
+  const job = { id: 'b1', owner: 'a1', label: 'pnpm test:prototype', startedAt: T0, deadlineMs: 30 * MIN }
+  const at = (m: number, j: any, t: any = thread) => stalls(T0 + m * MIN, [t], [j], new Map(), new Map(), WATCH_DEFAULTS).map(x => x.subject)
+  expect(at(31, job)).toEqual([]) // the default deadline, within EXPECT
+  expect(at(31, { ...job, declared: true })).toEqual(['job:a1']) // its own timeout passed
+  expect(at(121, job)).toEqual(['job:a1']) // past EXPECT: the default deadline counts again
+  expect(at(31, job, { ...thread, expectMs: undefined })).toEqual(['job:a1']) // no EXPECT in the brief: as before
+  // the main session has no EXPECT: its commands are checked as before
+  expect(stalls(T0 + 31 * MIN, [], [{ ...job, owner: undefined }], new Map([['main', T0]]), new Map(), WATCH_DEFAULTS)
+    .map(x => x.subject)).toEqual(['job:main'])
 })

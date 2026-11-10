@@ -23,4 +23,4 @@ if [ -t 0 ] && ! python3 plugins/kit/hooks/scripts/machine_setup.py --check >/tm
 fi
 rm -f /tmp/kit-setup.$$
 echo
-echo "Done. In each project: open claude, run /kit:init (writes .claude/kit.json; commit it). From then on you talk to the coordinator (loop mode)."
+echo "Done. In each project: open claude, run /kit:init (writes .claude/kit.json, personal by default: kept out of Git in .git/info/exclude). From then on you talk to the coordinator (loop mode)."

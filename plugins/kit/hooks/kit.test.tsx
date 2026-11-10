@@ -2,7 +2,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 // The world beneath the kit mod: a repo at /repo, a home at /home/u, files in memory.
-function world(on: On, files: Record<string, string> = {}, agents: any[] = [], exitCode = (_argv: string[]) => 0) {
+function world(on: On, files: Record<string, string> = {}, agents: any[] = [], exitCode = (_argv: string[]) => 0,
+               stdout = (_argv: string[]) => '/repo\n') {
   mock.store(on)
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.env(on, { HOME: '/home/u' })
@@ -10,7 +11,7 @@ function world(on: On, files: Record<string, string> = {}, agents: any[] = [], e
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.surfaces', () => ({ value: ['terminal'] }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, percent: 12 }, rateLimits: [], cost: { usd: 1.5 } } }))
-  on('process.run', (_, e: any) => ({ value: { exitCode: exitCode(e.argv), stdout: '/repo\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', (_, e: any) => ({ value: { exitCode: exitCode(e.argv), stdout: stdout(e.argv), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.read', (_, e: any) => {
     const text = written[e.path] ?? files[e.path]
     if (text === undefined) return { deny: `ENOENT ${e.path}` }
@@ -94,6 +95,24 @@ test('loop mode never reaches headless or scheduled prompts', async ($, on) => {
   expect((seen.at(-1) ?? []).join(' ')).toContain('coordinator')
 })
 
+test('an interim task notice is dropped before it becomes a turn; a report, a mix or the same text typed passes', async ($, on) => {
+  world(on)
+  const seen = promptCatcher(on)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  const block = (summary: string, result: string) => `<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n` +
+    `<summary>${summary}</summary>\n<result>${result}</result>\n</task-notification>`
+  const interim = block('Agent "B2 login page" is waiting on its own background work',
+    'This agent has not reported yet: it is waiting on its own background work and will deliver its report through SubagentHandback when that finishes.')
+  const report = block('Agent "B2 login page" completed', 'STATUS: done')
+  const held = await $.prompt.submit({ text: interim, origin: { kind: 'task-notification' } } as any)
+  expect(JSON.stringify(held)).toContain('held an interim notice')
+  expect(seen.length).toBe(0)
+  await $.prompt.submit({ text: report, origin: { kind: 'task-notification' } } as any)
+  await $.prompt.submit({ text: `${interim}\n${report}`, origin: { kind: 'task-notification' } } as any)
+  await $.prompt.submit({ text: interim } as any) // the person pasted it: theirs to send
+  expect(seen.length).toBe(3)
+})
+
 test('a settings file that does not parse is never rewritten', async ($, on) => {
   const { written } = world(on, { '/repo/.claude/settings.local.json': '{ "permissions": { "allow": [ ' })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
@@ -119,6 +138,25 @@ test('a project with kit.json starts in loop mode unless the person chose light'
   await $.command.run({ command: 'kit-mode', args: 'light' } as any)
   await $.prompt.submit({ text: 'what changed?' } as any)
   await $.prompt.submit({ text: 'and now?' } as any)
+  expect(seen.at(-1) ?? []).toEqual([])
+})
+
+test('a worktree without kit.json of its own uses the main checkout\'s', async ($, on) => {
+  // /repo is a linked worktree of /main: kit.json is personal (kept out of git), so only /main has it
+  const commonDir = (argv: string[]) => (argv.includes('--git-common-dir') ? '/main/.git\n' : '/repo\n')
+  world(on, { '/main/.claude/kit.json': JSON.stringify({ check: 'make lint' }) }, [], () => 0, commonDir)
+  const seen = promptCatcher(on)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'add a login page' } as any)
+  expect((seen.at(-1) ?? []).join(' ')).toContain('coordinator')
+})
+
+test('a worktree whose main checkout has no kit.json stays light', async ($, on) => {
+  const commonDir = (argv: string[]) => (argv.includes('--git-common-dir') ? '/main/.git\n' : '/repo\n')
+  world(on, {}, [], () => 0, commonDir)
+  const seen = promptCatcher(on)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'add a login page' } as any)
   expect(seen.at(-1) ?? []).toEqual([])
 })
 

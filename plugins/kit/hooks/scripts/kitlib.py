@@ -2,8 +2,12 @@
 
 Every hook is a no-op unless the project has `.claude/kit.json` (see the README for the schema),
 so installing the plugin at user scope never changes behaviour in a project that has not opted in.
+A linked worktree with no kit.json of its own (it is personal and kept out of git by default)
+uses its main checkout's: config_file.
 """
 
+import difflib
+import fnmatch
 import json
 import os
 import re
@@ -63,10 +67,26 @@ def project_root(data, path_hint=None):
     return Path(cand)
 
 
+CONFIG = ".claude/kit.json"
+
+
+def config_file(root):
+    """The kit.json that applies in checkout `root`: its own, else its main checkout's. /kit:init
+    keeps kit.json out of git by default (personal), so a linked worktree has none of its own."""
+    own = Path(root) / CONFIG
+    if own.exists():
+        return own
+    main = main_checkout(root)
+    if main and (Path(main) / CONFIG).exists():
+        return Path(main) / CONFIG
+    return own
+
+
 def load_config(root):
     """Return (config, error). config is None when the project has no kit.json; a kit.json that
-    is present means the project opted in, even an empty `{}` (callers test `config is None`)."""
-    path = Path(root) / ".claude" / "kit.json"
+    is present means the project opted in, even an empty `{}` (callers test `config is None`).
+    A worktree without one uses its main checkout's (config_file)."""
+    path = config_file(root)
     if not path.is_file():
         return None, None
     try:
@@ -89,6 +109,273 @@ def main_checkout(cwd):
     if common and common.name == ".git" and (common.parent / ".git").is_dir():
         return common.parent
     return root
+
+
+# The owner's unattended git preferences for one repository, in its main checkout's gitignored
+# `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "ask", "rebase": "ask", "merge": "ask"}}}`):
+# local to this machine and this repo, never global, never committed. `ask` (the default, and
+# whatever is missing, misspelt or unreadable) means nobody answers a permission prompt during an
+# unattended run, so a thread hands that step back; `allow` means it proceeds as when attended,
+# once the permission rules let it run without a prompt (unattended_effective).
+UNATTENDED_STEPS = ("push", "rebase", "merge")
+LOCAL_CONFIG = ".claude/kit.local.json"
+# What `allow` needs so the step runs without a prompt: the owner adds these to the repo's
+# .claude/settings.local.json `permissions.allow`, by hand or by approving the coordinator's Edit
+# of the PROPOSAL (unattended_proposal); the kit's code never writes them (settings_guard.py).
+UNATTENDED_RULES = {"push": ["Bash(git push:*)"], "rebase": ["Bash(git rebase:*)"],
+                    "merge": ["Bash(gh pr merge:*)", "Bash(git merge:*)"]}
+
+
+def unattended_prefs(cwd):
+    """(prefs, is_set, path): every step `ask` or `allow`; is_set when the repo's file names any step."""
+    root = main_checkout(cwd) or Path(cwd)
+    path = Path(root) / LOCAL_CONFIG
+    value, _ = read_json(path)
+    lead = (value or {}).get("lead")
+    own = lead.get("unattended") if isinstance(lead, dict) else None
+    own = own if isinstance(own, dict) else {}
+    prefs = {k: ("allow" if str(own.get(k, "")).strip().lower() == "allow" else "ask") for k in UNATTENDED_STEPS}
+    return prefs, any(k in own for k in UNATTENDED_STEPS), path
+
+
+def save_unattended(cwd, changes):
+    """Write `changes` ({step: ask|allow}) into the repo's kit.local.json beside its other keys and
+    keep the file out of git; returns the prefs now in force. A file that does not parse is never
+    rewritten (ValueError)."""
+    prefs, _, path = unattended_prefs(cwd)
+    value, ok = read_json(path)
+    if not ok:
+        raise ValueError(f"{path} is not a JSON object; fix or remove it first")
+    lead = value.get("lead") if isinstance(value.get("lead"), dict) else {}
+    own = {**prefs, **changes}
+    value["lead"] = {**lead, "unattended": {k: own[k] for k in UNATTENDED_STEPS}}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    exclude(path.parent.parent, LOCAL_CONFIG)
+    return unattended_prefs(cwd)[0]
+
+
+# Commands a thread runs for each step, to test the permission rules against. Claude Code checks
+# deny, then ask, then allow, and the first that matches wins in every scope: an ask rule anywhere
+# (a committed settings.json, the user's) beats an allow rule in settings.local.json.
+# The forms the kit itself prescribes count too: threads force-push with --force-with-lease and
+# push with -u (implementer.md), the lead merges with --squash --delete-branch (lead SKILL.md).
+UNATTENDED_PROBES = {"push": ["git push", "git push -u origin feature-branch", "git push --force-with-lease",
+                              "git push --force-with-lease origin feature-branch",
+                              "git push -u --force-with-lease origin feature-branch"],
+                     "rebase": ["git rebase origin/main"],
+                     "merge": ["gh pr merge 12 --squash", "gh pr merge 12 --squash --delete-branch",
+                               "gh pr merge --squash --delete-branch", "git merge origin/main"]}
+
+
+def bash_rule_matches(rule, command):
+    """True when permission rule `rule` (`Bash`, `Bash(*)`, `Bash(git push:*)`, `Bash(git push *)`,
+    `Bash(git push*)`, an exact `Bash(git status)`, or a tool-name glob such as `*`) covers `command`."""
+    m = re.fullmatch(r"\s*([^\s()]+)\s*(?:\((.*)\))?\s*", str(rule), re.S)
+    if not m:
+        return False
+    tool = m.group(1)
+    if tool != "Bash" and not ("*" in tool and fnmatch.fnmatchcase("Bash", tool)):
+        return False
+    spec = (m.group(2) or "").strip()
+    if spec in ("", "*"):
+        return True
+    if spec.endswith(":*"):
+        prefix = spec[:-2]
+        return command == prefix or command.startswith(prefix + " ")
+    pattern = ".*".join(re.escape(part) for part in spec.split("*"))
+    if spec.endswith(" *"):  # `git push *` also covers a bare `git push`
+        pattern = f"(?:{pattern}|{re.escape(spec[:-2])})"
+    return re.fullmatch(pattern, command, re.S) is not None
+
+
+def managed_settings():
+    if sys.platform == "darwin":
+        return Path("/Library/Application Support/ClaudeCode/managed-settings.json")
+    if sys.platform.startswith("win"):
+        return Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "ClaudeCode" / "managed-settings.json"
+    return Path("/etc/claude-code/managed-settings.json")
+
+
+def permission_files(cwd):
+    """Every settings file whose permission rules apply in this repo: managed, the user's, and the
+    main checkout's committed settings.json and local settings.local.json."""
+    root = Path(main_checkout(cwd) or cwd)
+    return [managed_settings(), config_dir() / "settings.json",
+            root / ".claude" / "settings.json", root / ".claude" / "settings.local.json"]
+
+
+def _guard_rules(cwd):
+    """The kit guard's own project rules (kit.json guard.denyCommands / askCommands, a regex over the
+    command) as [(behavior, pattern, where, matches)]: a PreToolUse ask or deny there wins over
+    any allow rule too. A command the guard's allowCommands lets through is not matched."""
+    root = Path(main_checkout(cwd) or cwd)
+    try:
+        import guard  # imported here: guard imports this module
+        active, opts = guard.settings(root)
+    except Exception:
+        return []
+    if not active:
+        return []
+    project, _ = load_config(root)
+    source = config_file(root) if isinstance(project, dict) and isinstance(project.get("guard"), dict) \
+        else Path.home() / ".claude" / "kit.json"
+    out = []
+    for behavior, key in (("deny", "denyCommands"), ("ask", "askCommands")):
+        for rule in opts.get(key) or []:
+            pattern = rule.get("pattern") if isinstance(rule, dict) else rule
+            if not pattern:
+                continue
+
+            def hit(command, pattern=str(pattern)):
+                try:
+                    return not guard.allowed(command, opts) and re.search(pattern, command) is not None
+                except re.error:
+                    return False
+            out.append((behavior, str(pattern), f"{source} guard.{key}", hit))
+    return out
+
+
+def _unattended_steps(cwd):
+    """(files, unreadable, steps): for each step the owner set to allow, the deny and ask rules that
+    match its commands as [(behavior, rule, file)], and whether allow rules cover all of them."""
+    prefs, _, _ = unattended_prefs(cwd)
+    files = permission_files(cwd)
+    rules, unreadable = [], []
+    for f in files:
+        value, ok = read_json(f)
+        if not ok:
+            unreadable.append(f)
+            continue
+        perms = value.get("permissions") if isinstance(value.get("permissions"), dict) else {}
+        for behavior in ("deny", "ask", "allow"):
+            listed = perms.get(behavior)
+            for r in listed if isinstance(listed, list) else []:
+                rules.append((behavior, str(r), f))
+    allows = [r for (b, r, _) in rules if b == "allow"]
+    guard_rules = _guard_rules(cwd)
+    steps = {}
+    for step in UNATTENDED_STEPS:
+        if prefs[step] != "allow":
+            continue
+        probes = UNATTENDED_PROBES[step]
+        found = [(b, r, f, [p for p in probes if bash_rule_matches(r, p)]) for (b, r, f) in rules if b in ("deny", "ask")]
+        found += [(b, pattern, where, [p for p in probes if hit(p)]) for (b, pattern, where, hit) in guard_rules]
+        found = [x for x in found if x[3]]
+        denied = {p for (b, _, _, forms) in found if b == "deny" for p in forms}
+        # a deny refuses at once, without a prompt, so nothing waits on it: it keeps the step at ask
+        # only when it refuses every form; otherwise those forms are named and the thread hands them back
+        refused = [(r, f, forms) for (b, r, f, forms) in found if b == "deny"] if len(denied) < len(probes) else []
+        blocked = [(b, r, f) for (b, r, f, _) in found if b == "ask" or not refused]
+        covered = all(any(bash_rule_matches(r, p) for r in allows) for p in probes if p not in denied)
+        steps[step] = (blocked, covered, refused)
+    return files, unreadable, steps
+
+
+def unattended_effective(cwd):
+    """(effective, notes): a step is `allow` only when the owner chose allow, no deny or ask rule in
+    any scope matches its commands, and an allow rule covers every one of them; otherwise `ask`,
+    with a note per allow-step saying what keeps it at ask and which file and rule to change."""
+    files, unreadable, steps = _unattended_steps(cwd)
+    effective, notes = {k: "ask" for k in UNATTENDED_STEPS}, {}
+    for step, (blocked, covered, refused) in steps.items():
+        if unreadable:
+            notes[step] = (f"{step}: allow saved, but it stays ask: {', '.join(map(str, unreadable))} does not parse, "
+                           f"so its rules are unknown; fix it first.")
+        elif blocked:
+            which = "; ".join(f'{b} rule "{r}" in {f}' for b, r, f in blocked)
+            notes[step] = (f"{step}: allow saved, but it stays ask: {which} matches, and deny and ask answers come "
+                           f"before allow ones (Claude Code's rules in every scope, and the kit guard's), so an allow "
+                           f"rule in settings.local.json cannot override it. The owner changes that rule, or {step} "
+                           f"waits for them.")
+        elif not covered:
+            notes[step] = (f"{step}: allow saved, but it stays ask until the owner adds "
+                           + ", ".join(f'"{r}"' for r in UNATTENDED_RULES[step])
+                           + f" to {files[-1]} permissions.allow.")
+        else:
+            effective[step] = "allow"
+            if refused:
+                notes[step] = (f"{step}: allow, but " + "; ".join(f'deny rule "{r}" in {f} refuses {", ".join(forms)}'
+                                                                 for r, f, forms in refused)
+                               + " outright (no prompt, so nothing waits): a thread hands that form back.")
+    return effective, notes
+
+
+# Commands outside the steps: a blocking rule that matches one of these asks for more than the step.
+OTHER_COMMANDS = ["git reset --hard HEAD", "git status", "rm -rf build"]
+
+
+def unattended_proposal(cwd):
+    """The settings changes that would make every saved `allow` effective, for the owner to approve:
+    [{"file", "committed", "remove": [(behavior, rule)], "add": [rule], "broad": [rule], "diff"}].
+    Nothing is written here: the coordinator applies one only when the owner asks, with an Edit the
+    owner approves in Claude Code's prompt (settings_guard.py asks for it). Empty while a settings
+    file does not parse. Deny rules are never proposed for removal, and a kit.json guard rule is
+    only named in the note: both stay the owner's to change by hand."""
+    files, unreadable, steps = _unattended_steps(cwd)
+    if unreadable:
+        return []
+    changes = {}
+    for step, (blocked, covered, _) in steps.items():
+        for b, r, f in blocked:
+            if b == "deny":  # a deny is a project's hard line: never proposed for removal
+                continue
+            entry = changes.setdefault(f, {"remove": [], "add": []})
+            if (b, r) not in entry["remove"]:
+                entry["remove"].append((b, r))
+        if not covered:
+            entry = changes.setdefault(files[-1], {"remove": [], "add": []})
+            entry["add"] += [r for r in UNATTENDED_RULES[step] if r not in entry["add"]]
+    root = Path(main_checkout(cwd) or cwd)
+    out = []
+    for f in files:
+        if f not in changes:
+            continue
+        old, _ = read_json(f)
+        perms = dict(old.get("permissions") or {}) if isinstance(old.get("permissions"), dict) else {}
+        for b, r in changes[f]["remove"]:
+            perms[b] = [x for x in perms.get(b, []) if str(x) != r]
+        add = [r for r in changes[f]["add"] if r not in (perms.get("allow") or [])]
+        if add:
+            perms["allow"] = list(perms.get("allow") or []) + add
+        new = {**old, "permissions": perms}
+        diff = "\n".join(difflib.unified_diff(json.dumps(old, indent=2).splitlines(), json.dumps(new, indent=2).splitlines(),
+                                              fromfile=str(f), tofile=str(f), lineterm=""))
+        committed = False
+        try:
+            rel = f.relative_to(root)
+            committed = subprocess.run(["git", "-C", str(root), "ls-files", "--error-unmatch", str(rel)],
+                                       capture_output=True, timeout=10).returncode == 0
+        except (ValueError, OSError, subprocess.SubprocessError):
+            pass
+        broad = [r for _, r in changes[f]["remove"] if any(bash_rule_matches(r, c) for c in OTHER_COMMANDS)]
+        out.append({"file": f, "committed": committed, "remove": changes[f]["remove"], "add": add,
+                    "broad": broad, "diff": diff})
+    return out
+
+
+def exclude(root, rel):
+    """Keep `rel` (a file under the checkout `root`) out of git through .git/info/exclude, unless
+    the project ignores it already."""
+    root = Path(root)
+    try:
+        if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", rel], capture_output=True,
+                          timeout=10).returncode == 0:
+            return
+    except Exception:
+        return
+    info = git_out(root, "rev-parse", "--git-path", "info/exclude")
+    if not info:
+        return
+    info = Path(info) if Path(info).is_absolute() else root / info
+    try:
+        info.parent.mkdir(parents=True, exist_ok=True)
+        text = info.read_text(encoding="utf-8") if info.exists() else ""
+        line = "/" + rel.lstrip("/")
+        if line not in text.splitlines():
+            info.write_text(text + ("" if not text or text.endswith("\n") else "\n") + line + "\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 GATE_TIMEOUTS = {"check": 540, "verify": 1800}  # seconds; kit.json checkTimeout / verifyTimeout override

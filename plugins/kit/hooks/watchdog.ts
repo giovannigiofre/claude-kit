@@ -52,6 +52,7 @@ export type Job = {
   label: string
   startedAt: number
   deadlineMs: number // 0: a server or watcher meant to keep running, never checked
+  declared?: boolean // the deadline is the command's own timeout, not the bashDeadlineMin default
   holder?: boolean // it waits on its owner's own later action (isHolder): it never ends by itself
   endedAt?: number // its output file ends with Claude Code's exit line, written then
   ending?: string // that line, after the last result lines above it (outputEnd)
@@ -70,6 +71,27 @@ export function outputEnd(text: string): string | undefined {
 // an owner that waits on it waits on itself. Its description or its command says so.
 export function isHolder(text: string): boolean {
   return /\bhold(s|ing|er)?\b|\bwhile\s+\[\s+-[efs]\s|\buntil\s+\[\s+!\s+-[efs]\s|\bsleep\s+infinity\b|\btail\s+-f\s+\/dev\/null\b/i.test(text || '')
+}
+
+// Claude Code's interim task notice: a thread stopped with background work of its own still
+// running, and has not reported. It changes nothing for the coordinator (the same task id notifies
+// again with the report, and the `stuck` check below catches work that ended without waking it),
+// yet each one is a turn. True only when every `<task-notification>` in the text is such a notice
+// and nothing else is there but Claude Code's own preamble, so a real hand-back, a command's
+// notice or anything typed beside them is never held.
+const NOTICE = /<task-notification>([\s\S]*?)<\/task-notification>/g
+const PREAMBLE = /^(\[SYSTEM NOTIFICATION\b|This is an automated background-task event|Do NOT interpret this|No human input has been received)/
+export function isInterimNotice(text: string): boolean {
+  const blocks = [...String(text || '').matchAll(NOTICE)].map(m => m[1])
+  if (blocks.length === 0) return false
+  const interim = (b: string) => {
+    const summary = /<summary>([\s\S]*?)<\/summary>/.exec(b)?.[1] ?? ''
+    const result = /<result>([\s\S]*?)<\/result>/.exec(b)?.[1]
+    return /is waiting on its own background work/i.test(summary) && (result === undefined || /has not reported yet/i.test(result))
+  }
+  if (!blocks.every(interim)) return false
+  const rest = String(text).replace(NOTICE, '').split('\n').map(l => l.trim()).filter(l => l && !PREAMBLE.test(l))
+  return rest.length === 0
 }
 
 export type Strike = { count: number; since: number }
@@ -143,7 +165,13 @@ export function stalls(now: number, threads: Thread[], jobs: Job[], activity: Ma
   }
 
   // background commands, one subject per owner: past its deadline a command matters only while
-  // its owner sits waiting on it, quiet for silentMin
+  // its owner sits waiting on it, quiet for silentMin. A thread still within its brief's EXPECT
+  // is waiting on its own work as planned: only a command past the timeout it declared counts
+  // (the default deadline is a guess, and the overdue check speaks once EXPECT has passed).
+  const withinExpect = (owner: string) => {
+    const t = live.find(x => x.id === owner)
+    return !!t && !!t.expectMs && t.startedAt !== undefined && now < t.startedAt + t.expectMs
+  }
   const owners = new Map<string, Job[]>()
   for (const j of jobs) {
     if (!pending(j) || (j.owner && !liveIds.has(j.owner))) continue // a gone owner: kit.tsx drops it
@@ -153,7 +181,9 @@ export function stalls(now: number, threads: Thread[], jobs: Job[], activity: Ma
     const k = strikes.get(`job:${owner}`)?.count ?? 0
     const ownerAt = Math.max(activity.get(owner) ?? 0, live.find(t => t.id === owner)?.activeAt ?? 0,
       ...own.map(j => j.startedAt))
-    const late = now - ownerAt >= w.silentMin * MIN * 2 ** k ? own.filter(j => now >= j.startedAt + j.deadlineMs * 2 ** k) : []
+    const planned = withinExpect(owner)
+    const late = now - ownerAt >= w.silentMin * MIN * 2 ** k
+      ? own.filter(j => now >= j.startedAt + j.deadlineMs * 2 ** k && (j.declared || !planned)) : []
     strike(`job:${owner}`, late.length > 0, ownerAt, count =>
       `kit watchdog: ${owner === 'main' ? 'this session' : `thread ${live.find(t => t.id === owner)?.name} (${owner})`} has waited ${mins(now - ownerAt)} min on ` +
       late.map(j => `background command ${j.id} "${j.label}" (${mins(now - j.startedAt)} min, deadline ${mins(j.deadlineMs)})`).join(', ') +
