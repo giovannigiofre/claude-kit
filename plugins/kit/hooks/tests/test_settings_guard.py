@@ -21,12 +21,14 @@ def shown(path, home):
     return "~" + text[len(str(home)):] if text.startswith(str(home) + os.sep) else text
 
 
-def hook(tool, tool_input, cwd, env, agent_id=None, raw=None):
+def hook(tool, tool_input, cwd, env, agent_id=None, raw=None, agent_type=None, script=None):
     payload = {"tool_name": tool, "tool_input": tool_input, "cwd": str(cwd), "session_id": "s",
                "hook_event_name": "PreToolUse", "permission_mode": "acceptEdits"}
     if agent_id:
         payload["agent_id"] = agent_id
-    out = subprocess.run([sys.executable, str(SCRIPTS / "settings_guard.py")],
+    if agent_type:
+        payload["agent_type"] = agent_type
+    out = subprocess.run([sys.executable, str(script or SCRIPTS / "settings_guard.py")],
                          input=raw if raw is not None else json.dumps(payload),
                          capture_output=True, text=True, timeout=30, env=env)
     if out.returncode != 0:
@@ -55,6 +57,7 @@ def main():
         env = dict(os.environ, HOME=str(home), CLAUDE_CONFIG_DIR=str(config))
         repo = tmp / "repo"
         (repo / ".claude").mkdir(parents=True)
+        (repo / ".claude" / "kit.json").write_text("{}")  # the project opted in to the kit
         shared = repo / ".claude" / "settings.json"
         shared.write_text(json.dumps({"permissions": {"ask": ["Bash(git push*)"]}}, indent=2) + "\n")
         local = repo / ".claude" / "settings.local.json"
@@ -89,13 +92,42 @@ def main():
             check(decision == "deny" and reason.startswith(LABEL) and "subagent" in reason,
                   f"{tool} from a subagent is denied: {decision} {reason}")
 
+        # Claude Code's statusline-setup runs in the foreground (its prompt is seen): ask, with the same reason
+        decision, reason = hook("Edit", {"file_path": str(user), **edit}, repo, env, agent_id="a9", agent_type="statusline-setup")
+        check(decision == "ask" and reason.startswith(LABEL) and "subagent" not in reason,
+              f"statusline-setup asks: {decision} {reason}")
+        for agent_type in ("kit:implementer", "kit:verifier", "general-purpose"):
+            decision, _ = hook("Edit", {"file_path": str(user), **edit}, repo, env, agent_id="a9", agent_type=agent_type)
+            check(decision == "deny", f"{agent_type} is refused: {decision}")
+
+        # a project without kit.json is not the kit's business, like every other kit hook
+        plain = tmp / "plain"
+        (plain / ".claude").mkdir(parents=True)
+        for tool, inp in [("Edit", {"file_path": str(plain / ".claude" / "settings.json"), **edit}),
+                          ("Bash", {"command": "echo {} > .claude/settings.json"})]:
+            decision, reason = hook(tool, inp, plain, env)
+            check(decision == "pass", f"no kit.json, no decision: {tool} {decision} {reason}")
+
+        # without kitlib nothing can be judged: ask
+        lone = tmp / "lone"
+        lone.mkdir()
+        (lone / "settings_guard.py").write_text((SCRIPTS / "settings_guard.py").read_text())
+        decision, reason = hook("Edit", {"file_path": str(shared), **edit}, repo, env, script=lone / "settings_guard.py")
+        check(decision == "ask" and "ImportError" in reason, f"kitlib missing asks: {decision} {reason}")
+
         # shell commands that change one ask; plain reads and other files pass
         asks = [f"echo '{{}}' > {shared}", f"sed -i '' 's/ask/allow/' {shared}", f"cp /tmp/x.json {local}",
                 "jq '.permissions.ask=[]' .claude/settings.json > /tmp/s && mv /tmp/s .claude/settings.json",
                 f"python3 -c \"open('{user}','w').write('{{}}')\"", "cd .claude && rm settings.local.json",
                 "tee ~/.claude/settings.json < /tmp/x", "git checkout -- .claude/settings.json",
                 f"cat {shared} | python3 -c 'import sys'", "echo {} > $CLAUDE_CONFIG_DIR/settings.json",
-                "rm /Library/Application\\ Support/ClaudeCode/managed-settings.json"]
+                "rm /Library/Application\\ Support/ClaudeCode/managed-settings.json",
+                # the folder itself, with no file named
+                "git checkout -- .claude/", "git restore .claude", "git checkout main -- .claude", "cp -r /tmp/x .claude/",
+                "rsync -a /tmp/x/ ~/.claude/", "cp /tmp/x.json ~/.claude/*.json", "mv /tmp/s .claude/settings*",
+                # quoting, escaping and case inside the name
+                "echo {} > .claude/'settings'.json", "rm .claude/settings\\.json", "echo {} > .claude/\"settings.local\".json",
+                "echo x > .claude/SETTINGS.json", "echo x > ~/.CLAUDE/Settings.Json"]
         for command in asks:
             decision, reason = hook("Bash", {"command": command}, repo, env)
             check(decision == "ask" and reason.startswith(LABEL) and "comando" in reason and len(reason) <= 220,
@@ -104,10 +136,13 @@ def main():
         check(decision == "ask", f"Monitor's command too: {decision}")
         passes = [f"cat {shared}", "git diff .claude/settings.json", "jq .permissions .claude/settings.json 2>/dev/null",
                   "grep -n ask .claude/settings.local.json", "echo x > .vscode/settings.json", "npm test",
-                  "git push origin feature", f"cat {repo}/.vscode/settings.json"]
+                  "git push origin feature", f"cat {repo}/.vscode/settings.json", "ls -la .claude/",
+                  "mkdir -p .claude/evidence/x", "git add .claude/lead/board.md", "cp report.txt .claude/evidence/b/"]
         for command in passes:
             decision, reason = hook("Bash", {"command": command}, repo, env)
             check(decision == "pass", f"passes: {command}: {decision} {reason}")
+        decision, _ = hook("Edit", {"file_path": str(repo / ".claude" / "Settings.Local.json"), **edit}, repo, env)
+        check(decision == "ask", f"a settings name in another case asks (macOS ignores case): {decision}")
         for path in [repo / "src" / "settings.json", repo / ".vscode" / "settings.json", repo / ".claude" / "kit.json",
                      repo / ".claude" / "kit.local.json", repo / "README.md"]:
             decision, reason = hook("Edit", {"file_path": str(path), **edit}, repo, env)

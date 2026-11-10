@@ -380,13 +380,19 @@ writes a broader read-only allowlist to project settings if you want one.
 
 `settings_guard.py` (PreToolUse: Write, Edit, MultiEdit, NotebookEdit, Bash, Monitor) answers
 `ask` in every permission mode for a change to a Claude Code settings file: `settings*.json` in
-any `.claude` folder or in `CLAUDE_CONFIG_DIR`, and the managed settings. A shell command counts
-when it names one and is not a single plain read (`cat`, `grep`, `jq`, `git diff`, … with no
-redirection, pipe or chain). The prompt's reason starts «Sovrascrittura dei settings di Claude
-Code:», then the file (home as `~`) and the change in Italian, within 220 characters. From a
-subagent the answer is `deny`, since nobody sees a thread's prompt. It never answers `allow`; an
-error answers `ask`. It reads shell text, so a path built at run time (from variables, say) is
-not seen.
+any `.claude` folder or in `CLAUDE_CONFIG_DIR`, and the managed settings, in any case. Like
+every kit hook it acts only in a project with kit.json. A shell command counts when it names one,
+or a Claude folder itself (`git checkout -- .claude/`, `cp -r x .claude/`, `rsync … ~/.claude/`,
+a glob such as `.claude/*.json`), quotes and backslashes inside the name included, and is not a
+single plain read (`cat`, `grep`, `jq`, `git diff`, … with no redirection, pipe or chain). The
+prompt's reason starts «Sovrascrittura dei settings di Claude Code:», then the file (home as `~`)
+and the change in Italian, within 220 characters. From a subagent the answer is `deny`, since
+nobody sees a background thread's prompt; Claude Code's `statusline-setup`, which runs in the
+foreground to edit `~/.claude/settings.json`, gets `ask`. It never answers `allow`; an error,
+kitlib missing included, answers `ask`. Limits: it reads shell text, so it does not see a name
+built at run time (from variables, a script's own code) or a command that rewrites the whole
+tree (`git checkout -- .`, `git stash`, `git reset --hard`); and `machine_setup.py --apply`
+(autoMode) and `/kit-safety` write settings without a tool call naming the file.
 
 ## Lessons
 

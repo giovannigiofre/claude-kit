@@ -7,12 +7,16 @@ prints), but only by approving that exact change in Claude Code's own prompt. So
 MultiEdit or NotebookEdit of a settings file, and a shell command that names one and is not a
 plain read, gets permissionDecision "ask" in every permission mode. The reason starts
 "Sovrascrittura dei settings di Claude Code:" and names the file and the change. From a subagent
-(a background thread, where nobody sees the prompt) the answer is "deny". The hook never answers
-"allow": deny rules, the guard and Claude Code's own protection of these files still apply, and
-permission.py never allows a command this hook flags. Any error means "ask". Standard library only.
+(a background thread, where nobody sees the prompt) the answer is "deny", except a foreground
+built-in such as statusline-setup, which gets "ask". The hook never answers "allow": deny rules,
+the guard and Claude Code's own protection of these files still apply, and permission.py never
+allows a command this hook flags. Any error, kitlib missing included, means "ask". It acts only in
+a project with .claude/kit.json, like every kit hook. Standard library only.
 
-Settings files: settings*.json in any `.claude` directory (the user's, a repo's, a worktree's) or
-in CLAUDE_CONFIG_DIR, and the managed settings (managed-settings.json, or anything in its folder).
+Settings files: settings*.json, in any case, in any `.claude` directory (the user's, a repo's, a
+worktree's) or in CLAUDE_CONFIG_DIR, and the managed settings (managed-settings.json, or anything
+in its folder). A shell command naming a Claude folder itself (`.claude/`, `~/.claude`, a glob in
+one) counts too.
 """
 
 import difflib
@@ -24,13 +28,24 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import kitlib  # noqa: E402
+try:
+    import kitlib  # noqa: E402
+except Exception:  # without it nothing can be judged: main() asks (fail closed)
+    kitlib = None
 
 LABEL = "Sovrascrittura dei settings di Claude Code:"
-NAME = re.compile(r"settings[\w.*-]*\.json")
-TOKEN = re.compile(r"[^\s'\"`;&|<>()]*(?:managed-settings|settings[\w.*-]*)\.json")
+NAME = re.compile(r"settings[\w.*?\[\]-]*\.json", re.I)
+TOKEN = re.compile(r"[^\s'\"`;&|<>()]*(?:managed-settings|settings[\w.*?\[\]-]*)\.json", re.I)
+# a Claude folder itself (`.claude`, `.claude/`, `~/.claude`, `$CLAUDE_CONFIG_DIR`), or a glob in one
+FOLDER = re.compile(r"(?:(?<=[\s'\"=])|^)((?:[^\s'\"`;&|<>()]*/)?\.claude/?|\$\{?CLAUDE_CONFIG_DIR\}?/?"
+                    r"|(?:[^\s'\"`;&|<>()]*/)?\.claude/[^\s'\"`;&|<>()/]*[*?\[][^\s'\"`;&|<>()/]*)(?=$|[\s'\"`;&|<>()])",
+                    re.I)
 READERS = {"cat", "head", "tail", "less", "more", "grep", "rg", "wc", "ls", "stat", "file", "diff", "jq", "bat"}
 GIT_READERS = {"diff", "log", "show", "status", "blame"}
+# Subagents that run in the foreground, where the owner sees the prompt (the hook input does not
+# say whether an agent runs in the background): Claude Code's statusline-setup edits
+# ~/.claude/settings.json by design. Every other subagent (the kit's threads, background agents) is refused.
+FOREGROUND_AGENTS = {"statusline-setup"}
 
 
 def _forms(path, cwd):
@@ -50,9 +65,9 @@ def is_settings(path, cwd):
     config = [Path(os.path.normpath(str(kitlib.config_dir())))]
     managed = kitlib.managed_settings().parent
     for p in _forms(path, cwd):
-        if p.name == "managed-settings.json" or managed in p.parents:
+        if p.name.lower() == "managed-settings.json" or managed in p.parents:
             return True
-        if NAME.fullmatch(p.name) and (p.parent.name == ".claude" or p.parent in config
+        if NAME.fullmatch(p.name) and (p.parent.name.lower() == ".claude" or p.parent in config
                                        or any(p.parent == c.resolve() for c in config)):
             return True
     return False
@@ -76,13 +91,20 @@ def read_only(command):
 
 
 def command_targets(command, cwd):
-    """The settings files a shell command names, unless it only reads them."""
+    """The settings files, or Claude folders, a shell command names, unless it only reads them.
+    Quotes and backslashes inside a name (`.claude/'settings'.json`, `settings\\.json`) are seen
+    through, and names match in any case."""
     found = []
-    in_claude = ".claude" in command or ".claude" in Path(cwd or ".").parts or "CLAUDE_CONFIG_DIR" in command
-    for token in TOKEN.findall(command):
-        bare = "/" not in token and "~" not in token and "$" not in token
-        if is_settings(token, cwd) or (bare and in_claude):
-            found.append(token)
+    plain = re.sub(r"\$'|[\\'\"]", "", command)
+    in_claude = any(".claude" in c.lower() or "claude_config_dir" in c.lower() for c in (command, plain)) \
+        or ".claude" in [part.lower() for part in Path(cwd or ".").parts]
+    for text in (command, plain):
+        for token in TOKEN.findall(text):
+            bare = "/" not in token and "~" not in token and "$" not in token
+            if is_settings(token, cwd) or (bare and in_claude):
+                found.append(token)
+        found += FOLDER.findall(text)
+    found = list(dict.fromkeys(found))
     if found and read_only(command):
         return []
     return found
@@ -126,11 +148,22 @@ def summary(tool, inp, path):
     return f"comando {snip(inp.get('command', ''), 80)}"
 
 
+def opted_in(cwd):
+    """Like every kit hook, this one acts only in a project with .claude/kit.json (a broken one counts)."""
+    root = kitlib.git_root(cwd) or Path(cwd)  # the session's own checkout, never this process's cwd
+    for r in dict.fromkeys([root, kitlib.main_checkout(root) or root]):
+        if (Path(r) / ".claude" / "kit.json").is_file():
+            return True
+    return False
+
+
 def decide(data):
     """(decision, reason), or None to leave the call to everything else."""
     tool = data.get("tool_name") or ""
     inp = data.get("tool_input") or {}
     cwd = data.get("cwd") or os.getcwd()
+    if not opted_in(cwd):
+        return None
     if tool in ("Bash", "Monitor"):
         targets = command_targets(str(inp.get("command") or ""), cwd)
         if not targets:
@@ -145,7 +178,7 @@ def decide(data):
     else:
         return None
     change = summary(tool, inp, target if tool == "Write" else None)
-    if data.get("agent_id"):
+    if data.get("agent_id") and str(data.get("agent_type") or "") not in FOREGROUND_AGENTS:
         return "deny", (f"{LABEL} {where}: {change}. Rifiutata da un subagent (thread in background), dove nessuno "
                         "vede la richiesta: solo la sessione principale, su richiesta del proprietario.")
     head = f"{LABEL} {where}: "
@@ -158,6 +191,8 @@ def main():
     try:
         raw = sys.stdin.read()
         data = json.loads(raw) if raw.strip() else {}
+        if kitlib is None:
+            raise ImportError("kitlib")
         result = decide(data) if isinstance(data, dict) else None
     except Exception as exc:  # fail closed: the owner decides
         result = "ask", f"{LABEL} controllo non riuscito ({type(exc).__name__}); approva solo se sai cosa cambia questa chiamata."
