@@ -392,15 +392,20 @@ A shell command counts when it names one, quotes and backslashes inside the name
 not a plain read (`cat`, `grep`, `jq`, `git diff`, …, alone or piped into one another, with no
 redirection or chain). A bare `settings.json` counts only in a Claude folder: the cwd is one, the
 command `cd`s into one, or it writes and names one; a thread's worktree below
-`.claude/worktrees/` is not one. A Claude folder itself (`.claude/`, `~/.claude`, a glob in one)
-counts when the part of the command that names it (split at `;`, `&&`, `||`, `&`) may write. This
+`.claude/worktrees/` is not one. A Claude folder itself (`.claude/`, `~/.claude`, a glob in one,
+`/Library/Application Support/ClaudeCode/`) counts when the part of the command that names it (split at `;`, `&&`, `||`, `&`) may write. This
 check fails safe: a stage counts as writing unless its first word is known not to write, which
-means a reader, `echo`, `mkdir`, a loop or block keyword, or git `status`/`add`/`commit`/`push`/….
+means a reader, `echo`, `mkdir`, a loop or block keyword, or git `status`/`add`/`commit`/`push`/…
+(`perl -e`, `ruby -e` and a `case` clause count as writing).
 The first word is the one found after `(`, `{`, `then`, `do`, wrappers such as `sudo`, `nice`,
 `timeout` and `xargs`, and assignments. The string run by `bash|sh|zsh -c` and `eval` is judged in
 turn. So `cp -r x .claude/`, `bash -c 'cp x .claude/'`, `( cp -r x .claude/ )`, `node x.js --out
 .claude` and a redirection ask, while `git add .claude/`, `grep -rn x .claude/ | head`, `bash -c 'ls
-.claude/'` and `ls .claude/ && npm test` pass. The
+.claude/'` and `ls .claude/ && npm test` pass. Names are matched one word at a time, so the time
+taken grows with the command's length, not its square. A command with a word over 8 KB (a base64
+blob) is not read: it asks if it mentions `.claude`, `CLAUDE_CONFIG_DIR`, `settings` or
+`ClaudeCode`, and otherwise gets no answer. A slow hook would pass the 10 s timeout, where Claude
+Code runs the tool without asking. The
 prompt's reason starts «Sovrascrittura dei settings di Claude Code:», then the file (home as `~`)
 and the change in Italian, within 220 characters. From a subagent the answer is `deny`, since
 nobody sees a background thread's prompt; Claude Code's `statusline-setup`, which runs in the

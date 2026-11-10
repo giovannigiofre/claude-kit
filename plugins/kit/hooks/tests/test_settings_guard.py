@@ -5,11 +5,13 @@ allows), is refused from a subagent, and other files and plain reads pass untouc
 Run: python3 plugins/kit/hooks/tests/test_settings_guard.py   (exit 0 = all good)
 """
 
+import base64
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
@@ -144,7 +146,11 @@ def main():
                 "( cp -r /tmp/x .claude/ )", "{ cp -r /tmp/x .claude/; }", "if true; then cp -r /tmp/x .claude/; fi",
                 "for f in a; do cp $f ~/.claude/; done", "nice cp -r /tmp/x .claude/", "cpio -pd .claude/ < list",
                 "(cp -r /tmp/x .claude/)", "timeout 10 cp -r /tmp/x .claude/", "ls .claude | xargs rm",
-                "cd .claude && rm -rf *", "node scripts/x.js --out .claude", "bash script.sh .claude/"]
+                "cd .claude && rm -rf *", "node scripts/x.js --out .claude", "bash script.sh .claude/",
+                # code run by perl -e / ruby -e, a case clause, the macOS managed settings folder
+                "perl -MFile::Copy -e 'copy(\"/tmp/x\", \".claude/\")'", "ruby -e 'FileUtils.cp(\"/tmp/x\", \".claude/\")'",
+                "case x in a) cp /tmp/x .claude/;; esac", "rm -rf \"/Library/Application Support/ClaudeCode\"",
+                "cp /tmp/x /Library/Application\\ Support/ClaudeCode/"]
         for cwd in (repo, wt):  # the main checkout, and a thread's worktree below .claude/worktrees/
             for command in asks:
                 decision, reason = hook("Bash", {"command": command}, cwd, env)
@@ -154,6 +160,17 @@ def main():
         check(decision == "ask", f"a bare name with the cwd a .claude folder asks: {decision} {reason}")
         decision, _ = hook("Monitor", {"command": f"echo x >> {local}"}, repo, env)
         check(decision == "ask", f"Monitor's command too: {decision}")
+        # a long unbroken word (a 20 KB base64 blob) is judged at once, well inside the hook's 10 s timeout
+        blob = base64.b64encode(os.urandom(15000)).decode()
+        for command, want in [(f"echo {blob} | base64 -d > /tmp/x.png", "pass"),
+                              (f"echo {blob} | base64 -d > .claude/settings.json", "ask"),
+                              (f"echo {blob} | base64 -d > ~/.claude/x", "ask")]:
+            start = time.monotonic()
+            decision, reason = hook("Bash", {"command": command}, wt, env)
+            took = time.monotonic() - start
+            check(decision == want and took < 1.5, f"a 20 KB word: {want} in {took:.2f}s: {decision} {reason[:80]}")
+        decision, _ = hook("Bash", {"command": "echo " + "settings" * 1000 + " > /tmp/x"}, wt, env)
+        check(decision == "pass", f"an 8 KB word below the cap is read: {decision}")
         passes = [f"cat {shared}", "git diff .claude/settings.json", "jq .permissions .claude/settings.json 2>/dev/null",
                   "grep -n ask .claude/settings.local.json", "echo x > .vscode/settings.json", "npm test",
                   "git push origin feature", f"cat {repo}/.vscode/settings.json", "ls -la .claude/",
@@ -164,7 +181,8 @@ def main():
                   "cat .claude/settings.json | jq .permissions", "git -C . diff .claude/settings.json | head -5",
                   # a reader behind a shell or a wrapper, a loop that only reads, a writer in another part
                   "bash -c 'ls .claude/'", "timeout 10 ls .claude/", "for f in .claude/*; do echo $f; done",
-                  "ls .claude/ && npm test", "git status .claude/ && git commit -m x"]
+                  "ls .claude/ && npm test", "git status .claude/ && git commit -m x",
+                  "ls \"/Library/Application Support/ClaudeCode\""]
         for cwd in (repo, wt):
             for command in passes:
                 decision, reason = hook("Bash", {"command": command}, cwd, env)

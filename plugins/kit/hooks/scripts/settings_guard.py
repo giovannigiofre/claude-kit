@@ -18,7 +18,9 @@ worktree's) or in CLAUDE_CONFIG_DIR, and the managed settings (managed-settings.
 in its folder). A Claude folder itself (`.claude/`, `~/.claude`, a glob in one) counts when the
 part of the command naming it may write. This fails safe: any first word that is not known to leave
 files alone counts, and the strings `bash -c` and `eval` run are judged too. A read, or a pipeline
-of plain readers, never counts.
+of plain readers, never counts. A command with a word over 8 KB is not read (the hook must answer
+inside its 10 s timeout, where Claude Code fails open): it asks if it mentions a Claude folder or
+settings at all.
 """
 
 import difflib
@@ -37,10 +39,19 @@ except Exception:  # without it nothing can be judged: main() asks (fail closed)
 
 LABEL = "Sovrascrittura dei settings di Claude Code:"
 NAME = re.compile(r"settings[\w.*?\[\]-]*\.json", re.I)
+# Names are looked for one word at a time (split at blanks, quotes and shell punctuation), with
+# TOKEN.match at the word's start only: findall over the whole command was quadratic on one long
+# word (a 20 KB base64 blob took 18 s, past the hook's 10 s timeout, where Claude Code fails open).
+WORD = re.compile(r"[^\s'\"`;&|<>()]+")
 TOKEN = re.compile(r"[^\s'\"`;&|<>()]*(?:managed-settings|settings[\w.*?\[\]-]*)\.json", re.I)
-# a Claude folder itself (`.claude`, `.claude/`, `~/.claude`, `$CLAUDE_CONFIG_DIR`), or a glob in one
-FOLDER = re.compile(r"(?:(?<=[\s'\"=])|^)((?:[^\s'\"`;&|<>()]*/)?\.claude/?|\$\{?CLAUDE_CONFIG_DIR\}?/?"
-                    r"|(?:[^\s'\"`;&|<>()]*/)?\.claude/[^\s'\"`;&|<>()/]*[*?\[][^\s'\"`;&|<>()/]*)(?=$|[\s'\"`;&|<>()])",
+LONG_WORD = 8192  # a word longer than this is not read: the command asks if it names a Claude folder or settings
+LONG_TARGET = "un comando con una parola troppo lunga da leggere"
+LONG_HINT = re.compile(r"\.claude|claude_config_dir|settings|ClaudeCode", re.I)
+# a Claude folder itself (`.claude`, `.claude/`, `~/.claude`, `$CLAUDE_CONFIG_DIR`, the macOS managed
+# settings folder), or a glob in one; its prefix stops at `=`, so a word full of them stays linear
+FOLDER = re.compile(r"(?:(?<=[\s'\"=])|^)((?:[^\s'\"`;&|<>()=]*/)?\.claude/?|\$\{?CLAUDE_CONFIG_DIR\}?/?"
+                    r"|/Library/Application\\? Support/ClaudeCode/?"
+                    r"|(?:[^\s'\"`;&|<>()=]*/)?\.claude/[^\s'\"`;&|<>()/]*[*?\[][^\s'\"`;&|<>()/]*)(?=$|[\s'\"`;&|<>()])",
                     re.I)
 # plain readers (not sort or uniq, which can write an output file)
 READERS = {"cat", "head", "tail", "less", "more", "grep", "rg", "wc", "ls", "stat", "file", "diff", "jq", "bat",
@@ -49,7 +60,7 @@ GIT_READERS = {"diff", "log", "show", "status", "blame"}
 # Fail-safe: a command that names a Claude folder counts as writing it unless every stage of its
 # pipeline is known not to write a file. These first words never write one (a redirection is caught apart).
 NON_WRITERS = READERS | {"true", "false", "test", "[", "echo", "printf", "pwd", "cd", "pushd", "popd", "which",
-                         "type", "mkdir", "for", "case", "select", "in", "fi", "done", "esac", "}", ")", ";;"}
+                         "type", "mkdir", "for", "select", "in", "fi", "done", "esac", "}", ")", ";;"}
 # git subcommands that leave the working tree's files alone (checkout, restore, stash, reset... do not)
 GIT_SAFE = GIT_READERS | {"add", "commit", "push", "fetch", "branch", "tag", "worktree", "rev-parse", "ls-files",
                           "ls-tree", "config", "remote", "grep", "describe", "shortlog", "reflog", "cat-file",
@@ -119,8 +130,9 @@ def _segment_writes(segment, depth):
         return depth >= 3 or writes(inner, depth + 1)
     if name == "git":
         return _git_sub(argv) not in GIT_SAFE
-    if name in ("sed", "perl", "ruby"):
-        return any(a.startswith("-i") or a == "--in-place" for a in argv[1:])
+    if name in ("sed", "perl", "ruby"):  # in place, or running code: perl -e/-E, ruby -e
+        return any(a.startswith("-i") or a == "--in-place" or
+                   (name != "sed" and re.fullmatch(r"-\w*[eE]\w*", a)) for a in argv[1:])
     if name == "find":
         return any(a in ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls")
                    for a in argv[1:])
@@ -205,6 +217,8 @@ def command_targets(command, cwd):
     part that may write (see writing_parts), or anywhere once the command cds into it and writes.
     A plain read, or a pipeline of plain readers, changes nothing."""
     files, folders = [], []
+    if any(len(w) > LONG_WORD for w in WORD.findall(command)):
+        return [LONG_TARGET] if LONG_HINT.search(command) else []
     plain = re.sub(r"\$'|[\\'\"]", "", command)
     parts = writing_parts(command)
     cd_claude = any(CD_CLAUDE.search(c) for c in (command, plain))
@@ -212,7 +226,7 @@ def command_targets(command, cwd):
     # the folder counts where a writing part names it, or anywhere once the command cds into it and writes
     written = [command] if (cd_claude and parts) else parts
     for text in (command, plain):
-        for token in TOKEN.findall(text):
+        for token in dict.fromkeys(m.group() for m in map(TOKEN.match, WORD.findall(text)) if m):
             bare = "/" not in token and "~" not in token and "$" not in token
             if is_settings(token, cwd) or (bare and into):
                 files.append(token)
