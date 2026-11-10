@@ -27,7 +27,9 @@ queued | agent - | - | from <source>`), so a handed-off or taken item is seen. S
 
 `unattended` prints this repo's unattended git preferences as the brief line `UNATTENDED: push=..
 rebase=.. merge=..`, saying when they are not set yet; with arguments it saves them in the main
-checkout's gitignored .claude/kit.local.json (kitlib.unattended_prefs).
+checkout's gitignored .claude/kit.local.json (kitlib.unattended_prefs). The line carries the
+effective value: a saved `allow` prints as `ask`, with the file and rule to change, while a deny or
+ask rule in any settings scope matches the step or no allow rule covers it (kitlib.unattended_effective).
 """
 
 import json
@@ -300,13 +302,13 @@ def main(argv=None):
             except ValueError as exc:
                 print(f"items: {exc}", file=sys.stderr)
                 return 1
-        prefs, is_set, path = kitlib.unattended_prefs(root)
-        line = "UNATTENDED: " + " ".join(f"{k}={prefs[k]}" for k in kitlib.UNATTENDED_STEPS)
+        _, is_set, path = kitlib.unattended_prefs(root)
+        effective, notes = kitlib.unattended_effective(root)
+        line = "UNATTENDED: " + " ".join(f"{k}={effective[k]}" for k in kitlib.UNATTENDED_STEPS)
         print(line + (f"  (from {path})" if is_set else "  (not set for this repo: ask the user, then save the answer)"))
-        rules = [r for k in kitlib.UNATTENDED_STEPS if prefs[k] == "allow" for r in kitlib.UNATTENDED_RULES[k]]
-        if rules:
-            print(f"allow runs without a prompt only with these in {path.parent / 'settings.local.json'} "
-                  f"permissions.allow (the user adds them; the kit does not): " + ", ".join(f'"{r}"' for r in rules))
+        for k in kitlib.UNATTENDED_STEPS:
+            if k in notes:
+                print(notes[k])
         return 0
     if cmd in ("log", "report", "verdict", "done", "show", "path"):
         if not rest:

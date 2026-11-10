@@ -201,9 +201,16 @@ push=ask rebase=ask merge=ask` and whether it is set; a missing, broken or missp
 `ask`. The coordinator asks only when an unattended run starts and nothing is set, saves the
 answer and briefs every thread of the run with that line ([unattended.md](../plugins/kit/skills/lead/unattended.md)).
 A thread does not run a step set to `ask` and hands back `needs push` (rebase, merge); `allow`
-runs it, and the command names the permission rule that needs (`Bash(git push:*)`, `Bash(git
-rebase:*)`, `Bash(gh pr merge:*)` and `Bash(git merge:*)`) for the owner to add to the repo's
-`.claude/settings.local.json`; the kit never edits permission settings.
+runs it. The line carries the effective value, so a saved `allow` prints as `ask` with a note
+naming what to change. Claude Code checks deny, then ask, then allow rules, and the first match
+wins whichever scope it is in. So the command checks the rules in managed settings, the user's
+`~/.claude/settings.json`, and the repo's `.claude/settings.json` and `settings.local.json`
+against the step's commands. A matching deny or ask rule (a committed `Bash(git push*)` ask, say)
+keeps the step at `ask`: the note names the rule and its file, and says that an allow rule in
+`settings.local.json` cannot override it. With no allow rule covering the step, the note names
+the rules to add to `.claude/settings.local.json` (`Bash(git push:*)`, `Bash(git rebase:*)`,
+`Bash(gh pr merge:*)` and `Bash(git merge:*)`). A settings file that does not parse also keeps
+the step at `ask`. The kit never edits permission settings.
 
 A thread briefed with the BRIEF.md text carries the `ITEM:` line; when it finishes, the hook
 files its report under the item (`reported | done, 2 decision(s), agent <id>` in the LOG); when

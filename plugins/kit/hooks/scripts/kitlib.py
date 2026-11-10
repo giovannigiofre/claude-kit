@@ -95,7 +95,8 @@ def main_checkout(cwd):
 # `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "ask", "rebase": "ask", "merge": "ask"}}}`):
 # local to this machine and this repo, never global, never committed. `ask` (the default, and
 # whatever is missing, misspelt or unreadable) means nobody answers a permission prompt during an
-# unattended run, so a thread hands that step back; `allow` means it proceeds as when attended.
+# unattended run, so a thread hands that step back; `allow` means it proceeds as when attended,
+# once the permission rules let it run without a prompt (unattended_effective).
 UNATTENDED_STEPS = ("push", "rebase", "merge")
 LOCAL_CONFIG = ".claude/kit.local.json"
 # What `allow` needs so the step runs without a prompt: the owner adds these to the repo's
@@ -125,13 +126,99 @@ def save_unattended(cwd, changes):
     if not ok:
         raise ValueError(f"{path} is not a JSON object; fix or remove it first")
     lead = value.get("lead") if isinstance(value.get("lead"), dict) else {}
-    own = lead.get("unattended") if isinstance(lead.get("unattended"), dict) else {}
-    own = {**{k: prefs[k] for k in UNATTENDED_STEPS}, **own, **changes}
+    own = {**prefs, **changes}
     value["lead"] = {**lead, "unattended": {k: own[k] for k in UNATTENDED_STEPS}}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
     exclude(path.parent.parent, LOCAL_CONFIG)
     return unattended_prefs(cwd)[0]
+
+
+# Commands a thread runs for each step, to test the permission rules against. Claude Code checks
+# deny, then ask, then allow, and the first that matches wins in every scope: an ask rule anywhere
+# (a committed settings.json, the user's) beats an allow rule in settings.local.json.
+UNATTENDED_PROBES = {"push": ["git push", "git push -u origin feature-branch"],
+                     "rebase": ["git rebase origin/main"],
+                     "merge": ["gh pr merge 12 --squash", "git merge origin/main"]}
+
+
+def bash_rule_matches(rule, command):
+    """True when permission rule `rule` (`Bash`, `Bash(*)`, `Bash(git push:*)`, `Bash(git push *)`,
+    `Bash(git push*)`, an exact `Bash(git status)`) covers `command`."""
+    m = re.fullmatch(r"\s*Bash\s*(?:\((.*)\))?\s*", str(rule), re.S)
+    if not m:
+        return False
+    spec = (m.group(1) or "").strip()
+    if spec in ("", "*"):
+        return True
+    if spec.endswith(":*"):
+        prefix = spec[:-2]
+        return command == prefix or command.startswith(prefix + " ")
+    pattern = ".*".join(re.escape(part) for part in spec.split("*"))
+    if spec.endswith(" *"):  # `git push *` also covers a bare `git push`
+        pattern = f"(?:{pattern}|{re.escape(spec[:-2])})"
+    return re.fullmatch(pattern, command, re.S) is not None
+
+
+def managed_settings():
+    if sys.platform == "darwin":
+        return Path("/Library/Application Support/ClaudeCode/managed-settings.json")
+    if sys.platform.startswith("win"):
+        return Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "ClaudeCode" / "managed-settings.json"
+    return Path("/etc/claude-code/managed-settings.json")
+
+
+def permission_files(cwd):
+    """Every settings file whose permission rules apply in this repo: managed, the user's, and the
+    main checkout's committed settings.json and local settings.local.json."""
+    root = Path(main_checkout(cwd) or cwd)
+    return [managed_settings(), config_dir() / "settings.json",
+            root / ".claude" / "settings.json", root / ".claude" / "settings.local.json"]
+
+
+def unattended_effective(cwd):
+    """(effective, notes): a step is `allow` only when the owner chose allow, no deny or ask rule in
+    any scope matches its commands, and an allow rule covers every one of them; otherwise `ask`,
+    with a note per allow-step saying what keeps it at ask and which file and rule to change."""
+    prefs, _, _ = unattended_prefs(cwd)
+    files = permission_files(cwd)
+    rules, unreadable = [], []
+    for f in files:
+        value, ok = read_json(f)
+        if not ok:
+            unreadable.append(f)
+            continue
+        perms = value.get("permissions") if isinstance(value.get("permissions"), dict) else {}
+        for behavior in ("deny", "ask", "allow"):
+            listed = perms.get(behavior)
+            for r in listed if isinstance(listed, list) else []:
+                rules.append((behavior, str(r), f))
+    effective, notes = {}, {}
+    for step in UNATTENDED_STEPS:
+        effective[step] = "ask"
+        if prefs[step] != "allow":
+            continue
+        probes = UNATTENDED_PROBES[step]
+        blocked = [(r, f) for (b, r, f) in rules
+                   if b in ("deny", "ask") and any(bash_rule_matches(r, p) for p in probes)]
+        allows = [r for (b, r, _) in rules if b == "allow"]
+        covered = all(any(bash_rule_matches(r, p) for r in allows) for p in probes)
+        if unreadable:
+            notes[step] = (f"{step}: allow saved, but it stays ask: {', '.join(map(str, unreadable))} does not parse, "
+                           f"so its rules are unknown; fix it first.")
+        elif blocked:
+            which = "; ".join(f'"{r}" in {f}' for r, f in blocked)
+            notes[step] = (f"{step}: allow saved, but it stays ask: {which} matches, and Claude Code checks deny and "
+                           f"ask rules before allow ones in every scope, so an allow rule in settings.local.json "
+                           f"cannot override it. The owner changes that rule, or {step} waits for them.")
+        elif not covered:
+            local = files[-1]
+            notes[step] = (f"{step}: allow saved, but it stays ask until the owner adds "
+                           + ", ".join(f'"{r}"' for r in UNATTENDED_RULES[step])
+                           + f" to {local} permissions.allow (the kit does not edit permission settings).")
+        else:
+            effective[step] = "allow"
+    return effective, notes
 
 
 def exclude(root, rel):

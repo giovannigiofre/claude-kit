@@ -13,10 +13,14 @@ answers a permission prompt, and a thread or you waiting on one waits for hours.
    answer: `I unattended push=allow rebase=ask merge=ask`. It goes into this repo's gitignored
    `.claude/kit.local.json`: never global, never committed. Do not ask again in this repo; the
    user changes it by saying so.
-3. **For a step set to `allow`**, the same command prints the permission rule it needs and the
-   file it belongs in (the repo's `.claude/settings.local.json`, `permissions.allow`). Tell the
-   user the exact rule and file; the user adds it. Never edit permission settings yourself. Until
-   the rule is there (read the file to check), brief that step as `ask`.
+3. **For a step set to `allow`**, the command checks the permission rules in every scope, and the
+   line it prints is the effective value. A saved `allow` stays `ask` while a deny or ask rule
+   anywhere matches the step (managed settings, the user's `~/.claude/settings.json`, the repo's
+   `.claude/settings.json` or `settings.local.json`). Claude Code checks deny and ask before
+   allow, so an allow rule cannot override one: the user changes that rule. It also stays `ask`
+   while no allow rule covers the step: the user adds the rule the note names to
+   `.claude/settings.local.json`. Tell the user the exact rule and file. Never edit permission
+   settings yourself, and brief the line exactly as the command prints it.
 4. **Brief every thread of the run with the `UNATTENDED:` line**, and SendMessage it to threads
    already working. A thread does not run a step set to `ask`: it commits and hands back `needs
    push` (or rebase, merge). The same holds for your own commands. Put what waits under NEEDS

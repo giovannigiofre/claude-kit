@@ -209,7 +209,9 @@ project.
   evening: a permission prompt becomes a denial and the work goes on; `off` removes it. Whether
   threads may push, rebase and merge while you are away is a per-repo choice the coordinator asks
   once, at the first unattended run, and keeps in the repo's gitignored `.claude/kit.local.json`
-  (`ask` until you say otherwise; the kit names the permission rule for `allow` and you add it).
+  (`ask` until you say otherwise). For `allow`, the kit names the permission rule and you add it.
+  It also tells you when an ask or deny rule elsewhere, such as a committed `Bash(git push*)` ask,
+  keeps the step at `ask`, because an allow rule cannot override one.
   Not for a
   kit project: `permissions.blockWritesOutsideWorkingDirectories`, which refuses a thread's edits
   in another repo and removes the worktree tools.
