@@ -18,7 +18,7 @@ the board and talk to the user. You see what threads report, not every step they
 `.claude/lead/board.md` (or `lead.board` in kit.json) is the state that survives compaction and
 restarts. Read it when you start or lose track of an item; rewrite it whole on every change. Keep
 it under 60 lines and 8 KB: RULES holds standing rules only, dated decisions go to
-`.claude/lead/DECISIONS.md` (read on demand), `$I done` moves a done row to `archive.md`.
+`.claude/lead/DECISIONS.md` (read on demand), `I done` moves a done row to `archive.md`.
 
 ```
 SHIP: <local | pr | pr+fix> | MERGE: <user | agent | ask> | PARALLEL: <n> | BUDGET: <none | k of n items>
@@ -32,20 +32,21 @@ Status is one of `queued`, `working`, `review` (a PR or branch is ready for the 
 
 ## Items on disk
 
-Each item is a folder `.claude/lead/items/<id>/` (`I` is `python3
-${CLAUDE_SKILL_DIR}/../../hooks/scripts/items.py` and `P` its sibling `proposals.py`; if the
-variable is not expanded, they are in the kit plugin's `hooks/scripts/`): `BRIEF.md` (headed
+Each item is a folder `.claude/lead/items/<id>/` (`I` and `P` are shell functions, since zsh does
+not split a `$I` variable into words: `I(){ python3 ${CLAUDE_SKILL_DIR}/../../hooks/scripts/items.py "$@"; }`
+and `P` the same for its sibling `proposals.py`; if the variable is not expanded, they are in the
+kit plugin's `hooks/scripts/`): `BRIEF.md` (headed
 `ITEM: <id>`), `REPORT.md` and `VERDICT.md`, which the kit's hooks write when a thread or the
 verifier finishes, and `LOG.md`, one line per event. The board is the index; the folder is what
 survives a compaction or a restart and what the user reads or edits to steer. `/kit:handoff`
 and `/kit:scout take` queue items this way; for work the user gives you directly, make the item
-first: `$I new "<name>" --brief - --from lead` with the brief on stdin (`--kind scout` for finding
-something out). Brief a thread with the `ITEM: <id>` line, the absolute BRIEF.md path (`$I path
+first: `I new "<name>" --brief - --from lead` with the brief on stdin (`--kind scout` for finding
+something out). Brief a thread with the `ITEM: <id>` line, the absolute BRIEF.md path (`I path
 <id>`; a worktree has no `.claude/lead/`) and only what the file lacks. Log `working` when it
-starts (`$I log <id> working "agent <agentId>, effort <level>"`), `review` or `needs-you` when it
-reports, and `$I done <id>` when the PR is merged. Before re-briefing a thread, read BRIEF.md
+starts (`I log <id> working "agent <agentId>, effort <level>"`), `review` or `needs-you` when it
+reports, and `I done <id>` when the PR is merged. Before re-briefing a thread, read BRIEF.md
 again (the user may have changed it) and VERDICT.md. Proposal cards (`.claude/lead/proposals/`,
-from `/kit:scout`): `next` takes a class A card (`$P take <id>`), asks before a B, never starts a C.
+from `/kit:scout`): `next` takes a class A card (`P take <id>`), asks before a B, never starts a C.
 
 Defaults come from kit.json `lead` (`ship`, `merge`, `parallel`, `budget`, `loops`), else ship
 `pr` (`local` when the repo has no remote), merge `ask`, parallel 3, no budget; a ship mode that
@@ -74,7 +75,7 @@ you know". An interim notice (a thread waiting on its own background work) needs
 - **Steering** ("also X", "drop Y", "Z first"): SendMessage to the thread when it fits its brief;
   otherwise stop it (TaskStop), park its branch and requeue.
 - **A decision on a NEEDS YOU item:** apply it and resume the thread.
-- **"Merge it"** (merge `user` or `ask`): merge that PR now, then `$I done` it.
+- **"Merge it"** (merge `user` or `ask`): merge that PR now, then `I done` it.
 
 ## Threads
 
@@ -111,7 +112,7 @@ When a thread reports:
   branch head is stale. Then mark it `review` (`done` for local work) and apply the merge policy.
   `DECISION:` lines in a report go into your reply once, so the user can veto them. Once a PR is
   merged, remove the thread's worktree and branch (`git worktree remove`, `git branch -D` after
-  `git fetch --prune`) and `$I done` it.
+  `git fetch --prune`) and `I done` it.
 - **Blocked, a question, or still failing after 3 rounds:** `needs-you`, the question in one line.
 
 **Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it

@@ -28,5 +28,5 @@ Then, by what blocks it:
 
 Check what a holder blocks before saying so: read the lock's other takers' output files; a suite
 that already finished is not blocked. One recovery per stall: after the SendMessage, wait for the
-thread's next event, not for another wake. Log it on the item (`$I log <id> working "stalled on
+thread's next event, not for another wake. Log it on the item (`I log <id> working "stalled on
 <cause>; resumed"`), and when the same cause comes back, put a line in the brief.

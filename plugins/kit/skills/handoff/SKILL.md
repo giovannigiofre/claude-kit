@@ -11,8 +11,9 @@ Arguments: $ARGUMENTS (a destination, optionally a name; empty: ask).
 
 A discussion in ask mode ends with an understanding, not with code. This turns it into the
 brief `kit:shape` would have written, saves it as a coordinator item on disk, and sends it where
-you choose. Below, `I` is `python3 ${CLAUDE_SKILL_DIR}/../../hooks/scripts/items.py` and `P` is
-`python3 ${CLAUDE_SKILL_DIR}/../../hooks/scripts/proposals.py` (if `${CLAUDE_SKILL_DIR}` is not
+you choose. Below, `I` and `P` are shell functions (zsh does not split a `$I` variable into words):
+`I(){ python3 ${CLAUDE_SKILL_DIR}/../../hooks/scripts/items.py "$@"; }` and
+`P(){ python3 ${CLAUDE_SKILL_DIR}/../../hooks/scripts/proposals.py "$@"; }` (if `${CLAUDE_SKILL_DIR}` is not
 expanded, the scripts are in the kit plugin's `hooks/scripts/`).
 
 1. **Write the brief** from this conversation, in the user's language:
@@ -32,10 +33,10 @@ expanded, the scripts are in the kit plugin's `hooks/scripts/`).
    changes the work. A conclusion that is an idea rather than a piece of work (no checkable
    done) goes to a proposal card instead: destination `card`.
 
-2. **Save it**: `$I new "<name>" --brief - --from handoff` with the brief on stdin. It prints
+2. **Save it**: `I new "<name>" --brief - --from handoff` with the brief on stdin. It prints
    the item id and the folder (`.claude/lead/items/<id>/BRIEF.md`, headed `ITEM: <id>`, which
    is how threads and hooks tie their reports to it). For `card`: a JSON object
-   `{origin, summary, rationale, evidence, confidence, class}` to `$P add -` (class A mechanical
+   `{origin, summary, rationale, evidence, confidence, class}` to `P add -` (class A mechanical
    and reversible, B needs judgment, C a human decision) and stop here.
 
 3. **Send it** to the destination (ask with AskUserQuestion when none was given):
