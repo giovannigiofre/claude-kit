@@ -15,9 +15,10 @@ a project with .claude/kit.json, like every kit hook. Standard library only.
 
 Settings files: settings*.json, in any case, in any `.claude` directory (the user's, a repo's, a
 worktree's) or in CLAUDE_CONFIG_DIR, and the managed settings (managed-settings.json, or anything
-in its folder). A shell command that writes (cp, mv, rsync, tee, ln, a redirection, git checkout
-or restore...) into a Claude folder itself (`.claude/`, `~/.claude`, a glob in one) counts too; a
-read, or a pipeline of plain readers, never does.
+in its folder). A Claude folder itself (`.claude/`, `~/.claude`, a glob in one) counts when the
+part of the command naming it may write. This fails safe: any first word that is not known to leave
+files alone counts, and the strings `bash -c` and `eval` run are judged too. A read, or a pipeline
+of plain readers, never counts.
 """
 
 import difflib
@@ -45,25 +46,43 @@ FOLDER = re.compile(r"(?:(?<=[\s'\"=])|^)((?:[^\s'\"`;&|<>()]*/)?\.claude/?|\$\{
 READERS = {"cat", "head", "tail", "less", "more", "grep", "rg", "wc", "ls", "stat", "file", "diff", "jq", "bat",
            "cut", "tr", "nl"}
 GIT_READERS = {"diff", "log", "show", "status", "blame"}
-# commands that write files: a Claude folder named by one of these counts as a target
+# Fail-safe: a command that names a Claude folder counts as writing it unless every stage of its
+# pipeline is known not to write a file. These first words never write one (a redirection is caught apart).
+NON_WRITERS = READERS | {"true", "false", "test", "[", "echo", "printf", "pwd", "cd", "pushd", "popd", "which",
+                         "type", "mkdir", "for", "case", "select", "in", "fi", "done", "esac", "}", ")", ";;"}
+# git subcommands that leave the working tree's files alone (checkout, restore, stash, reset... do not)
+GIT_SAFE = GIT_READERS | {"add", "commit", "push", "fetch", "branch", "tag", "worktree", "rev-parse", "ls-files",
+                          "ls-tree", "config", "remote", "grep", "describe", "shortlog", "reflog", "cat-file",
+                          "check-ignore", "notes", "rev-list", "merge-base", "for-each-ref", "show-ref", ""}
+# known writers (anything not in NON_WRITERS counts anyway; these are named for the reader)
 WRITERS = {"cp", "mv", "rsync", "tee", "ln", "install", "rm", "rmdir", "unlink", "truncate", "touch", "dd", "tar",
-           "unzip", "patch", "ditto", "scp"}
-GIT_WRITERS = {"checkout", "restore", "stash", "reset", "apply", "am", "mv", "rm", "clean", "switch", "merge", "pull",
-               "rebase", "cherry-pick", "revert"}
-WRAPPERS = {"sudo", "command", "env", "nohup", "time", "xargs", "exec"}
+           "unzip", "patch", "ditto", "scp", "cpio"}
+WRAPPERS = {"sudo", "doas", "command", "builtin", "env", "nohup", "time", "xargs", "exec", "nice", "ionice",
+            "timeout", "stdbuf", "caffeinate"}
+# words that open a compound command or a block: the command proper follows them
+OPENERS = {"(", "{", "!", "if", "then", "do", "else", "elif", "while", "until"}
+SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 HARMLESS = re.compile(r"\s*(?:[0-9]*>>?|&>)\s*/dev/null|\s*[0-9]*>&[0-9]")  # 2>&1, >/dev/null
 SEGMENTS = re.compile(r"\|\||&&|[;|&\n]")
+PIPELINES = re.compile(r"\|\||&&|[;&\n]")
 # `cd .claude`, `pushd ~/.claude/`, `cd "$CLAUDE_CONFIG_DIR"`: a bare settings name after it is in a Claude folder
 CD_CLAUDE = re.compile(r"(?:^|[;&|(]|\s)(?:cd|pushd)\s+['\"]?(?:[^\s'\";&|]*/)?(?:\.claude|\$\{?CLAUDE_CONFIG_DIR\}?)/?['\"]?"
                        r"(?=$|[\s;&|)])", re.I)
 
 
 def _argv(segment):
-    """The words of one simple command, wrappers (`sudo`, `env X=1`, `xargs -0`) and assignments skipped."""
+    """The words of one simple command: block openers (`(`, `{`, `then`, `do`...), wrappers (`sudo`,
+    `env X=1`, `xargs -0`, `timeout 10`, `nice -n 5`) and assignments skipped."""
     words = shlex.split(segment)
-    while words and (words[0] in WRAPPERS or re.fullmatch(r"\w+=.*", words[0]) or
-                     (words[0].startswith("-") and len(words) > 1)):
-        words = words[1:]
+    while words:
+        first = words[0]
+        if first[:1] in "({" and len(first) > 1:  # `(cp` and `{cp` as shlex leaves them
+            words = [first[1:]] + words[1:]
+        elif (first in OPENERS or first in WRAPPERS or re.fullmatch(r"\w+=.*", first) or
+              re.fullmatch(r"\d+(?:\.\d+)?[smhd]?", first) or (first.startswith("-") and len(words) > 1)):
+            words = words[1:]
+        else:
+            break
     return words
 
 
@@ -79,29 +98,50 @@ def _git_sub(argv):
     return ""
 
 
-def writes(command):
-    """True when the command may write a file: a redirection, or a writer (cp, mv, rsync, tee, ln,
-    rm, sed -i, find -delete/-exec, git checkout/restore/stash/...) in any of its parts."""
+def _segment_writes(segment, depth):
+    try:
+        argv = _argv(segment)
+    except ValueError:
+        return True  # unbalanced quotes: cannot tell, so it may write
+    if not argv:
+        return False
+    name = os.path.basename(argv[0])
+    if name in WRITERS:
+        return True
+    if name in SHELLS or name == "eval":  # judge the string it runs: `bash -c '…'`, `eval '…'`
+        flag = next((i for i, a in enumerate(argv[1:-1], 1) if re.fullmatch(r"-\w*c\w*", a)), None)
+        if name == "eval":
+            inner = " ".join(argv[1:])
+        elif flag is not None:
+            inner = argv[flag + 1]
+        else:
+            return True  # a shell reading a script or stdin: cannot tell
+        return depth >= 3 or writes(inner, depth + 1)
+    if name == "git":
+        return _git_sub(argv) not in GIT_SAFE
+    if name in ("sed", "perl", "ruby"):
+        return any(a.startswith("-i") or a == "--in-place" for a in argv[1:])
+    if name == "find":
+        return any(a in ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls")
+                   for a in argv[1:])
+    return name not in NON_WRITERS
+
+
+def writing_parts(command, depth=0):
+    """The parts of the command (pipelines, split at `;`, `&&`, `||`, `&`) that may write a file.
+    Fail-safe: a stage counts as writing unless its first word is known not to write (a reader,
+    echo, mkdir, a block keyword, git status/add/commit...). A redirection or a substitution
+    anywhere makes the whole command count."""
     text = HARMLESS.sub(" ", command)
     if ">" in text or "`" in text or "$(" in text:
-        return True
-    for segment in SEGMENTS.split(text):
-        try:
-            argv = _argv(segment)
-        except ValueError:
-            return True  # unbalanced quotes: cannot tell, so it may write
-        if not argv:
-            continue
-        name = os.path.basename(argv[0])
-        if name in WRITERS:
-            return True
-        if name in ("sed", "perl", "ruby") and any(a.startswith("-i") or a == "--in-place" for a in argv[1:]):
-            return True
-        if name == "find" and any(a in ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint") for a in argv[1:]):
-            return True
-        if name == "git" and _git_sub(argv) in GIT_WRITERS:
-            return True
-    return False
+        return [command]
+    return [part for part in PIPELINES.split(text)
+            if any(_segment_writes(stage, depth) for stage in part.split("|"))]
+
+
+def writes(command, depth=0):
+    """True when some part of the command may write a file (see writing_parts)."""
+    return bool(writing_parts(command, depth))
 
 
 # Subagents that run in the foreground, where the owner sees the prompt (the hook input does not
@@ -161,19 +201,23 @@ def command_targets(command, cwd):
     a name (`.claude/'settings'.json`, `settings\\.json`) are seen through, and names match in any
     case. A bare `settings.json` counts when it is in a Claude folder: the cwd is one, the command
     `cd`s into one, or it writes and names one (`find .claude -name settings.json -delete`); a
-    worktree below `.claude/worktrees/` is not one. A Claude folder itself counts only for a
-    command that writes. A plain read, or a pipeline of plain readers, changes nothing."""
+    worktree below `.claude/worktrees/` is not one. A Claude folder itself counts where it is named by a
+    part that may write (see writing_parts), or anywhere once the command cds into it and writes.
+    A plain read, or a pipeline of plain readers, changes nothing."""
     files, folders = [], []
     plain = re.sub(r"\$'|[\\'\"]", "", command)
-    writer = writes(command)
-    into = any(CD_CLAUDE.search(c) for c in (command, plain)) or \
-        (writer and any(".claude" in c.lower() or "claude_config_dir" in c.lower() for c in (command, plain)))
+    parts = writing_parts(command)
+    cd_claude = any(CD_CLAUDE.search(c) for c in (command, plain))
+    into = cd_claude or (parts and any(".claude" in c.lower() or "claude_config_dir" in c.lower() for c in (command, plain)))
+    # the folder counts where a writing part names it, or anywhere once the command cds into it and writes
+    written = [command] if (cd_claude and parts) else parts
     for text in (command, plain):
         for token in TOKEN.findall(text):
             bare = "/" not in token and "~" not in token and "$" not in token
             if is_settings(token, cwd) or (bare and into):
                 files.append(token)
-        if writer:
+    for part in written:
+        for text in (part, re.sub(r"\$'|[\\'\"]", "", part)):
             folders += FOLDER.findall(text)
     if files and read_only(command):
         files = []

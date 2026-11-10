@@ -138,7 +138,13 @@ def main():
                 "echo x > .claude/SETTINGS.json", "echo x > ~/.CLAUDE/Settings.Json",
                 # a bare name in a Claude folder, and readers that can write
                 "find .claude -name settings.json -delete", "cd ~/.claude && sed -i '' s/a/b/ settings.json",
-                "sort -o .claude/settings.json /tmp/x", "cat /tmp/x | tee .claude/settings.json"]
+                "sort -o .claude/settings.json /tmp/x", "cat /tmp/x | tee .claude/settings.json",
+                # a folder write behind a shell, eval, a subshell, a block, a loop, a wrapper; an unknown writer
+                "bash -c 'cp /tmp/x .claude/'", "sh -c \"rsync -a /tmp/x/ ~/.claude/\"", "eval 'cp -r /tmp/x .claude/'",
+                "( cp -r /tmp/x .claude/ )", "{ cp -r /tmp/x .claude/; }", "if true; then cp -r /tmp/x .claude/; fi",
+                "for f in a; do cp $f ~/.claude/; done", "nice cp -r /tmp/x .claude/", "cpio -pd .claude/ < list",
+                "(cp -r /tmp/x .claude/)", "timeout 10 cp -r /tmp/x .claude/", "ls .claude | xargs rm",
+                "cd .claude && rm -rf *", "node scripts/x.js --out .claude", "bash script.sh .claude/"]
         for cwd in (repo, wt):  # the main checkout, and a thread's worktree below .claude/worktrees/
             for command in asks:
                 decision, reason = hook("Bash", {"command": command}, cwd, env)
@@ -154,8 +160,11 @@ def main():
                   "mkdir -p .claude/evidence/x", "git add .claude/lead/board.md", "cp report.txt .claude/evidence/b/",
                   # a bare settings name outside a Claude folder, the folder named by a non-writer, pipes of readers
                   "cp config/settings.example.json settings.json", "grep -rn foo .claude/ | head",
-                  "ls .claude/*.json | wc -l", "git add .claude/", "node scripts/x.js --out .claude",
-                  "cat .claude/settings.json | jq .permissions", "git -C . diff .claude/settings.json | head -5"]
+                  "ls .claude/*.json | wc -l", "git add .claude/",
+                  "cat .claude/settings.json | jq .permissions", "git -C . diff .claude/settings.json | head -5",
+                  # a reader behind a shell or a wrapper, a loop that only reads, a writer in another part
+                  "bash -c 'ls .claude/'", "timeout 10 ls .claude/", "for f in .claude/*; do echo $f; done",
+                  "ls .claude/ && npm test", "git status .claude/ && git commit -m x"]
         for cwd in (repo, wt):
             for command in passes:
                 decision, reason = hook("Bash", {"command": command}, cwd, env)

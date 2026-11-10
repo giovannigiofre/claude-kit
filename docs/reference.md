@@ -392,9 +392,15 @@ A shell command counts when it names one, quotes and backslashes inside the name
 not a plain read (`cat`, `grep`, `jq`, `git diff`, …, alone or piped into one another, with no
 redirection or chain). A bare `settings.json` counts only in a Claude folder: the cwd is one, the
 command `cd`s into one, or it writes and names one; a thread's worktree below
-`.claude/worktrees/` is not one. A Claude folder itself counts only for a command that writes into
-it (`git checkout -- .claude/`, `cp -r x .claude/`, `rsync … ~/.claude/`, a redirection, `mv x
-.claude/settings*`); `git add .claude/` or `grep -rn x .claude/ | head` pass. The
+`.claude/worktrees/` is not one. A Claude folder itself (`.claude/`, `~/.claude`, a glob in one)
+counts when the part of the command that names it (split at `;`, `&&`, `||`, `&`) may write. This
+check fails safe: a stage counts as writing unless its first word is known not to write, which
+means a reader, `echo`, `mkdir`, a loop or block keyword, or git `status`/`add`/`commit`/`push`/….
+The first word is the one found after `(`, `{`, `then`, `do`, wrappers such as `sudo`, `nice`,
+`timeout` and `xargs`, and assignments. The string run by `bash|sh|zsh -c` and `eval` is judged in
+turn. So `cp -r x .claude/`, `bash -c 'cp x .claude/'`, `( cp -r x .claude/ )`, `node x.js --out
+.claude` and a redirection ask, while `git add .claude/`, `grep -rn x .claude/ | head`, `bash -c 'ls
+.claude/'` and `ls .claude/ && npm test` pass. The
 prompt's reason starts «Sovrascrittura dei settings di Claude Code:», then the file (home as `~`)
 and the change in Italian, within 220 characters. From a subagent the answer is `deny`, since
 nobody sees a background thread's prompt; Claude Code's `statusline-setup`, which runs in the
