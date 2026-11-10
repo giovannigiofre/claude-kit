@@ -171,6 +171,41 @@ def main():
             check((folder.parent / "done" / f"login-page-{n}" / "LOG.md").read_text().endswith("| done\n"),
                   f"the next archive lands at done/login-page-{n}")
 
+        # unattended git preferences: per repo, in the main checkout's gitignored kit.local.json
+        local = repo / ".claude" / "kit.local.json"
+        code, out, _ = run(repo, "unattended")
+        check(code == 0 and out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "not set" in out
+              and not local.exists(), f"unattended defaults to ask, unset, and writes nothing: {out}")
+        local.write_text("{ broken")
+        code, out, _ = run(repo, "unattended")
+        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "not set" in out, f"a broken file reads as ask: {out}")
+        code, _, err = run(repo, "unattended", "push=allow")
+        check(code == 1 and local.read_text() == "{ broken", f"a broken file is never rewritten: {err}")
+        local.write_text(json.dumps({"other": 1, "lead": {"unattended": {"push": "ALLOW", "merge": "sometimes"}}}))
+        prefs, is_set, _ = items.kitlib.unattended_prefs(repo)
+        check(prefs == {"push": "allow", "rebase": "ask", "merge": "ask"} and is_set, f"a misspelt value is ask: {prefs}")
+        local.unlink()
+        code, out, err = run(repo, "unattended", "push=allow", "merge=ask")
+        saved = json.loads(local.read_text())
+        check(code == 0 and saved["lead"]["unattended"] == {"push": "allow", "rebase": "ask", "merge": "ask"}, f"saved: {saved} {err}")
+        check("(from " in out and '"Bash(git push:*)"' in out and "settings.local.json" in out
+              and "rebase:*" not in out, f"allow names the exact rule and where, for the owner to add: {out}")
+        code, out, _ = run(repo, "unattended", "rebase=allow")
+        check(json.loads(local.read_text())["lead"]["unattended"] == {"push": "allow", "rebase": "allow", "merge": "ask"},
+              "a later answer keeps the earlier ones")
+        status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--", ".claude/kit.local.json"],
+                                capture_output=True, text=True).stdout
+        check(status == "", f"kit.local.json stays out of git: {status!r}")
+        code, _, err = run(repo, "unattended", "push=yes")
+        check(code == 2 and "ask or allow" in err, f"a wrong value is refused: {err}")
+        # a worktree reads and writes the main checkout's file (a worktree has no kit.local.json of its own)
+        wt = Path(tmp) / "wt"
+        subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "t", str(wt)], check=True, capture_output=True)
+        code, out, _ = run(wt, "unattended")
+        check("push=allow rebase=allow merge=ask" in out and str(local) in out, f"a worktree reads the main checkout's: {out}")
+        settings = repo / ".claude" / "settings.local.json"
+        check(not settings.exists(), "the kit never writes permission settings")
+
     print("items: all checks passed" if not failed else f"items: {failed} failures")
     return 1 if failed else 0
 

@@ -21,8 +21,11 @@
 //   thread that ended without a report, a thread waiting on a permission prompt, and a turn that
 //   failed on the API. It wakes the coordinator (a prompt of its own) or notifies the person;
 //   it never approves, stops or retries anything itself, and on any error it stays quiet.
+// - Interim notices: Claude Code's "Agent X is waiting on its own background work" task notice
+//   is dropped before it becomes a turn; a real report, a command's notice or anything mixed in
+//   passes unchanged.
 import type { EngineInterface, Register, Timer } from 'claude-code'
-import { CONTINUE_NOTE, RETRY_DELAYS_MS, bound, expectedMs, failureKind, isHolder, outputEnd, permissionWaits, stalls, watchConfig } from './watchdog'
+import { CONTINUE_NOTE, RETRY_DELAYS_MS, bound, expectedMs, failureKind, isHolder, isInterimNotice, outputEnd, permissionWaits, stalls, watchConfig } from './watchdog'
 import type { Job, PermissionWait, Strike, Thread } from './watchdog'
 
 type KitMode = 'light' | 'loop' | 'ask'
@@ -471,7 +474,7 @@ async function watchTick($: $): Promise<void> {
   const list: Job[] = [...jobs.values()].map(j => ({ id: j.id, owner: j.owner, label: j.label, startedAt: j.startedAt,
     // "(server)" in a command's description: meant to keep running, so it has no deadline
     deadlineMs: /\(server\)/i.test(j.label) ? 0 : j.timeoutMs ?? w.bashDeadlineMin * 60_000,
-    holder: j.holder, endedAt: j.endedAt, ending: j.ending }))
+    declared: j.timeoutMs !== undefined, holder: j.holder, endedAt: j.endedAt, ending: j.ending }))
   const wakes = stalls(now, threads, list, activity, strikes, w)
   if (wakes.length) await wake($, wakes.map(x => x.text).join('\n\n'))
   for (const x of wakes) if (x.notify) await notify($, x.text.replace(/^kit watchdog: /, '').split('. ')[0] + '.')
@@ -727,9 +730,13 @@ export const register: Register = on => {
     return { text: `Kit safety for this project: ${now.safety}${now.from === 'settings' ? ' (from your settings)' : ''} · unattended: ${u.on ? 'on' : 'off'}${u.from === 'settings' ? ' (from your settings)' : ''}. Use /kit-safety host or /kit-safety sandbox; /kit-safety unattended on|off for an evening nobody is watching.` }
   })
 
-  // Loop mode: every prompt the person types reaches the coordinator.
+  // Loop mode: every prompt the person types reaches the coordinator. And a thread's interim
+  // notice ("waiting on its own background work") is held: it would be a turn that changes nothing.
   on('prompt.submit', async ($, e, next) => {
     const kind = e.origin ? e.origin.kind : 'composer'
+    if (kind === 'task-notification' && !e.command && isInterimNotice(e.text)) {
+      return { drop: 'kit: held an interim notice from a thread waiting on its own background work; its report, or a stall, still reaches the coordinator' }
+    }
     if (e.command || e.isMeta || (kind !== 'composer' && kind !== 'bridge')) return next(e)
     try {
       personAt = await $.clock.now() // the person is here: the board's changes need no notification

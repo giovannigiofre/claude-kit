@@ -43,6 +43,9 @@ Keep it to the format below, about 25 lines; the detail lives in the PR body and
    - A step that may ask the person (a `git push` under an ask rule, anything outside the
      worktree) runs in the foreground: in the background its prompt waits unseen, and messages
      to you queue behind it.
+   - A brief line `UNATTENDED: push=… rebase=… merge=…` means nobody answers a prompt until the
+     person is back: a step set to `ask` you do not run; commit, and report it under OPEN as
+     `needs push` (or rebase, merge), STATUS partial. `allow`: run it as usual.
 4. Commit on your branch with a message that says why (in the main checkout, create the
    branch first). Commits carry the repo's configured git identity, the user's, with no AI
    co-author lines or footers. On the branch you created you may commit, amend, rebase and

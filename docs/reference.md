@@ -107,7 +107,8 @@ that name before each commit), `.claude/loop.md` (what a bare `/loop` does for t
 PR: fix CI, answer reviews, sync with the base, reschedule itself while the PR is open; it never
 merges), `.claude/review-decisions.md`
 (findings you declined, so reviews don't raise them again). Gitignored: `.claude/evidence/`,
-`.claude/overnight/`, `.claude/lead/`.
+`.claude/overnight/`, `.claude/lead/`, `.claude/kit.local.json` (the kit adds each to
+`.git/info/exclude` when it writes there and the project does not ignore it).
 
 ### Auto mode environment, per repo
 
@@ -189,7 +190,20 @@ python3 <kit>/hooks/scripts/items.py list [--status queued]
 python3 <kit>/hooks/scripts/items.py log <id> <status> [note]
 python3 <kit>/hooks/scripts/items.py show <id>
 python3 <kit>/hooks/scripts/items.py done <id>
+python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow]
 ```
+
+`unattended`: the owner's git preferences for unattended runs in this repo, in the main
+checkout's `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "ask", "rebase": "ask",
+"merge": "ask"}}}`), which the command adds to `.git/info/exclude`: local to this machine and
+repo, never global, never committed. Without arguments it prints the brief line `UNATTENDED:
+push=ask rebase=ask merge=ask` and whether it is set; a missing, broken or misspelt value is
+`ask`. The coordinator asks only when an unattended run starts and nothing is set, saves the
+answer and briefs every thread of the run with that line ([unattended.md](../plugins/kit/skills/lead/unattended.md)).
+A thread does not run a step set to `ask` and hands back `needs push` (rebase, merge); `allow`
+runs it, and the command names the permission rule that needs (`Bash(git push:*)`, `Bash(git
+rebase:*)`, `Bash(gh pr merge:*)` and `Bash(git merge:*)`) for the owner to add to the repo's
+`.claude/settings.local.json`; the kit never edits permission settings.
 
 A thread briefed with the BRIEF.md text carries the `ITEM:` line; when it finishes, the hook
 files its report under the item (`reported | done, 2 decision(s), agent <id>` in the LOG); when
@@ -296,7 +310,8 @@ its 15 s tick (interactive sessions only) and wakes the coordinator with a promp
   prompt the thread was started with (the mod reads that prompt, not BRIEF.md on disk);
 - a background command past its deadline (its Bash `timeout`, else `bashDeadlineMin`, 30) while
   its owner has been quiet for `silentMin`. A command whose description holds `(server)` is
-  meant to keep running and has none. A background thread's command that runs past 3 minutes is
+  meant to keep running and has none. A thread still within its brief's EXPECT is not woken
+  about a command that only passed the `bashDeadlineMin` guess, only one past its own `timeout`. A background thread's command that runs past 3 minutes is
   moved to the background by Claude Code itself (2.1.318) and counts as one of these;
 - a thread that waits (status `waiting`) on its own background work when none of it can wake
   it, for `5` min: every command has ended, or what is left is a holder.
@@ -325,6 +340,17 @@ the agent ID the Agent call returned (a name needs agent teams, which the kit do
 the ID also survives a restart, and the hooks write it into the item's LOG); a message reaches
 a thread even while its command runs (2.1.317: the command moves to the background). The facts
 live in memory, bounded to the work in flight; a module reload only makes the watchdog quieter.
+
+Claude Code itself sends a task notice each time a thread stops with background work still
+running ("Agent X is waiting on its own background work"; the result says it has not reported
+yet). It changes nothing for the coordinator, yet each one was a turn: 144 in one 24-hour
+session. The mod drops it at `prompt.submit` before it becomes a turn, and the transcript shows
+one dim line saying so. Only a notice whose every `<task-notification>` block is such an interim
+one, with nothing beside it but Claude Code's preamble, is dropped; a thread's report, a
+command's notice, a mix or the same text typed by the person passes. The thread's report comes
+later under the same task id, and the `stuck` check above covers work that ended without waking
+it. What the kit cannot change: Claude Code still emits the notice, and without the mod (a
+session that has not loaded it) each one still wakes the coordinator.
 
 ## Permission prompts
 

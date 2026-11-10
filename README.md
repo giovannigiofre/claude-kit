@@ -206,7 +206,11 @@ project.
   its own rules (`guard.denyCommands` / `askCommands`: a regex over the command and the reason);
   it has no deploy rule of its own. It reads shell text, so it is best effort.
   `/kit-safety unattended on` adds Claude Code's `permissions.denyInsteadOfPrompting` for an
-  evening: a permission prompt becomes a denial and the work goes on; `off` removes it. Not for a
+  evening: a permission prompt becomes a denial and the work goes on; `off` removes it. Whether
+  threads may push, rebase and merge while you are away is a per-repo choice the coordinator asks
+  once, at the first unattended run, and keeps in the repo's gitignored `.claude/kit.local.json`
+  (`ask` until you say otherwise; the kit names the permission rule for `allow` and you add it).
+  Not for a
   kit project: `permissions.blockWritesOutsideWorkingDirectories`, which refuses a thread's edits
   in another repo and removes the worktree tools.
 - **Sandbox** (overnight runs, unfamiliar repos): the same guard plus Claude Code's Bash sandbox

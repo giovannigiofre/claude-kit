@@ -94,6 +94,24 @@ test('loop mode never reaches headless or scheduled prompts', async ($, on) => {
   expect((seen.at(-1) ?? []).join(' ')).toContain('coordinator')
 })
 
+test('an interim task notice is dropped before it becomes a turn; a report, a mix or the same text typed passes', async ($, on) => {
+  world(on)
+  const seen = promptCatcher(on)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  const block = (summary: string, result: string) => `<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n` +
+    `<summary>${summary}</summary>\n<result>${result}</result>\n</task-notification>`
+  const interim = block('Agent "B2 login page" is waiting on its own background work',
+    'This agent has not reported yet: it is waiting on its own background work and will deliver its report through SubagentHandback when that finishes.')
+  const report = block('Agent "B2 login page" completed', 'STATUS: done')
+  const held = await $.prompt.submit({ text: interim, origin: { kind: 'task-notification' } } as any)
+  expect(JSON.stringify(held)).toContain('held an interim notice')
+  expect(seen.length).toBe(0)
+  await $.prompt.submit({ text: report, origin: { kind: 'task-notification' } } as any)
+  await $.prompt.submit({ text: `${interim}\n${report}`, origin: { kind: 'task-notification' } } as any)
+  await $.prompt.submit({ text: interim } as any) // the person pasted it: theirs to send
+  expect(seen.length).toBe(3)
+})
+
 test('a settings file that does not parse is never rewritten', async ($, on) => {
   const { written } = world(on, { '/repo/.claude/settings.local.json': '{ "permissions": { "allow": [ ' })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })

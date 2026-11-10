@@ -91,6 +91,73 @@ def main_checkout(cwd):
     return root
 
 
+# The owner's unattended git preferences for one repository, in its main checkout's gitignored
+# `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "ask", "rebase": "ask", "merge": "ask"}}}`):
+# local to this machine and this repo, never global, never committed. `ask` (the default, and
+# whatever is missing, misspelt or unreadable) means nobody answers a permission prompt during an
+# unattended run, so a thread hands that step back; `allow` means it proceeds as when attended.
+UNATTENDED_STEPS = ("push", "rebase", "merge")
+LOCAL_CONFIG = ".claude/kit.local.json"
+# What `allow` needs so the step runs without a prompt: the owner adds these to the repo's
+# .claude/settings.local.json `permissions.allow` himself; the kit never edits permission settings.
+UNATTENDED_RULES = {"push": ["Bash(git push:*)"], "rebase": ["Bash(git rebase:*)"],
+                    "merge": ["Bash(gh pr merge:*)", "Bash(git merge:*)"]}
+
+
+def unattended_prefs(cwd):
+    """(prefs, is_set, path): every step `ask` or `allow`; is_set when the repo's file names any step."""
+    root = main_checkout(cwd) or Path(cwd)
+    path = Path(root) / LOCAL_CONFIG
+    value, _ = read_json(path)
+    lead = (value or {}).get("lead")
+    own = lead.get("unattended") if isinstance(lead, dict) else None
+    own = own if isinstance(own, dict) else {}
+    prefs = {k: ("allow" if str(own.get(k, "")).strip().lower() == "allow" else "ask") for k in UNATTENDED_STEPS}
+    return prefs, any(k in own for k in UNATTENDED_STEPS), path
+
+
+def save_unattended(cwd, changes):
+    """Write `changes` ({step: ask|allow}) into the repo's kit.local.json beside its other keys and
+    keep the file out of git; returns the prefs now in force. A file that does not parse is never
+    rewritten (ValueError)."""
+    prefs, _, path = unattended_prefs(cwd)
+    value, ok = read_json(path)
+    if not ok:
+        raise ValueError(f"{path} is not a JSON object; fix or remove it first")
+    lead = value.get("lead") if isinstance(value.get("lead"), dict) else {}
+    own = lead.get("unattended") if isinstance(lead.get("unattended"), dict) else {}
+    own = {**{k: prefs[k] for k in UNATTENDED_STEPS}, **own, **changes}
+    value["lead"] = {**lead, "unattended": {k: own[k] for k in UNATTENDED_STEPS}}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    exclude(path.parent.parent, LOCAL_CONFIG)
+    return unattended_prefs(cwd)[0]
+
+
+def exclude(root, rel):
+    """Keep `rel` (a file under the checkout `root`) out of git through .git/info/exclude, unless
+    the project ignores it already."""
+    root = Path(root)
+    try:
+        if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", rel], capture_output=True,
+                          timeout=10).returncode == 0:
+            return
+    except Exception:
+        return
+    info = git_out(root, "rev-parse", "--git-path", "info/exclude")
+    if not info:
+        return
+    info = Path(info) if Path(info).is_absolute() else root / info
+    try:
+        info.parent.mkdir(parents=True, exist_ok=True)
+        text = info.read_text(encoding="utf-8") if info.exists() else ""
+        line = "/" + rel.lstrip("/")
+        if line not in text.splitlines():
+            info.write_text(text + ("" if not text or text.endswith("\n") else "\n") + line + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
 GATE_TIMEOUTS = {"check": 540, "verify": 1800}  # seconds; kit.json checkTimeout / verifyTimeout override
 
 
