@@ -106,6 +106,18 @@ def main():
         config, err = kitlib.load_config(repo)
         check(config is None and err and "cannot read" in err, f"broken JSON is an error: {err}")
 
+        # kit.json is personal (kept out of git), so the worktree has none: the main checkout's applies
+        (repo / ".claude" / "kit.json").write_text(json.dumps({"check": "make lint"}))
+        check(not (tree / ".claude" / "kit.json").exists(), "the worktree has no kit.json of its own")
+        check(kitlib.load_config(tree) == ({"check": "make lint"}, None), f"worktree -> main's: {kitlib.load_config(tree)}")
+        (tree / ".claude").mkdir(exist_ok=True)
+        (tree / ".claude" / "kit.json").write_text(json.dumps({"check": "own"}))
+        check(kitlib.load_config(tree) == ({"check": "own"}, None), "a worktree's own kit.json wins")
+        (tree / ".claude" / "kit.json").unlink()
+        (repo / ".claude" / "kit.json").unlink()
+        check(kitlib.load_config(tree) == (None, None), "no kit.json in the worktree or the main checkout: off")
+        check(kitlib.config_file(Path(tmp)) == Path(tmp) / ".claude" / "kit.json", "outside git: its own path")
+
     print("kitlib: all checks passed" if not failed else f"kitlib: {failed} failures")
     return 1 if failed else 0
 

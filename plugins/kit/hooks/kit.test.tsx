@@ -2,7 +2,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 // The world beneath the kit mod: a repo at /repo, a home at /home/u, files in memory.
-function world(on: On, files: Record<string, string> = {}, agents: any[] = [], exitCode = (_argv: string[]) => 0) {
+function world(on: On, files: Record<string, string> = {}, agents: any[] = [], exitCode = (_argv: string[]) => 0,
+               stdout = (_argv: string[]) => '/repo\n') {
   mock.store(on)
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.env(on, { HOME: '/home/u' })
@@ -10,7 +11,7 @@ function world(on: On, files: Record<string, string> = {}, agents: any[] = [], e
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.surfaces', () => ({ value: ['terminal'] }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, percent: 12 }, rateLimits: [], cost: { usd: 1.5 } } }))
-  on('process.run', (_, e: any) => ({ value: { exitCode: exitCode(e.argv), stdout: '/repo\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', (_, e: any) => ({ value: { exitCode: exitCode(e.argv), stdout: stdout(e.argv), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.read', (_, e: any) => {
     const text = written[e.path] ?? files[e.path]
     if (text === undefined) return { deny: `ENOENT ${e.path}` }
@@ -137,6 +138,25 @@ test('a project with kit.json starts in loop mode unless the person chose light'
   await $.command.run({ command: 'kit-mode', args: 'light' } as any)
   await $.prompt.submit({ text: 'what changed?' } as any)
   await $.prompt.submit({ text: 'and now?' } as any)
+  expect(seen.at(-1) ?? []).toEqual([])
+})
+
+test('a worktree without kit.json of its own uses the main checkout\'s', async ($, on) => {
+  // /repo is a linked worktree of /main: kit.json is personal (kept out of git), so only /main has it
+  const commonDir = (argv: string[]) => (argv.includes('--git-common-dir') ? '/main/.git\n' : '/repo\n')
+  world(on, { '/main/.claude/kit.json': JSON.stringify({ check: 'make lint' }) }, [], () => 0, commonDir)
+  const seen = promptCatcher(on)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'add a login page' } as any)
+  expect((seen.at(-1) ?? []).join(' ')).toContain('coordinator')
+})
+
+test('a worktree whose main checkout has no kit.json stays light', async ($, on) => {
+  const commonDir = (argv: string[]) => (argv.includes('--git-common-dir') ? '/main/.git\n' : '/repo\n')
+  world(on, {}, [], () => 0, commonDir)
+  const seen = promptCatcher(on)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'add a login page' } as any)
   expect(seen.at(-1) ?? []).toEqual([])
 })
 

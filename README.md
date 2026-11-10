@@ -170,8 +170,12 @@ estimates otherwise pick the cheap, brittle option and test only in units:
 - For a bug fix, first reproduce the bug end to end, as the user meets it, not only in a unit test.
 ```
 
-**Every new project:** `cd project && claude`, then `/kit:init`. Read `.claude/kit.json`, adjust
-it, commit it. The hooks do nothing in a project without it, so a user-scope install never
+**Every new project:** `cd project && claude`, then `/kit:init`. Read `.claude/kit.json` and adjust
+it. It is personal by default: the kit is yours, for your own work on the project, so `/kit:init`
+keeps the file out of Git in the repo's `.git/info/exclude` (not the shared `.gitignore`), and a
+worktree without one reads the main checkout's; commit it only if you choose to share it with the
+team. Preferences that are never shared (the unattended git steps) live in `.claude/kit.local.json`.
+The hooks do nothing in a project without it, so a user-scope install never
 changes a project you haven't opted in; a key the kit does not know is named at session start.
 Details of every key: [docs/reference.md](docs/reference.md). Facts every thread needs (how to
 set up a worktree, the integration-test command) go in a gitignored `CLAUDE.local.md`: threads

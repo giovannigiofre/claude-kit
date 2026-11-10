@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PermissionRequest (Bash): the project's own gate commands run without a prompt.
 
-kit.json `check` and `verify` are commands the user wrote and committed, and the kit's hooks
+kit.json `check` and `verify` are commands the user wrote (personal or committed), and the kit's hooks
 already run them unasked; a prompt before Claude runs one by hand is a click for nothing. The
 same for the kit's own scripts that read, record or tidy (gate.py, lessons.py, compact_logs.py)
 and the coordinator's board tools (items.py, proposals.py), which write only under

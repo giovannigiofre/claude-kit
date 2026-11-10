@@ -2,6 +2,8 @@
 
 Every hook is a no-op unless the project has `.claude/kit.json` (see the README for the schema),
 so installing the plugin at user scope never changes behaviour in a project that has not opted in.
+A linked worktree with no kit.json of its own (it is personal and kept out of git by default)
+uses its main checkout's: config_file.
 """
 
 import difflib
@@ -65,10 +67,26 @@ def project_root(data, path_hint=None):
     return Path(cand)
 
 
+CONFIG = ".claude/kit.json"
+
+
+def config_file(root):
+    """The kit.json that applies in checkout `root`: its own, else its main checkout's. /kit:init
+    keeps kit.json out of git by default (personal), so a linked worktree has none of its own."""
+    own = Path(root) / CONFIG
+    if own.exists():
+        return own
+    main = main_checkout(root)
+    if main and (Path(main) / CONFIG).exists():
+        return Path(main) / CONFIG
+    return own
+
+
 def load_config(root):
     """Return (config, error). config is None when the project has no kit.json; a kit.json that
-    is present means the project opted in, even an empty `{}` (callers test `config is None`)."""
-    path = Path(root) / ".claude" / "kit.json"
+    is present means the project opted in, even an empty `{}` (callers test `config is None`).
+    A worktree without one uses its main checkout's (config_file)."""
+    path = config_file(root)
     if not path.is_file():
         return None, None
     try:
@@ -200,7 +218,7 @@ def _guard_rules(cwd):
     if not active:
         return []
     project, _ = load_config(root)
-    source = root / ".claude" / "kit.json" if isinstance(project, dict) and isinstance(project.get("guard"), dict) \
+    source = config_file(root) if isinstance(project, dict) and isinstance(project.get("guard"), dict) \
         else Path.home() / ".claude" / "kit.json"
     out = []
     for behavior, key in (("deny", "denyCommands"), ("ask", "askCommands")):

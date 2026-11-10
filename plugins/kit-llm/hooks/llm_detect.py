@@ -66,9 +66,26 @@ def project_root(data, file_path):
     return Path(cwd) if isinstance(cwd, str) and cwd else start
 
 
+def kit_config(root):
+    """The checkout's .claude/kit.json, else its main checkout's: kit.json is personal and kept out
+    of git by default, so a linked worktree has none of its own."""
+    path = Path(root) / ".claude" / "kit.json"
+    if path.exists():
+        return path
+    try:
+        out = subprocess.run(["git", "-C", str(root), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                             capture_output=True, text=True, timeout=10)
+        common = Path(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else None
+    except Exception:
+        common = None
+    if common and common.name == ".git" and (common.parent / ".claude" / "kit.json").exists():
+        return common.parent / ".claude" / "kit.json"
+    return path
+
+
 def is_off(root):
     try:
-        config = json.loads((Path(root) / ".claude" / "kit.json").read_text(encoding="utf-8"))
+        config = json.loads(kit_config(root).read_text(encoding="utf-8"))
     except Exception:
         return False
     return isinstance(config, dict) and config.get("llm") == "off"

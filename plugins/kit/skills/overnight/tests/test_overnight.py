@@ -384,6 +384,22 @@ def test_dry_run_creates_nothing():
     assert branch == "main", branch
 
 
+def test_worktree_gate_comes_from_the_main_checkout():
+    # kit.json is personal (kept out of git), so a linked worktree has none: the main checkout's gate applies
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("overnight_under_test", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    d, _ = repo(["change"])
+    (d / ".claude").mkdir()
+    (d / ".claude" / "kit.json").write_text(json.dumps({"verify": "make test"}))
+    wt = d.parent / f"{d.name}-wt"
+    subprocess.run(["git", "-C", str(d), "worktree", "add", "-q", "-b", "feat/x", str(wt)], check=True)
+    assert not (wt / ".claude" / "kit.json").exists()
+    assert mod.kit_gate(wt) == "make test", mod.kit_gate(wt)
+    (d / ".claude" / "kit.json").unlink()
+    assert mod.kit_gate(wt) is None, "no kit.json anywhere: no gate"
+
 if __name__ == "__main__":
     os.environ.pop("KIT_OVERNIGHT_AGENT", None)
     failed = 0

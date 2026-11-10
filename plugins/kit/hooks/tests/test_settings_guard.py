@@ -61,6 +61,14 @@ def main():
         shared = repo / ".claude" / "settings.json"
         shared.write_text(json.dumps({"permissions": {"ask": ["Bash(git push*)"]}}, indent=2) + "\n")
         local = repo / ".claude" / "settings.local.json"
+        # a git repo with a kit thread's worktree below .claude/worktrees/: kit.json is personal (not
+        # committed), so the worktree has none and the guard runs on the main checkout's
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.org", "-C", str(repo)]
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", "base"], check=True)
+        wt = repo / ".claude" / "worktrees" / "x"
+        subprocess.run(git + ["worktree", "add", "-q", "-b", "feat/x", str(wt)], check=True)
+        check(not (wt / ".claude" / "kit.json").exists(), "the worktree has no kit.json of its own")
         user = home / ".claude" / "settings.json"
         files = [shared, local, user, config / "settings.json", home / ".claude" / "settings.local.json",
                  repo / ".claude" / "worktrees" / "a1" / ".claude" / "settings.json"]
@@ -127,20 +135,36 @@ def main():
                 "rsync -a /tmp/x/ ~/.claude/", "cp /tmp/x.json ~/.claude/*.json", "mv /tmp/s .claude/settings*",
                 # quoting, escaping and case inside the name
                 "echo {} > .claude/'settings'.json", "rm .claude/settings\\.json", "echo {} > .claude/\"settings.local\".json",
-                "echo x > .claude/SETTINGS.json", "echo x > ~/.CLAUDE/Settings.Json"]
-        for command in asks:
-            decision, reason = hook("Bash", {"command": command}, repo, env)
-            check(decision == "ask" and reason.startswith(LABEL) and "comando" in reason and len(reason) <= 220,
-                  f"asks: {command}: {decision} {reason}")
+                "echo x > .claude/SETTINGS.json", "echo x > ~/.CLAUDE/Settings.Json",
+                # a bare name in a Claude folder, and readers that can write
+                "find .claude -name settings.json -delete", "cd ~/.claude && sed -i '' s/a/b/ settings.json",
+                "sort -o .claude/settings.json /tmp/x", "cat /tmp/x | tee .claude/settings.json"]
+        for cwd in (repo, wt):  # the main checkout, and a thread's worktree below .claude/worktrees/
+            for command in asks:
+                decision, reason = hook("Bash", {"command": command}, cwd, env)
+                check(decision == "ask" and reason.startswith(LABEL) and "comando" in reason and len(reason) <= 220,
+                      f"asks in {cwd.name}: {command}: {decision} {reason}")
+        decision, reason = hook("Bash", {"command": "cp /tmp/x settings.json"}, repo / ".claude", env)
+        check(decision == "ask", f"a bare name with the cwd a .claude folder asks: {decision} {reason}")
         decision, _ = hook("Monitor", {"command": f"echo x >> {local}"}, repo, env)
         check(decision == "ask", f"Monitor's command too: {decision}")
         passes = [f"cat {shared}", "git diff .claude/settings.json", "jq .permissions .claude/settings.json 2>/dev/null",
                   "grep -n ask .claude/settings.local.json", "echo x > .vscode/settings.json", "npm test",
                   "git push origin feature", f"cat {repo}/.vscode/settings.json", "ls -la .claude/",
-                  "mkdir -p .claude/evidence/x", "git add .claude/lead/board.md", "cp report.txt .claude/evidence/b/"]
-        for command in passes:
-            decision, reason = hook("Bash", {"command": command}, repo, env)
-            check(decision == "pass", f"passes: {command}: {decision} {reason}")
+                  "mkdir -p .claude/evidence/x", "git add .claude/lead/board.md", "cp report.txt .claude/evidence/b/",
+                  # a bare settings name outside a Claude folder, the folder named by a non-writer, pipes of readers
+                  "cp config/settings.example.json settings.json", "grep -rn foo .claude/ | head",
+                  "ls .claude/*.json | wc -l", "git add .claude/", "node scripts/x.js --out .claude",
+                  "cat .claude/settings.json | jq .permissions", "git -C . diff .claude/settings.json | head -5"]
+        for cwd in (repo, wt):
+            for command in passes:
+                decision, reason = hook("Bash", {"command": command}, cwd, env)
+                check(decision == "pass", f"passes in {cwd.name}: {command}: {decision} {reason}")
+        decision, reason = hook("Edit", {"file_path": str(wt / ".claude" / "settings.local.json"), **edit}, wt, env)
+        check(decision == "ask", f"the worktree's own settings ask, with the main checkout's kit.json: {decision} {reason}")
+        decision, _ = hook("Edit", {"file_path": str(wt / ".claude" / "settings.local.json"), **edit}, wt, env,
+                           agent_id="a1", agent_type="kit:implementer")
+        check(decision == "deny", f"and a thread there is refused: {decision}")
         decision, _ = hook("Edit", {"file_path": str(repo / ".claude" / "Settings.Local.json"), **edit}, repo, env)
         check(decision == "ask", f"a settings name in another case asks (macOS ignores case): {decision}")
         for path in [repo / "src" / "settings.json", repo / ".vscode" / "settings.json", repo / ".claude" / "kit.json",

@@ -89,6 +89,18 @@ def main():
             assert run(payload("llm.py"), home) != "", f"{other!r} in kit.json: still on"
         kit.write_text("{broken")
         assert run(payload("llm.py"), home) != "", "a broken kit.json does not silence it"
+
+        # kit.json is personal (kept out of git), so a linked worktree has none: the main checkout's applies
+        kit.write_text(json.dumps({"llm": "off"}))
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.org", "-C", str(repo)]
+        subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", "base"], check=True)
+        wt = tmp / "wt"
+        subprocess.run(git + ["worktree", "add", "-q", "-b", "feat/x", str(wt)], check=True)
+        (wt / "llm.py").write_text(files["llm.py"])
+        in_wt = dict(payload("llm.py"), cwd=str(wt), tool_input={"file_path": str(wt / "llm.py")})
+        assert run(in_wt, home) == "", "the main checkout's \"llm\": \"off\" silences a worktree without kit.json"
+        kit.unlink()
+        assert run(dict(in_wt, session_id=uuid.uuid4().hex), home) != "", "no kit.json anywhere: on, as everywhere"
     print("llm_detect: all checks passed")
 
 

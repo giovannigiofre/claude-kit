@@ -89,6 +89,30 @@ async function projectRoot($: $): Promise<string> {
   return rootCache
 }
 
+// The project's kit.json: the checkout's own, else its main checkout's. kit.json is personal and
+// kept out of git by default, so a linked worktree has none of its own.
+async function kitJsonPath($: $, root: string): Promise<string> {
+  const own = `${root}/.claude/kit.json`
+  const readable = async (path: string) => {
+    try {
+      await $.fs.read(path)
+      return true
+    } catch {
+      return false
+    }
+  }
+  if (await readable(own)) return own
+  try {
+    const out = await $.process.run(['git', '-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'])
+    const common = out.exitCode === 0 ? out.stdout.trim() : ''
+    const main = common.endsWith('/.git') ? `${common.slice(0, -5)}/.claude/kit.json` : ''
+    if (main && main !== own && (await readable(main))) return main
+  } catch {
+    // no git: the checkout's own path
+  }
+  return own
+}
+
 async function readJson($: $, path: string): Promise<any> {
   try {
     return JSON.parse(await $.fs.read(path))
@@ -126,7 +150,7 @@ async function getMode($: $, root: string): Promise<KitMode> {
   const user = await userKit($)
   if (user && (user.mode === 'loop' || user.mode === 'light')) return user.mode
   // a project that opted into the kit talks to the coordinator unless someone chose otherwise
-  return (await readJson($, `${root}/.claude/kit.json`)) !== undefined ? 'loop' : 'light'
+  return (await readJson($, await kitJsonPath($, root))) !== undefined ? 'loop' : 'light'
 }
 
 async function setMode($: $, root: string, mode: KitMode): Promise<string> {
@@ -267,7 +291,7 @@ function countBoard(text: string): BoardCounts {
 // The board from kit.json `lead.board` or the default path: null when there is no board,
 // undefined when it (or kit.json) exists but could not be read this time.
 async function readBoard($: $, root: string): Promise<BoardCounts | null | undefined> {
-  const kitJson = await readJsonForWrite($, `${root}/.claude/kit.json`)
+  const kitJson = await readJsonForWrite($, await kitJsonPath($, root))
   if (kitJson.isBroken) return undefined
   const lead = kitJson.value.lead
   const boardPath = (lead && lead.board) || '.claude/lead/board.md'
@@ -440,7 +464,7 @@ async function nameOf($: $, id: string): Promise<string> {
 
 async function watchTick($: $): Promise<void> {
   const now = await $.clock.now()
-  const w = watchConfig(await readJson($, `${await projectRoot($)}/.claude/kit.json`))
+  const w = watchConfig(await readJson($, await kitJsonPath($, await projectRoot($))))
   const agents = await $.agent.list()
   const threads: Thread[] = []
   for (const a of agents as any[]) {

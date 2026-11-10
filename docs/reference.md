@@ -2,7 +2,13 @@
 
 ## `.claude/kit.json`
 
-Committed with the project; `/kit:init` writes it from what the repo and its CI run.
+`/kit:init` writes it from what the repo and its CI run. It is personal by default: init adds
+`/.claude/kit.json` to the repo's `.git/info/exclude` (never the shared `.gitignore`), and the
+user may choose to commit it instead, so every clone gets the same gates. Every reader (the hooks,
+the mod, `gate.py`, the overnight runner, kit-llm) takes a checkout's own kit.json, else its main
+checkout's, so a linked worktree, which has no copy of an excluded file, runs with the main
+checkout's; with neither the kit stays off. The owner's personal choices that are never shared
+(the unattended git steps) live in `.claude/kit.local.json` beside it.
 
 ```json
 {
@@ -381,10 +387,14 @@ writes a broader read-only allowlist to project settings if you want one.
 `settings_guard.py` (PreToolUse: Write, Edit, MultiEdit, NotebookEdit, Bash, Monitor) answers
 `ask` in every permission mode for a change to a Claude Code settings file: `settings*.json` in
 any `.claude` folder or in `CLAUDE_CONFIG_DIR`, and the managed settings, in any case. Like
-every kit hook it acts only in a project with kit.json. A shell command counts when it names one,
-or a Claude folder itself (`git checkout -- .claude/`, `cp -r x .claude/`, `rsync … ~/.claude/`,
-a glob such as `.claude/*.json`), quotes and backslashes inside the name included, and is not a
-single plain read (`cat`, `grep`, `jq`, `git diff`, … with no redirection, pipe or chain). The
+every kit hook it acts only in a project with kit.json (a worktree's, else its main checkout's).
+A shell command counts when it names one, quotes and backslashes inside the name included, and is
+not a plain read (`cat`, `grep`, `jq`, `git diff`, …, alone or piped into one another, with no
+redirection or chain). A bare `settings.json` counts only in a Claude folder: the cwd is one, the
+command `cd`s into one, or it writes and names one; a thread's worktree below
+`.claude/worktrees/` is not one. A Claude folder itself counts only for a command that writes into
+it (`git checkout -- .claude/`, `cp -r x .claude/`, `rsync … ~/.claude/`, a redirection, `mv x
+.claude/settings*`); `git add .claude/` or `grep -rn x .claude/ | head` pass. The
 prompt's reason starts «Sovrascrittura dei settings di Claude Code:», then the file (home as `~`)
 and the change in Italian, within 220 characters. From a subagent the answer is `deny`, since
 nobody sees a background thread's prompt; Claude Code's `statusline-setup`, which runs in the

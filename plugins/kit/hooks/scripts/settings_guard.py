@@ -15,8 +15,9 @@ a project with .claude/kit.json, like every kit hook. Standard library only.
 
 Settings files: settings*.json, in any case, in any `.claude` directory (the user's, a repo's, a
 worktree's) or in CLAUDE_CONFIG_DIR, and the managed settings (managed-settings.json, or anything
-in its folder). A shell command naming a Claude folder itself (`.claude/`, `~/.claude`, a glob in
-one) counts too.
+in its folder). A shell command that writes (cp, mv, rsync, tee, ln, a redirection, git checkout
+or restore...) into a Claude folder itself (`.claude/`, `~/.claude`, a glob in one) counts too; a
+read, or a pipeline of plain readers, never does.
 """
 
 import difflib
@@ -40,8 +41,69 @@ TOKEN = re.compile(r"[^\s'\"`;&|<>()]*(?:managed-settings|settings[\w.*?\[\]-]*)
 FOLDER = re.compile(r"(?:(?<=[\s'\"=])|^)((?:[^\s'\"`;&|<>()]*/)?\.claude/?|\$\{?CLAUDE_CONFIG_DIR\}?/?"
                     r"|(?:[^\s'\"`;&|<>()]*/)?\.claude/[^\s'\"`;&|<>()/]*[*?\[][^\s'\"`;&|<>()/]*)(?=$|[\s'\"`;&|<>()])",
                     re.I)
-READERS = {"cat", "head", "tail", "less", "more", "grep", "rg", "wc", "ls", "stat", "file", "diff", "jq", "bat"}
+# plain readers (not sort or uniq, which can write an output file)
+READERS = {"cat", "head", "tail", "less", "more", "grep", "rg", "wc", "ls", "stat", "file", "diff", "jq", "bat",
+           "cut", "tr", "nl"}
 GIT_READERS = {"diff", "log", "show", "status", "blame"}
+# commands that write files: a Claude folder named by one of these counts as a target
+WRITERS = {"cp", "mv", "rsync", "tee", "ln", "install", "rm", "rmdir", "unlink", "truncate", "touch", "dd", "tar",
+           "unzip", "patch", "ditto", "scp"}
+GIT_WRITERS = {"checkout", "restore", "stash", "reset", "apply", "am", "mv", "rm", "clean", "switch", "merge", "pull",
+               "rebase", "cherry-pick", "revert"}
+WRAPPERS = {"sudo", "command", "env", "nohup", "time", "xargs", "exec"}
+HARMLESS = re.compile(r"\s*(?:[0-9]*>>?|&>)\s*/dev/null|\s*[0-9]*>&[0-9]")  # 2>&1, >/dev/null
+SEGMENTS = re.compile(r"\|\||&&|[;|&\n]")
+# `cd .claude`, `pushd ~/.claude/`, `cd "$CLAUDE_CONFIG_DIR"`: a bare settings name after it is in a Claude folder
+CD_CLAUDE = re.compile(r"(?:^|[;&|(]|\s)(?:cd|pushd)\s+['\"]?(?:[^\s'\";&|]*/)?(?:\.claude|\$\{?CLAUDE_CONFIG_DIR\}?)/?['\"]?"
+                       r"(?=$|[\s;&|)])", re.I)
+
+
+def _argv(segment):
+    """The words of one simple command, wrappers (`sudo`, `env X=1`, `xargs -0`) and assignments skipped."""
+    words = shlex.split(segment)
+    while words and (words[0] in WRAPPERS or re.fullmatch(r"\w+=.*", words[0]) or
+                     (words[0].startswith("-") and len(words) > 1)):
+        words = words[1:]
+    return words
+
+
+def _git_sub(argv):
+    rest, skip = argv[1:], False
+    for word in rest:
+        if skip:
+            skip = False
+        elif word in ("-C", "-c", "--git-dir", "--work-tree"):
+            skip = True
+        elif not word.startswith("-"):
+            return word
+    return ""
+
+
+def writes(command):
+    """True when the command may write a file: a redirection, or a writer (cp, mv, rsync, tee, ln,
+    rm, sed -i, find -delete/-exec, git checkout/restore/stash/...) in any of its parts."""
+    text = HARMLESS.sub(" ", command)
+    if ">" in text or "`" in text or "$(" in text:
+        return True
+    for segment in SEGMENTS.split(text):
+        try:
+            argv = _argv(segment)
+        except ValueError:
+            return True  # unbalanced quotes: cannot tell, so it may write
+        if not argv:
+            continue
+        name = os.path.basename(argv[0])
+        if name in WRITERS:
+            return True
+        if name in ("sed", "perl", "ruby") and any(a.startswith("-i") or a == "--in-place" for a in argv[1:]):
+            return True
+        if name == "find" and any(a in ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint") for a in argv[1:]):
+            return True
+        if name == "git" and _git_sub(argv) in GIT_WRITERS:
+            return True
+    return False
+
+
 # Subagents that run in the foreground, where the owner sees the prompt (the hook input does not
 # say whether an agent runs in the background): Claude Code's statusline-setup edits
 # ~/.claude/settings.json by design. Every other subagent (the kit's threads, background agents) is refused.
@@ -74,40 +136,48 @@ def is_settings(path, cwd):
 
 
 def read_only(command):
-    """A single plain read of a file: no redirection, pipe, chain or substitution."""
-    text = re.sub(r"\s2>(?:&1|/dev/null)", " ", command)
-    if any(ch in text for ch in "><|;&`\n") or "$(" in text:
+    """Plain reads only: one reader, or a pipeline of readers (`cat x | jq .`), with no
+    redirection, chain or substitution."""
+    text = HARMLESS.sub(" ", command)
+    if any(ch in text for ch in "><;&`\n") or "$(" in text:
         return False
-    try:
-        argv = shlex.split(text)
-    except ValueError:
-        return False
-    if not argv:
-        return False
-    if argv[0] == "git":
-        rest = [a for a in argv[1:] if not a.startswith("-")]
-        return bool(rest) and rest[0] in GIT_READERS
-    return argv[0] in READERS
+    for segment in text.split("|"):
+        try:
+            argv = shlex.split(segment)
+        except ValueError:
+            return False
+        if not argv:
+            return False
+        if argv[0] == "git":
+            if _git_sub(argv) not in GIT_READERS:
+                return False
+        elif argv[0] not in READERS:
+            return False
+    return True
 
 
 def command_targets(command, cwd):
-    """The settings files, or Claude folders, a shell command names, unless it only reads them.
-    Quotes and backslashes inside a name (`.claude/'settings'.json`, `settings\\.json`) are seen
-    through, and names match in any case."""
-    found = []
+    """The settings files, or Claude folders, a shell command changes. Quotes and backslashes inside
+    a name (`.claude/'settings'.json`, `settings\\.json`) are seen through, and names match in any
+    case. A bare `settings.json` counts when it is in a Claude folder: the cwd is one, the command
+    `cd`s into one, or it writes and names one (`find .claude -name settings.json -delete`); a
+    worktree below `.claude/worktrees/` is not one. A Claude folder itself counts only for a
+    command that writes. A plain read, or a pipeline of plain readers, changes nothing."""
+    files, folders = [], []
     plain = re.sub(r"\$'|[\\'\"]", "", command)
-    in_claude = any(".claude" in c.lower() or "claude_config_dir" in c.lower() for c in (command, plain)) \
-        or ".claude" in [part.lower() for part in Path(cwd or ".").parts]
+    writer = writes(command)
+    into = any(CD_CLAUDE.search(c) for c in (command, plain)) or \
+        (writer and any(".claude" in c.lower() or "claude_config_dir" in c.lower() for c in (command, plain)))
     for text in (command, plain):
         for token in TOKEN.findall(text):
             bare = "/" not in token and "~" not in token and "$" not in token
-            if is_settings(token, cwd) or (bare and in_claude):
-                found.append(token)
-        found += FOLDER.findall(text)
-    found = list(dict.fromkeys(found))
-    if found and read_only(command):
-        return []
-    return found
+            if is_settings(token, cwd) or (bare and into):
+                files.append(token)
+        if writer:
+            folders += FOLDER.findall(text)
+    if files and read_only(command):
+        files = []
+    return list(dict.fromkeys(files + folders))
 
 
 MAX_REASON = 220  # Claude Code's permission prompt shows it whole: keep it to two short lines
@@ -149,12 +219,10 @@ def summary(tool, inp, path):
 
 
 def opted_in(cwd):
-    """Like every kit hook, this one acts only in a project with .claude/kit.json (a broken one counts)."""
+    """Like every kit hook, this one acts only in a project with .claude/kit.json, the worktree's or
+    its main checkout's (a broken one counts)."""
     root = kitlib.git_root(cwd) or Path(cwd)  # the session's own checkout, never this process's cwd
-    for r in dict.fromkeys([root, kitlib.main_checkout(root) or root]):
-        if (Path(r) / ".claude" / "kit.json").is_file():
-            return True
-    return False
+    return kitlib.config_file(root).is_file()
 
 
 def decide(data):
