@@ -19,8 +19,14 @@ answers a permission prompt, and a thread or you waiting on one waits for hours.
    `.claude/settings.json` or `settings.local.json`). Claude Code checks deny and ask before
    allow, so an allow rule cannot override one: the user changes that rule. It also stays `ask`
    while no allow rule covers the step: the user adds the rule the note names to
-   `.claude/settings.local.json`. Tell the user the exact rule and file. Never edit permission
-   settings yourself, and brief the line exactly as the command prints it.
+   `.claude/settings.local.json`. Tell the user the exact rule and file, and brief the line
+   exactly as the command prints it. The command also prints a PROPOSAL with a diff per file.
+   Apply it only when the user asks you to: ask with AskUserQuestion, the question naming the
+   file and the change (a committed file reaches every contributor), the diff in an option's
+   `preview`, options «Applica la modifica ai settings» and «Non applicare». On «Applica» make an
+   ordinary Edit per file; the kit's hook turns it into Claude Code's own Yes/No prompt headed
+   «Sovrascrittura dei settings di Claude Code:». The user approves twice with buttons and types
+   nothing, or edits the file by hand. Never edit settings unasked; a thread's edit is refused.
 4. **Brief every thread of the run with the `UNATTENDED:` line**, and SendMessage it to threads
    already working. A thread does not run a step set to `ask`: it commits and hands back `needs
    push` (or rebase, merge). The same holds for your own commands. Put what waits under NEEDS

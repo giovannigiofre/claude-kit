@@ -30,6 +30,8 @@ rebase=.. merge=..`, saying when they are not set yet; with arguments it saves t
 checkout's gitignored .claude/kit.local.json (kitlib.unattended_prefs). The line carries the
 effective value: a saved `allow` prints as `ask`, with the file and rule to change, while a deny or
 ask rule in any settings scope matches the step or no allow rule covers it (kitlib.unattended_effective).
+It then prints a PROPOSAL, the settings change per file as a JSON diff, which it never applies
+(kitlib.unattended_proposal).
 """
 
 import json
@@ -309,6 +311,20 @@ def main(argv=None):
         for k in kitlib.UNATTENDED_STEPS:
             if k in notes:
                 print(notes[k])
+        proposal = kitlib.unattended_proposal(root)
+        if proposal:
+            print("PROPOSAL, not applied: this command never writes settings. Only when the owner asks, the "
+                  "coordinator shows this diff and makes it with one Edit per file, which Claude Code asks the owner "
+                  "to approve; the owner can also edit the file by hand.")
+            for p in proposal:
+                what = [f'remove "{r}" from permissions.{b}' for b, r in p["remove"]]
+                what += [f'add "{r}" to permissions.allow' for r in p["add"]]
+                print(f"- {p['file']}" + (" (committed: the change reaches everyone who works in this repo)"
+                                          if p["committed"] else "") + ": " + "; ".join(what))
+                for r in p["broad"]:
+                    print(f'  "{r}" also asks for other commands: removing it drops that prompt too; '
+                          f"a narrower rule may be what the owner wants")
+                print(p["diff"])
         return 0
     if cmd in ("log", "report", "verdict", "done", "show", "path"):
         if not rest:

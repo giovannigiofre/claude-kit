@@ -209,9 +209,12 @@ project.
   evening: a permission prompt becomes a denial and the work goes on; `off` removes it. Whether
   threads may push, rebase and merge while you are away is a per-repo choice the coordinator asks
   once, at the first unattended run, and keeps in the repo's gitignored `.claude/kit.local.json`
-  (`ask` until you say otherwise). For `allow`, the kit names the permission rule and you add it.
-  It also tells you when an ask or deny rule elsewhere, such as a committed `Bash(git push*)` ask,
-  keeps the step at `ask`, because an allow rule cannot override one.
+  (`ask` until you say otherwise). For `allow`, the kit names the permission rule to add, and
+  any ask or deny rule elsewhere, such as a committed `Bash(git push*)` ask, that keeps the step
+  at `ask` because an allow rule cannot override one. It shows the change as a diff; you edit the
+  file, or ask the coordinator to, and approve its edit with two buttons. Any change to a Claude
+  Code settings file asks you in Claude Code's own prompt, headed «Sovrascrittura dei settings di
+  Claude Code:», in every mode, and a background thread's is refused.
   Not for a
   kit project: `permissions.blockWritesOutsideWorkingDirectories`, which refuses a thread's edits
   in another repo and removes the worktree tools.

@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Self-check for settings_guard.py: changing a Claude Code settings file always asks (never
+allows), is refused from a subagent, and other files and plain reads pass untouched.
+
+Run: python3 plugins/kit/hooks/tests/test_settings_guard.py   (exit 0 = all good)
+"""
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+LABEL = "Sovrascrittura dei settings di Claude Code:"
+
+
+def shown(path, home):
+    text = str(path)
+    return "~" + text[len(str(home)):] if text.startswith(str(home) + os.sep) else text
+
+
+def hook(tool, tool_input, cwd, env, agent_id=None, raw=None):
+    payload = {"tool_name": tool, "tool_input": tool_input, "cwd": str(cwd), "session_id": "s",
+               "hook_event_name": "PreToolUse", "permission_mode": "acceptEdits"}
+    if agent_id:
+        payload["agent_id"] = agent_id
+    out = subprocess.run([sys.executable, str(SCRIPTS / "settings_guard.py")],
+                         input=raw if raw is not None else json.dumps(payload),
+                         capture_output=True, text=True, timeout=30, env=env)
+    if out.returncode != 0:
+        return "error", out.stderr
+    if not out.stdout.strip():
+        return "pass", ""
+    spec = json.loads(out.stdout)["hookSpecificOutput"]
+    return spec["permissionDecision"], spec["permissionDecisionReason"]
+
+
+def main():
+    failed = 0
+
+    def check(cond, msg):
+        nonlocal failed
+        if not cond:
+            failed += 1
+            print("FAIL " + str(msg))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp).resolve()
+        home = tmp / "home"
+        (home / ".claude").mkdir(parents=True)
+        config = tmp / "config"
+        config.mkdir()
+        env = dict(os.environ, HOME=str(home), CLAUDE_CONFIG_DIR=str(config))
+        repo = tmp / "repo"
+        (repo / ".claude").mkdir(parents=True)
+        shared = repo / ".claude" / "settings.json"
+        shared.write_text(json.dumps({"permissions": {"ask": ["Bash(git push*)"]}}, indent=2) + "\n")
+        local = repo / ".claude" / "settings.local.json"
+        user = home / ".claude" / "settings.json"
+        files = [shared, local, user, config / "settings.json", home / ".claude" / "settings.local.json",
+                 repo / ".claude" / "worktrees" / "a1" / ".claude" / "settings.json"]
+        edit = {"old_string": '"Bash(git push*)"', "new_string": ""}
+        for f in files:
+            for tool, inp in [("Edit", {"file_path": str(f), **edit}),
+                              ("MultiEdit", {"file_path": str(f), "edits": [edit, edit]}),
+                              ("Write", {"file_path": str(f), "content": "{}\n"}),
+                              ("NotebookEdit", {"notebook_path": str(f), "new_source": "x"})]:
+                decision, reason = hook(tool, inp, repo, env)
+                check(decision == "ask" and reason.startswith(LABEL) and shown(f, home) in reason and len(reason) <= 220,
+                      f"{tool} {f}: asks, labelled, names the file, short enough for the prompt: {decision} {reason}")
+        decision, reason = hook("Edit", {"file_path": ".claude/settings.json", **edit}, repo, env)
+        check(decision == "ask" and "«\"Bash(git push*)\"»" in reason and str(shared) in reason,
+              f"a relative path resolves, and the reason says what changes: {reason}")
+        long_edit = {"old_string": "x" * 500, "new_string": "y" * 500}
+        decision, reason = hook("Edit", {"file_path": str(shared), **long_edit}, repo, env)
+        check(decision == "ask" and len(reason) <= 220 and reason.endswith("Approva solo se l'hai chiesta tu."),
+              f"a long change is cut to fit the prompt: {len(reason)} {reason}")
+        decision, reason = hook("Write", {"file_path": str(shared), "content": "{}\n"}, repo, env)
+        check(decision == "ask" and "riscrive l'intero file (+1/-7 righe)" in reason, f"a rewrite counts the lines: {reason}")
+        decision, reason = hook("Edit", {"file_path": "~/.claude/settings.json", **edit}, repo, env)
+        check(decision == "ask" and ": sostituisce" in reason and "~/.claude/settings.json:" in reason, f"~ expands, shown as ~: {reason}")
+
+        # from a subagent (a background thread) it is refused outright
+        for tool, inp in [("Edit", {"file_path": str(local), **edit}),
+                          ("Bash", {"command": f"echo '{{}}' > {local}"})]:
+            decision, reason = hook(tool, inp, repo, env, agent_id="a123")
+            check(decision == "deny" and reason.startswith(LABEL) and "subagent" in reason,
+                  f"{tool} from a subagent is denied: {decision} {reason}")
+
+        # shell commands that change one ask; plain reads and other files pass
+        asks = [f"echo '{{}}' > {shared}", f"sed -i '' 's/ask/allow/' {shared}", f"cp /tmp/x.json {local}",
+                "jq '.permissions.ask=[]' .claude/settings.json > /tmp/s && mv /tmp/s .claude/settings.json",
+                f"python3 -c \"open('{user}','w').write('{{}}')\"", "cd .claude && rm settings.local.json",
+                "tee ~/.claude/settings.json < /tmp/x", "git checkout -- .claude/settings.json",
+                f"cat {shared} | python3 -c 'import sys'", "echo {} > $CLAUDE_CONFIG_DIR/settings.json",
+                "rm /Library/Application\\ Support/ClaudeCode/managed-settings.json"]
+        for command in asks:
+            decision, reason = hook("Bash", {"command": command}, repo, env)
+            check(decision == "ask" and reason.startswith(LABEL) and "comando" in reason and len(reason) <= 220,
+                  f"asks: {command}: {decision} {reason}")
+        decision, _ = hook("Monitor", {"command": f"echo x >> {local}"}, repo, env)
+        check(decision == "ask", f"Monitor's command too: {decision}")
+        passes = [f"cat {shared}", "git diff .claude/settings.json", "jq .permissions .claude/settings.json 2>/dev/null",
+                  "grep -n ask .claude/settings.local.json", "echo x > .vscode/settings.json", "npm test",
+                  "git push origin feature", f"cat {repo}/.vscode/settings.json"]
+        for command in passes:
+            decision, reason = hook("Bash", {"command": command}, repo, env)
+            check(decision == "pass", f"passes: {command}: {decision} {reason}")
+        for path in [repo / "src" / "settings.json", repo / ".vscode" / "settings.json", repo / ".claude" / "kit.json",
+                     repo / ".claude" / "kit.local.json", repo / "README.md"]:
+            decision, reason = hook("Edit", {"file_path": str(path), **edit}, repo, env)
+            check(decision == "pass", f"another file passes: {path}: {decision} {reason}")
+        decision, _ = hook("Read", {"file_path": str(shared)}, repo, env)
+        check(decision == "pass", "a Read is not this hook's business")
+
+        # any error asks; nothing ever comes back as allow
+        decision, reason = hook("Edit", {}, repo, env, raw="{not json")
+        check(decision == "ask" and reason.startswith(LABEL), f"a broken input asks: {decision} {reason}")
+        decision, reason = hook("Edit", {}, repo, env, raw='{"tool_name": "Edit", "tool_input": {"file_path": 5}}')
+        check(decision in ("ask", "pass") and decision != "allow", f"a strange input never allows: {decision}")
+        source = (SCRIPTS / "settings_guard.py").read_text()
+        check('"allow"' not in source.split('"""', 2)[2], "the hook has no allow answer at all")
+
+        # permission.py never allows a command that changes a settings file, even the kit's own script
+        (repo / ".claude" / "kit.json").write_text(json.dumps({"check": f"cp /tmp/x {local}"}))
+        sys.path.insert(0, str(SCRIPTS))
+        import permission  # noqa: E402
+        check(not permission.allowed(f"cp /tmp/x {local}", {"check": f"cp /tmp/x {local}"}, str(repo)),
+              "permission.py does not allow a gate command that writes settings")
+        check(permission.allowed("make lint", {"check": "make lint"}, str(repo)), "permission.py still allows the gate")
+
+    print("settings_guard: all checks passed" if not failed else f"settings_guard: {failed} failures")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

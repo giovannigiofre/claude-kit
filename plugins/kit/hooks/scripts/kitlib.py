@@ -4,6 +4,8 @@ Every hook is a no-op unless the project has `.claude/kit.json` (see the README 
 so installing the plugin at user scope never changes behaviour in a project that has not opted in.
 """
 
+import difflib
+import fnmatch
 import json
 import os
 import re
@@ -100,7 +102,8 @@ def main_checkout(cwd):
 UNATTENDED_STEPS = ("push", "rebase", "merge")
 LOCAL_CONFIG = ".claude/kit.local.json"
 # What `allow` needs so the step runs without a prompt: the owner adds these to the repo's
-# .claude/settings.local.json `permissions.allow` himself; the kit never edits permission settings.
+# .claude/settings.local.json `permissions.allow`, by hand or by approving the coordinator's Edit
+# of the PROPOSAL (unattended_proposal); the kit's code never writes them (settings_guard.py).
 UNATTENDED_RULES = {"push": ["Bash(git push:*)"], "rebase": ["Bash(git rebase:*)"],
                     "merge": ["Bash(gh pr merge:*)", "Bash(git merge:*)"]}
 
@@ -137,18 +140,26 @@ def save_unattended(cwd, changes):
 # Commands a thread runs for each step, to test the permission rules against. Claude Code checks
 # deny, then ask, then allow, and the first that matches wins in every scope: an ask rule anywhere
 # (a committed settings.json, the user's) beats an allow rule in settings.local.json.
-UNATTENDED_PROBES = {"push": ["git push", "git push -u origin feature-branch"],
+# The forms the kit itself prescribes count too: threads force-push with --force-with-lease and
+# push with -u (implementer.md), the lead merges with --squash --delete-branch (lead SKILL.md).
+UNATTENDED_PROBES = {"push": ["git push", "git push -u origin feature-branch", "git push --force-with-lease",
+                              "git push --force-with-lease origin feature-branch",
+                              "git push -u --force-with-lease origin feature-branch"],
                      "rebase": ["git rebase origin/main"],
-                     "merge": ["gh pr merge 12 --squash", "git merge origin/main"]}
+                     "merge": ["gh pr merge 12 --squash", "gh pr merge 12 --squash --delete-branch",
+                               "gh pr merge --squash --delete-branch", "git merge origin/main"]}
 
 
 def bash_rule_matches(rule, command):
     """True when permission rule `rule` (`Bash`, `Bash(*)`, `Bash(git push:*)`, `Bash(git push *)`,
-    `Bash(git push*)`, an exact `Bash(git status)`) covers `command`."""
-    m = re.fullmatch(r"\s*Bash\s*(?:\((.*)\))?\s*", str(rule), re.S)
+    `Bash(git push*)`, an exact `Bash(git status)`, or a tool-name glob such as `*`) covers `command`."""
+    m = re.fullmatch(r"\s*([^\s()]+)\s*(?:\((.*)\))?\s*", str(rule), re.S)
     if not m:
         return False
-    spec = (m.group(1) or "").strip()
+    tool = m.group(1)
+    if tool != "Bash" and not ("*" in tool and fnmatch.fnmatchcase("Bash", tool)):
+        return False
+    spec = (m.group(2) or "").strip()
     if spec in ("", "*"):
         return True
     if spec.endswith(":*"):
@@ -176,10 +187,40 @@ def permission_files(cwd):
             root / ".claude" / "settings.json", root / ".claude" / "settings.local.json"]
 
 
-def unattended_effective(cwd):
-    """(effective, notes): a step is `allow` only when the owner chose allow, no deny or ask rule in
-    any scope matches its commands, and an allow rule covers every one of them; otherwise `ask`,
-    with a note per allow-step saying what keeps it at ask and which file and rule to change."""
+def _guard_rules(cwd):
+    """The kit guard's own project rules (kit.json guard.denyCommands / askCommands, a regex over the
+    command) as [(behavior, pattern, where, matches)]: a PreToolUse ask or deny there wins over
+    any allow rule too. A command the guard's allowCommands lets through is not matched."""
+    root = Path(main_checkout(cwd) or cwd)
+    try:
+        import guard  # imported here: guard imports this module
+        active, opts = guard.settings(root)
+    except Exception:
+        return []
+    if not active:
+        return []
+    project, _ = load_config(root)
+    source = root / ".claude" / "kit.json" if isinstance(project, dict) and isinstance(project.get("guard"), dict) \
+        else Path.home() / ".claude" / "kit.json"
+    out = []
+    for behavior, key in (("deny", "denyCommands"), ("ask", "askCommands")):
+        for rule in opts.get(key) or []:
+            pattern = rule.get("pattern") if isinstance(rule, dict) else rule
+            if not pattern:
+                continue
+
+            def hit(command, pattern=str(pattern)):
+                try:
+                    return not guard.allowed(command, opts) and re.search(pattern, command) is not None
+                except re.error:
+                    return False
+            out.append((behavior, str(pattern), f"{source} guard.{key}", hit))
+    return out
+
+
+def _unattended_steps(cwd):
+    """(files, unreadable, steps): for each step the owner set to allow, the deny and ask rules that
+    match its commands as [(behavior, rule, file)], and whether allow rules cover all of them."""
     prefs, _, _ = unattended_prefs(cwd)
     files = permission_files(cwd)
     rules, unreadable = [], []
@@ -193,32 +234,106 @@ def unattended_effective(cwd):
             listed = perms.get(behavior)
             for r in listed if isinstance(listed, list) else []:
                 rules.append((behavior, str(r), f))
-    effective, notes = {}, {}
+    allows = [r for (b, r, _) in rules if b == "allow"]
+    guard_rules = _guard_rules(cwd)
+    steps = {}
     for step in UNATTENDED_STEPS:
-        effective[step] = "ask"
         if prefs[step] != "allow":
             continue
         probes = UNATTENDED_PROBES[step]
-        blocked = [(r, f) for (b, r, f) in rules
-                   if b in ("deny", "ask") and any(bash_rule_matches(r, p) for p in probes)]
-        allows = [r for (b, r, _) in rules if b == "allow"]
-        covered = all(any(bash_rule_matches(r, p) for r in allows) for p in probes)
+        found = [(b, r, f, [p for p in probes if bash_rule_matches(r, p)]) for (b, r, f) in rules if b in ("deny", "ask")]
+        found += [(b, pattern, where, [p for p in probes if hit(p)]) for (b, pattern, where, hit) in guard_rules]
+        found = [x for x in found if x[3]]
+        denied = {p for (b, _, _, forms) in found if b == "deny" for p in forms}
+        # a deny refuses at once, without a prompt, so nothing waits on it: it keeps the step at ask
+        # only when it refuses every form; otherwise those forms are named and the thread hands them back
+        refused = [(r, f, forms) for (b, r, f, forms) in found if b == "deny"] if len(denied) < len(probes) else []
+        blocked = [(b, r, f) for (b, r, f, _) in found if b == "ask" or not refused]
+        covered = all(any(bash_rule_matches(r, p) for r in allows) for p in probes if p not in denied)
+        steps[step] = (blocked, covered, refused)
+    return files, unreadable, steps
+
+
+def unattended_effective(cwd):
+    """(effective, notes): a step is `allow` only when the owner chose allow, no deny or ask rule in
+    any scope matches its commands, and an allow rule covers every one of them; otherwise `ask`,
+    with a note per allow-step saying what keeps it at ask and which file and rule to change."""
+    files, unreadable, steps = _unattended_steps(cwd)
+    effective, notes = {k: "ask" for k in UNATTENDED_STEPS}, {}
+    for step, (blocked, covered, refused) in steps.items():
         if unreadable:
             notes[step] = (f"{step}: allow saved, but it stays ask: {', '.join(map(str, unreadable))} does not parse, "
                            f"so its rules are unknown; fix it first.")
         elif blocked:
-            which = "; ".join(f'"{r}" in {f}' for r, f in blocked)
-            notes[step] = (f"{step}: allow saved, but it stays ask: {which} matches, and Claude Code checks deny and "
-                           f"ask rules before allow ones in every scope, so an allow rule in settings.local.json "
-                           f"cannot override it. The owner changes that rule, or {step} waits for them.")
+            which = "; ".join(f'{b} rule "{r}" in {f}' for b, r, f in blocked)
+            notes[step] = (f"{step}: allow saved, but it stays ask: {which} matches, and deny and ask answers come "
+                           f"before allow ones (Claude Code's rules in every scope, and the kit guard's), so an allow "
+                           f"rule in settings.local.json cannot override it. The owner changes that rule, or {step} "
+                           f"waits for them.")
         elif not covered:
-            local = files[-1]
             notes[step] = (f"{step}: allow saved, but it stays ask until the owner adds "
                            + ", ".join(f'"{r}"' for r in UNATTENDED_RULES[step])
-                           + f" to {local} permissions.allow (the kit does not edit permission settings).")
+                           + f" to {files[-1]} permissions.allow.")
         else:
             effective[step] = "allow"
+            if refused:
+                notes[step] = (f"{step}: allow, but " + "; ".join(f'deny rule "{r}" in {f} refuses {", ".join(forms)}'
+                                                                 for r, f, forms in refused)
+                               + " outright (no prompt, so nothing waits): a thread hands that form back.")
     return effective, notes
+
+
+# Commands outside the steps: a blocking rule that matches one of these asks for more than the step.
+OTHER_COMMANDS = ["git reset --hard HEAD", "git status", "rm -rf build"]
+
+
+def unattended_proposal(cwd):
+    """The settings changes that would make every saved `allow` effective, for the owner to approve:
+    [{"file", "committed", "remove": [(behavior, rule)], "add": [rule], "broad": [rule], "diff"}].
+    Nothing is written here: the coordinator applies one only when the owner asks, with an Edit the
+    owner approves in Claude Code's prompt (settings_guard.py asks for it). Empty while a settings
+    file does not parse. Deny rules are never proposed for removal, and a kit.json guard rule is
+    only named in the note: both stay the owner's to change by hand."""
+    files, unreadable, steps = _unattended_steps(cwd)
+    if unreadable:
+        return []
+    changes = {}
+    for step, (blocked, covered, _) in steps.items():
+        for b, r, f in blocked:
+            if b == "deny":  # a deny is a project's hard line: never proposed for removal
+                continue
+            entry = changes.setdefault(f, {"remove": [], "add": []})
+            if (b, r) not in entry["remove"]:
+                entry["remove"].append((b, r))
+        if not covered:
+            entry = changes.setdefault(files[-1], {"remove": [], "add": []})
+            entry["add"] += [r for r in UNATTENDED_RULES[step] if r not in entry["add"]]
+    root = Path(main_checkout(cwd) or cwd)
+    out = []
+    for f in files:
+        if f not in changes:
+            continue
+        old, _ = read_json(f)
+        perms = dict(old.get("permissions") or {}) if isinstance(old.get("permissions"), dict) else {}
+        for b, r in changes[f]["remove"]:
+            perms[b] = [x for x in perms.get(b, []) if str(x) != r]
+        add = [r for r in changes[f]["add"] if r not in (perms.get("allow") or [])]
+        if add:
+            perms["allow"] = list(perms.get("allow") or []) + add
+        new = {**old, "permissions": perms}
+        diff = "\n".join(difflib.unified_diff(json.dumps(old, indent=2).splitlines(), json.dumps(new, indent=2).splitlines(),
+                                              fromfile=str(f), tofile=str(f), lineterm=""))
+        committed = False
+        try:
+            rel = f.relative_to(root)
+            committed = subprocess.run(["git", "-C", str(root), "ls-files", "--error-unmatch", str(rel)],
+                                       capture_output=True, timeout=10).returncode == 0
+        except (ValueError, OSError, subprocess.SubprocessError):
+            pass
+        broad = [r for _, r in changes[f]["remove"] if any(bash_rule_matches(r, c) for c in OTHER_COMMANDS)]
+        out.append({"file": f, "committed": committed, "remove": changes[f]["remove"], "add": add,
+                    "broad": broad, "diff": diff})
+    return out
 
 
 def exclude(root, rel):

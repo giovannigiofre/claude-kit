@@ -7,7 +7,8 @@ same for the kit's own scripts that read, record or tidy (gate.py, lessons.py, c
 and the coordinator's board tools (items.py, proposals.py), which write only under
 .claude/lead/. Only an exact `check` or `verify`, or one of those scripts by its real path, is
 allowed here; anything else stays with the permission system (and the guard has already had
-its say). Standard library only.
+its say). A command that changes a Claude Code settings file is never allowed here, whatever it
+runs: settings_guard.py has asked the owner about it. Standard library only.
 """
 
 import json
@@ -17,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kitlib  # noqa: E402
+import settings_guard  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parents[2]
 SCRIPTS = {"gate.py", "lessons.py", "compact_logs.py", "items.py", "proposals.py"}
@@ -39,8 +41,10 @@ def own_script(command):
     return resolved.name in SCRIPTS and PLUGIN in resolved.parents
 
 
-def allowed(command, config):
+def allowed(command, config, cwd=None):
     command = command.strip()
+    if settings_guard.command_targets(command, cwd):
+        return False
     gates = {str(config.get(k) or "").strip() for k in ("check", "verify")} - {""}
     return command in gates or own_script(command)
 
@@ -54,7 +58,7 @@ def main():
     if config is None:
         return 0
     command = str((data.get("tool_input") or {}).get("command") or "")
-    if allowed(command, config):
+    if allowed(command, config, data.get("cwd")):
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest",
                                                  "decision": {"behavior": "allow"}}}))
     return 0

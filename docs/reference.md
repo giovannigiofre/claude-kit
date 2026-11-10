@@ -205,12 +205,22 @@ runs it. The line carries the effective value, so a saved `allow` prints as `ask
 naming what to change. Claude Code checks deny, then ask, then allow rules, and the first match
 wins whichever scope it is in. So the command checks the rules in managed settings, the user's
 `~/.claude/settings.json`, and the repo's `.claude/settings.json` and `settings.local.json`
-against the step's commands. A matching deny or ask rule (a committed `Bash(git push*)` ask, say)
+against the step's commands, in the forms the kit prescribes (`git push -u`, `--force-with-lease`,
+`gh pr merge --squash --delete-branch`); a tool-name glob such as `*` counts as matching, and so
+do the kit guard's own `guard.denyCommands` / `askCommands` in kit.json. A matching deny or ask
+rule (a committed `Bash(git push*)` ask, say)
 keeps the step at `ask`: the note names the rule and its file, and says that an allow rule in
 `settings.local.json` cannot override it. With no allow rule covering the step, the note names
 the rules to add to `.claude/settings.local.json` (`Bash(git push:*)`, `Bash(git rebase:*)`,
 `Bash(gh pr merge:*)` and `Bash(git merge:*)`). A settings file that does not parse also keeps
-the step at `ask`. The kit never edits permission settings.
+the step at `ask`. A deny rule refuses without a prompt, so one that refuses only some forms (a
+project that forbids force pushes) is named in the note and the step stays `allow`; one that
+refuses every form keeps it at `ask`. The command then prints a PROPOSAL, never applied by it: per
+settings file, the ask rules to remove (never a deny rule) and the rules to add (to `settings.local.json`),
+a warning when a rule also matches other commands, whether the file is committed, and a diff. The
+coordinator applies it only when the owner asks, after an AskUserQuestion with the diff as a
+preview, through an ordinary Edit that `settings_guard.py` turns into Claude Code's own prompt
+(Permission prompts).
 
 A thread briefed with the BRIEF.md text carries the `ITEM:` line; when it finishes, the hook
 files its report under the item (`reported | done, 2 decision(s), agent <id>` in the LOG); when
@@ -363,9 +373,20 @@ session that has not loaded it) each one still wakes the coordinator.
 
 `permission.py` (PermissionRequest, matcher Bash) allows, without a prompt, a command that is
 exactly kit.json `check` or `verify`, or the kit's own `gate.py`, `lessons.py`, `items.py`,
-`proposals.py` or `compact_logs.py` by their real path. Nothing else is touched: the guard has already judged the
+`proposals.py` or `compact_logs.py` by their real path, unless the command changes a settings
+file (below). Nothing else is touched: the guard has already judged the
 command, and the permission system decides the rest. `/fewer-permission-prompts` (built in)
 writes a broader read-only allowlist to project settings if you want one.
+
+`settings_guard.py` (PreToolUse: Write, Edit, MultiEdit, NotebookEdit, Bash, Monitor) answers
+`ask` in every permission mode for a change to a Claude Code settings file: `settings*.json` in
+any `.claude` folder or in `CLAUDE_CONFIG_DIR`, and the managed settings. A shell command counts
+when it names one and is not a single plain read (`cat`, `grep`, `jq`, `git diff`, … with no
+redirection, pipe or chain). The prompt's reason starts «Sovrascrittura dei settings di Claude
+Code:», then the file (home as `~`) and the change in Italian, within 220 characters. From a
+subagent the answer is `deny`, since nobody sees a thread's prompt. It never answers `allow`; an
+error answers `ask`. It reads shell text, so a path built at run time (from variables, say) is
+not seen.
 
 ## Lessons
 
@@ -591,6 +612,7 @@ python3 plugins/kit/hooks/tests/test_gate.py
 python3 plugins/kit/hooks/tests/test_stop_check.py
 python3 plugins/kit/hooks/tests/test_bash_edits.py
 python3 plugins/kit/hooks/tests/test_permission.py
+python3 plugins/kit/hooks/tests/test_settings_guard.py
 python3 plugins/kit/hooks/tests/test_items.py
 python3 plugins/kit/hooks/tests/test_proposals.py
 python3 plugins/kit/hooks/tests/test_session_start.py
