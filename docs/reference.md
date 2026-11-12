@@ -78,7 +78,12 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
   `gh pr checks --watch`) and names the way out: `run_in_background`, the Monitor tool, the
   completion notice. A Monitor command, a background command, one ended with `&`, a `while read`
   loop, a long Bash `timeout` and a command `allowCommands` names pass; `"waits": false` turns
-  the rule off.
+  the rule off. One rule holds in every repo, with or without `kit.json` and with the guard off:
+  a `kit:verifier` subagent (that agent type only, not another plugin's verifier) may write a
+  memory file (a `MEMORY.md` in any case, anything in an `agent-memory` folder) only inside
+  `<main checkout>/.claude/agent-memory/kit-verifier`, so its pitfalls outlive the worktree. The
+  rule reads redirections, tee, cp/mv/install/ln/rsync, dd, `sed -i`/`perl -i`/truncate and the
+  code given to an interpreter; quoted text and here-document bodies are data, not writes.
 - `watchdog`: the thresholds of the stall watchdog (see [Stalls](#stalls)), in minutes; `0`
   turns that check off, a value that is not a number keeps the default.
 - `learn`: `{"model": false}` keeps the lesson distiller to its no-token passes (see Lessons).

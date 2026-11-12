@@ -43,10 +43,12 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    (not `while read`), gh run watch or gh pr checks --watch; never a Monitor
                    command, one run in the background or ended with &, or one allowCommands
                    names; guard.waits = false turns this rule off
-  memory           the kit verifier writing a memory file (a MEMORY.md, anything in an
-                   agent-memory folder; by redirect, tee, cp/mv/install/ln/rsync, or code
-                   that opens a quoted path) outside <main checkout>/.claude/agent-memory/kit-verifier;
-                   checked in every repo, kit.json or not, since the verifier is the kit's
+  memory           the kit verifier (agent type kit:verifier only) writing a memory file (a
+                   MEMORY.md in any case, anything in an agent-memory folder; by redirect, tee,
+                   cp/mv/install/ln/rsync, dd, sed -i/perl -i/truncate, or interpreter code that
+                   opens a quoted path) outside <main checkout>/.claude/agent-memory/kit-verifier;
+                   quoted text and here-document bodies are data, not writes; checked in every
+                   repo, kit.json or not, guard off too, since the verifier is the kit's
   project          kit.json guard.denyCommands / guard.askCommands: the project's own rules,
                    each {"pattern": "<regex over the command>", "reason": "..."}; /kit:learn
                    writes one when a lesson deserves a check instead of a sentence
@@ -397,11 +399,12 @@ def strip_wrappers(argv):
     return argv
 
 
-def logical_lines(text):
+def logical_lines(text, bodies=None):
     """The command lines of a shell text. A newline inside quotes or $(...) stays in its line (a
     multi-line commit message is one argument), a line ending in && || or | goes on to the next,
     a comment ends at the newline, and the bodies of here-documents opened outside quotes are
-    dropped: they are data, not commands. Inside "...", $(...) and backticks quote afresh."""
+    dropped: they are data, not commands. Inside "...", $(...) and backticks quote afresh.
+    A list passed as `bodies` gets each dropped body as (the line up to its <<, the body)."""
     lines, cur, stack, heredocs, i = [], [], [], [], 0
     while i < len(text):
         ch, top = text[i], stack[-1] if stack else None
@@ -460,7 +463,7 @@ def logical_lines(text):
             m = re.match(r"<<-?[ \t]*([^\s;&|<>()]+)", text[i:])
             word = m and re.sub(r"[\\'\"]", "", m.group(1))
             if word and m.group(1).count("'") % 2 == 0 and m.group(1).count('"') % 2 == 0:
-                heredocs.append(word)  # the shell ends it at the word with its quotes removed
+                heredocs.append((word, "".join(cur)))  # the shell ends it at the word with its quotes removed
                 cur.append(m.group(0))
                 i += len(m.group(0))
                 continue
@@ -473,13 +476,17 @@ def logical_lines(text):
                 lines.append("".join(cur))
                 cur = []
             i += 1
-            for word in heredocs:  # skip each body, up to its closing word
+            for word, opener in heredocs:  # skip each body, up to its closing word
+                body = []
                 while i < len(text):
                     end = text.find("\n", i)
                     end = len(text) if end == -1 else end
                     line, i = text[i:end], end + 1
                     if line.strip() == word:
                         break
+                    body.append(line)
+                if bodies is not None:
+                    bodies.append((opener, "\n".join(body)))
             heredocs = []
             continue
         cur.append(ch)
@@ -1213,50 +1220,99 @@ MEMORY_DIR = Path(".claude") / "agent-memory" / "kit-verifier"
 MEMORY_COPIERS = {"cp", "mv", "install", "ln", "rsync", "ditto"}
 MEMORY_EDITORS = {"sed", "gsed", "perl"}  # in place (-i): the files they name are written
 MEMORY_CODE = re.compile(r"\bopen\s*\(|write_text|write_bytes|writeFile|appendFile|shutil\.(?:copy|move)|\.rename\(")
+MEMORY_PATH = re.compile(r"[\"']([^\"'\s]*(?:memory\.md|agent-memory)[^\"'\s]*)[\"']", re.I)
+INTERPRETER = re.compile(r"(?:python[\d.]*|node(?:js)?|deno|bun|perl|ruby|php)")
+CODE_FLAGS = {"-c", "-e", "-E", "--eval", "-p", "--print", "-r"}
+
+
+def memory_words(command):
+    """What a shell text writes and runs, judged on its words, never on quoted text or the body of a
+    here-document fed to a command that is not a shell or an interpreter: (redirection targets,
+    NAME=value assignments made where a command starts, the code it hands an interpreter)."""
+    targets, env, code, bodies = [], {}, [], []
+    lines = logical_lines(command.replace("\\\n", " "), bodies)
+    for line in lines + [b for line in lines for b in substitutions(line)]:
+        start = True
+        words = tokenize(line)
+        for i, tok in enumerate(words):
+            if ">" in tok and set(tok) <= set("<>&|;()"):  # > >> >| &> &>> <> (and ;> when glued)
+                if i + 1 < len(words):
+                    targets.append(words[i + 1])
+            elif start and (m := ASSIGN.match(tok)):
+                env[m.group(1)] = tok[m.end():]
+                continue
+            elif start and tok == "export":
+                continue
+            start = bool(tok) and set(tok) <= set(";&|()")
+    for seg in segments(command):
+        argv = seg.get("argv") or []
+        if seg.get("nested") or not argv:
+            continue
+        if Path(argv[0]).name in SHELLS and "-c" in argv[1:-1]:
+            more = memory_words(argv[argv.index("-c") + 1])
+            targets, code = targets + more[0], code + more[2]
+            env.update(more[1])
+        elif INTERPRETER.fullmatch(Path(argv[0]).name):
+            code += [argv[i + 1] for i, a in enumerate(argv[:-1]) if a in CODE_FLAGS]
+    for opener, body in bodies:  # a here-document read by a shell is commands, by an interpreter code
+        argv = next((s["argv"] for s in reversed(segments(opener)) if s.get("argv")), [])
+        name = Path(argv[0]).name if argv else ""
+        if name in SHELLS:
+            more = memory_words(body)
+            targets, code = targets + more[0], code + more[2]
+        elif INTERPRETER.fullmatch(name):
+            code.append(body)
+    return targets, env, code
 
 
 def memory_write(command, cwd):
     """For the kit verifier (in every repo): the memory file this command writes outside its one
     memory folder, <main checkout>/.claude/agent-memory/kit-verifier (subagent_start.py names it),
-    else None. A write counts when its target (`>`, `>>`, tee, the destination of cp/mv/install/ln/
-    rsync, dd's of=, a file sed -i/perl -i/truncate names, or a quoted path in code that opens or
-    writes a file: best effort) is a MEMORY.md, lies
-    in an agent-memory folder, or is made after a `cd` into one; plain NAME=value variables are put
-    in, and a target still holding a variable counts as outside. Temp folders are left alone (fixtures)."""
-    if "MEMORY.md" not in command and "agent-memory" not in command:
+    else None. A write counts when its target (a redirection, tee, the destination of cp/mv/install/
+    ln/rsync, dd's of=, a file sed -i/perl -i/truncate names, or a quoted path in code given to an
+    interpreter that opens or writes a file: best effort) is a MEMORY.md (any case: macOS), lies in
+    an agent-memory folder, or is made after a `cd` into one; plain NAME=value variables are put in,
+    and a target still holding a variable counts as outside. Quoted text and here-document bodies
+    are data (a note that mentions MEMORY.md is not a write). Temp folders are left alone (fixtures)."""
+    flat = re.sub(r"[\"'\\]", "", command).lower()
+    if "memory.md" not in flat and "agent-memory" not in flat:
         return None
     main = kitlib.main_checkout(cwd)
     stable = Path(os.path.realpath(str(Path(main) / MEMORY_DIR))) if main else None
-    env = {m.group(1): m.group(2).strip("\"'") for m in
-           re.finditer(r"(?:^|[\s;&|])([A-Za-z_]\w*)=(\"[^\"]*\"|'[^']*'|[^\s;&|]+)", command)}
+    targets, env, code = memory_words(command)
     base = Path(cwd)
-    found = re.search(r"(?:^|[;&|]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", command)
+    segs = [s for s in segments(command) if s.get("argv")]
+    found = next((s["argv"][1] for s in segs if Path(s["argv"][0]).name == "cd" and len(s["argv"]) > 1), None)
     if found:
-        base = Path(os.path.expanduser(with_vars(found.group(1).strip("\"'"), env)))
+        base = Path(os.path.expanduser(with_vars(found, env)))
         base = base if base.is_absolute() else Path(cwd) / base
     temps = [Path(os.path.realpath(str(t))) for t in temp_roots()]
-    targets = [m.group(1) for m in re.finditer(r"(?:\d?>>?|\btee(?:\s+-a)?)\s*(\"[^\"]+\"|'[^']+'|[^\s;&|<>]+)", command)]
-    for seg in segments(command):  # cp/mv/install/ln/rsync: the destination is the last argument (or -t's)
-        argv = seg.get("argv") or []
-        if argv and Path(argv[0]).name in MEMORY_COPIERS:
+    for seg in segs:  # cp/mv/install/ln/rsync: the destination is the last argument (or -t's)
+        argv = seg["argv"]
+        name = Path(argv[0]).name
+        if name in MEMORY_COPIERS:
             args = [a for a in argv[1:] if not a.startswith("-")]
             dest = next((argv[i + 1] for i, a in enumerate(argv[:-1]) if a in ("-t", "--target-directory")), None)
             if dest or len(args) >= 2:
                 targets.append(dest or args[-1])
-        elif argv and Path(argv[0]).name == "dd":
+        elif name == "tee":
+            targets += [a for a in argv[1:] if not a.startswith("-")]
+        elif name == "dd":
             targets += [a[3:] for a in argv[1:] if a.startswith("of=")]
-        elif argv and (Path(argv[0]).name == "truncate" or (Path(argv[0]).name in MEMORY_EDITORS and any(
-                a.startswith("-i") or a == "--in-place" or re.fullmatch(r"-\w*i\w*", a) for a in argv[1:]))):
-            targets += [a for a in argv[1:] if not a.startswith("-") and ("MEMORY.md" in a or "agent-memory" in a)]
-    if MEMORY_CODE.search(command):  # python/node/perl writing a file: any quoted path naming memory
-        targets += re.findall(r"[\"']([^\"'\s]*(?:MEMORY\.md|agent-memory)[^\"'\s]*)[\"']", command)
+        elif name == "truncate" or (name in MEMORY_EDITORS and any(
+                a.startswith("-i") or a == "--in-place" or re.fullmatch(r"-\w*i\w*", a) for a in argv[1:])):
+            targets += [a for a in argv[1:] if not a.startswith("-") and re.search(r"(?i)memory\.md|agent-memory", a)]
+    for text in code:  # python/node/perl writing a file: any quoted path naming memory in its code
+        if MEMORY_CODE.search(text):
+            targets += MEMORY_PATH.findall(text)
     for raw in targets:
-        target = with_vars(raw.strip("\"'"), env)
+        target = with_vars(raw, env)
         if target.startswith("&") or target == "/dev/null":
             continue
         path = Path(os.path.expanduser(target))
         path = Path(os.path.realpath(str(path if path.is_absolute() else base / path)))
-        if not (path.name == "MEMORY.md" or "agent-memory" in path.parts or "agent-memory" in base.parts):
+        if not (path.name.lower() == "memory.md" or "agent-memory" in [p.lower() for p in path.parts]
+                or "agent-memory" in [p.lower() for p in base.parts]):
             continue
         if "$" not in target and any(under(path, t) for t in temps):
             continue
@@ -1271,7 +1327,7 @@ def main():
     tool_input = data.get("tool_input") or {}
     cwd = Path(data.get("cwd") or os.getcwd())
     root = Path(os.path.normpath(str(kitlib.git_root(cwd) or cwd)))
-    if tool == "Bash" and data.get("agent_id") and str(data.get("agent_type") or "").endswith("verifier"):
+    if tool == "Bash" and data.get("agent_id") and data.get("agent_type") == "kit:verifier":
         try:
             stray = memory_write(str(tool_input.get("command") or ""), cwd)
         except Exception:

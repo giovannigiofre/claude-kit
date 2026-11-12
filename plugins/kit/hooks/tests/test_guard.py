@@ -491,12 +491,27 @@ def main():
         (wt16, f"cat {stable}/MEMORY.md", False),
         (wt16, "mkdir -p .claude/evidence/feat-wt && echo ok > .claude/evidence/feat-wt/run.txt", False),
         (wt16, "python3 -m pytest 2>&1 | tail -5", False),
+        # the redirection forms the shell has, quotes split anywhere, macOS's any-case names
+        (wt16, "echo x >| MEMORY.md", True),
+        (wt16, "echo x &>> MEMORY.md", True),
+        (wt16, "echo x >> MEM\"ORY\".md", True),
+        (wt16, "echo x >> memory.md", True),
+        (wt16, "bash -c \"echo x >> MEMORY.md\"", True),
+        (wt16, "echo \"$(echo x > MEMORY.md)\"", True),
+        (wt16, "python3 - <<'EOF'\nopen('MEMORY.md','a').write('x')\nEOF", True),
+        (wt16, "bash <<'EOF'\necho x >> MEMORY.md\nEOF", True),
+        # a note that only mentions a memory write is data: quoted text, a here-document body
+        (wt16, f"echo '- [Stray](s.md) — never run: cat >> MEMORY.md from a worktree' >> {stable}/MEMORY.md", False),
+        (wt16, f"cat > {stable}/stray.md <<'E'\nProbe: python3 -c \"open('MEMORY.md','a')\" in a worktree\nE", False),
+        (wt16, f"cat > {stable}/cd.md <<'E'\ncd /elsewhere && echo x > MEMORY.md\nE", False),
+        (wt16, "echo 'cd .claude/agent-memory/x; echo y > MEMORY.md' > .claude/evidence/note.txt", False),
+        (wt16, "git commit -m \"guard: open('MEMORY.md') in code counts as a write\"", False),
     ]:
         code, err = as_verifier(cwd, command)
         if (code == 2) != blocked or (blocked and str(stable) not in err):
             failed += 1
             print(f"FAIL verifier memory {'block' if blocked else 'allow'}: {command!r} in {cwd} -> {code} {err[:160]}")
-    for agent in ("kit:implementer", "general-purpose"):
+    for agent in ("kit:implementer", "general-purpose", "verifier", "other:verifier", "security-verifier"):
         code, _ = as_verifier(r16, "cat >> MEMORY.md", agent)
         if code == 2:
             failed += 1
