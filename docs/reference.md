@@ -78,7 +78,12 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
   `gh pr checks --watch`) and names the way out: `run_in_background`, the Monitor tool, the
   completion notice. A Monitor command, a background command, one ended with `&`, a `while read`
   loop, a long Bash `timeout` and a command `allowCommands` names pass; `"waits": false` turns
-  the rule off.
+  the rule off. One rule holds in every repo, with or without `kit.json` and with the guard off:
+  a `kit:verifier` subagent (that agent type only, not another plugin's verifier) may write a
+  memory file (a `MEMORY.md` in any case, anything in an `agent-memory` folder) only inside
+  `<main checkout>/.claude/agent-memory/kit-verifier`, so its pitfalls outlive the worktree. The
+  rule reads redirections, tee, cp/mv/install/ln/rsync, dd, `sed -i`/`perl -i`/truncate and the
+  code given to an interpreter; quoted text and here-document bodies are data, not writes.
 - `watchdog`: the thresholds of the stall watchdog (see [Stalls](#stalls)), in minutes; `0`
   turns that check off, a value that is not a number keeps the default.
 - `learn`: `{"model": false}` keeps the lesson distiller to its no-token passes (see Lessons).
@@ -227,6 +232,23 @@ a warning when a rule also matches other commands, whether the file is committed
 coordinator applies it only when the owner asks, after an AskUserQuestion with the diff as a
 preview, through an ordinary Edit that `settings_guard.py` turns into Claude Code's own prompt
 (Permission prompts).
+
+`records`: where the project records finished work besides the code, in the same
+`kit.local.json` (`lead.records`, a list of `"<place>: <what to update>"` lines): the tracker's
+status label and closing comment, a progress or status file, a changelog or diary, a published
+page. Not set, it prints how to find them; the coordinator reads the repo's guidance on its first
+run, confirms the list with the user once and saves it (`records set "…" "…"`, which replaces
+the list). `done` then prints the list as the item's checklist, so a merged item is not called
+done while its issue, progress file or diary still say otherwise.
+
+A command the user would type (a login, a script, a setup step) the coordinator runs itself with
+Bash: the Allow/Deny prompt reaches the user on the phone too over Remote Control, where a line
+starting with `!` is sent as a message and does not run. Only a step that needs the user's hands
+(a password, a payment, a secret) waits for them. A hook or script can tell a Remote Control
+session by `CLAUDE_CODE_BRIDGE_SESSION_ID` in its environment (Claude Code 2.1.199+). The kit
+uses it once: when a newer kit is installed than the session runs, the start-up line says "when
+you're at the Mac, /reload-plugins (or a restart) loads it" once, and over Remote Control it asks
+Claude to carry on, since no slash command waits on the phone. Nothing else needs to tell them apart.
 
 A thread briefed with the BRIEF.md text carries the `ITEM:` line; when it finishes, the hook
 files its report under the item (`reported | done, 2 decision(s), agent <id>` in the LOG); when

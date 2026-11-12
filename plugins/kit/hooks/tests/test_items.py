@@ -304,11 +304,46 @@ def main():
         check(committed.read_bytes() == before and not (repo2 / ".claude" / "settings.local.json").exists(),
               "the proposal changes no settings file")
 
+        # record places: where the project records finished work, saved in the same kit.local.json
+        before = json.loads(local.read_text())
+        code, out, _ = run(repo, "records", env=env)
+        check(code == 0 and out.startswith("RECORDS: not set") and "AGENTS.md" in out and "records set" in out,
+              f"records unset says how to find and save them: {out}")
+        run(repo, "new", "Records item", env=env)
+        code, out, _ = run(repo, "done", "records-item", env=env)
+        check(code == 0 and "record places are not set" in out, f"done without records points at them: {out}")
+        code, _, err = run(repo, "records", "set", env=env)
+        check(code == 2 and "needs the places" in err, f"records set with nothing is refused: {err}")
+        code, _, err = run(repo, "records", "add", "x", env=env)
+        check(code == 2, f"an unknown records verb is refused: {err}")
+        code, out, _ = run(repo, "records", "set", "GitHub issue: status label off, closing comment",
+                           "  plans/progress.json:   the item's state ", env=env)
+        check(code == 0 and out.splitlines() == [f"RECORDS (from {local.resolve()}):", "- GitHub issue: status label off, closing comment",
+                                                 "- plans/progress.json: the item's state"], f"records set saves and prints: {out}")
+        saved = json.loads(local.read_text())
+        check({k: v for k, v in saved.items() if k != "lead"} == {k: v for k, v in before.items() if k != "lead"}
+              and saved["lead"].get("unattended") == before["lead"].get("unattended") and before["lead"].get("unattended"),
+              f"records set keeps the file's other settings: {saved}")
+        run(repo, "new", "Records item two", env=env)
+        code, out, _ = run(repo, "done", "records-item-two", env=env)
+        check(code == 0 and out.splitlines()[1:] == ["- [ ] GitHub issue: status label off, closing comment",
+                                                     "- [ ] plans/progress.json: the item's state"],
+              f"done lists the records as a checklist: {out}")
+        code, out, _ = run(repo, "records", "set", "only one", env=env)
+        check(items.kitlib.records(repo)[0] == ["only one"], "records set replaces the list")
+        text = local.read_text()
+        local.write_text("[1]")
+        code, _, err = run(repo, "records", "set", "x", env=env)
+        check(code == 1 and local.read_text() == "[1]", f"a file that is not an object is never rewritten: {err}")
+        local.write_text(text)
+
         # a worktree reads and writes the main checkout's files (a worktree has no kit.local.json of its own)
         wt = Path(tmp) / "wt"
         subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "t", str(wt)], check=True, capture_output=True)
         code, out, _ = run(wt, "unattended", env=env)
         check("push=allow rebase=allow merge=ask" in out and str(local) in out, f"a worktree reads the main checkout's: {out}")
+        code, out, _ = run(wt, "records", env=env)
+        check(out == f"RECORDS (from {local.resolve()}):\n- only one", f"a worktree reads the main checkout's records: {out}")
 
     print("items: all checks passed" if not failed else f"items: {failed} failures")
     return 1 if failed else 0

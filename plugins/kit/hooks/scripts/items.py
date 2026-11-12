@@ -24,6 +24,12 @@ queued | agent - | - | from <source>`), so a handed-off or taken item is seen. S
     python3 items.py show|path <id>
     python3 items.py done <id>
     python3 items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow]
+    python3 items.py records [set "<place>: <what to update>" ...]
+
+`records` prints where this project records finished work besides the code (the tracker's labels
+and closing comment, progress or status files, a diary, a published page), saved once in the main
+checkout's gitignored .claude/kit.local.json `lead.records` (kitlib.records); not set, it says how
+to find them. `done` prints them as the item's checklist.
 
 `unattended` prints this repo's unattended git preferences as the brief line `UNATTENDED: push=..
 rebase=.. merge=..`, saying when they are not set yet; with arguments it saves them in the main
@@ -326,6 +332,29 @@ def main(argv=None):
                           f"a narrower rule may be what the owner wants")
                 print(p["diff"])
         return 0
+    if cmd == "records":
+        if rest[:1] == ["set"]:
+            if not rest[1:]:
+                print('items: records set needs the places, each one quoted ("<place>: <what to update>")', file=sys.stderr)
+                return 2
+            try:
+                kitlib.save_records(root, rest[1:])
+            except ValueError as exc:
+                print(f"items: {exc}", file=sys.stderr)
+                return 1
+        elif rest:
+            print(f"items: records takes nothing or `set <place> ...`, not {rest[0]!r}", file=sys.stderr)
+            return 2
+        places, path = kitlib.records(root)
+        if places:
+            print(f"RECORDS (from {path}):")
+            print("\n".join(f"- {p}" for p in places))
+        else:
+            print("RECORDS: not set for this repo. Read its guidance (AGENTS.md, CLAUDE.md, CONTRIBUTING, docs/) for "
+                  "where finished work is recorded besides the code: the tracker (issue status, labels, closing "
+                  "comment, a project board), progress or status files, a changelog or diary, a published page. "
+                  "Confirm the list with the user once, then save it: items.py records set \"<place>: <what>\" ...")
+        return 0
     if cmd in ("log", "report", "verdict", "done", "show", "path"):
         if not rest:
             print(f"items: {cmd} needs an item id", file=sys.stderr)
@@ -339,6 +368,12 @@ def main(argv=None):
             ok = write(root, item_id, name, text, "reported" if cmd == "report" else "verdict")
         elif cmd == "done":
             ok = done(root, item_id)
+            places, _ = kitlib.records(root)
+            if ok and places:
+                print(f"items: {item_id} done. Its records, each updated before you tell the user it is done:")
+                print("\n".join(f"- [ ] {p}" for p in places))
+            elif ok:
+                print(f"items: {item_id} done. This repo's record places are not set: `items.py records`.")
         elif cmd == "path":
             p = find(root, item_id)
             ok = bool(p)

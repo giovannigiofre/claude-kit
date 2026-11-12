@@ -69,6 +69,8 @@ CASES = [
     ("rm -rf /", True),
     ("rm -rf ~", True),
     ("rm -rf $HOME/", True),
+    ("git push origin feat#;rm -rf ~", True),  # a `#` inside a word starts no comment: bash runs the rm
+    ("echo hi # rm -rf ~", False),  # a real comment
     ("rm -fr ..", True),
     ("rm -rf .git", True),
     ("rm -rf ../other-project", True),
@@ -441,6 +443,79 @@ def main():
     if "use pnpm" not in err or "denyCommands" not in err:
         failed += 1
         print(f"FAIL a project rule's reason is told: {err[:160]}")
+
+    # the verifier's memory: only in the main checkout's folder, in a repo without kit.json too
+    # (shapes from real verifier runs: `cd <dir> && cat >> MEMORY.md`, `M=<dir>; cat > $M/x.md`)
+    h16, r16 = setup(project_kit=False)
+    stable = r16 / ".claude" / "agent-memory" / "kit-verifier"
+    stable.mkdir(parents=True)
+    wt16 = r16.parent / "app-wt"
+    subprocess.run(["git", "-C", str(r16), "worktree", "add", "-q", "-b", "feat/wt", str(wt16)], check=True)
+    (wt16 / "services" / "api").mkdir(parents=True)
+
+    def as_verifier(cwd, command, agent="kit:verifier"):
+        env = dict(os.environ, HOME=str(h16), TMPDIR=str(h16 / "tmp"), CLAUDE_CONFIG_DIR=str(h16 / ".claude"))
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd), "session_id": "s16",
+                   "agent_id": "v1", "agent_type": agent}
+        out = subprocess.run([sys.executable, str(SCRIPT)], input=json.dumps(payload), capture_output=True,
+                             text=True, env=env, timeout=30)
+        return out.returncode, out.stderr
+
+    for cwd, command, blocked in [
+        (r16, "cat >> MEMORY.md <<'EOF'\n- [x](x.md) — y\nEOF", True),  # the repo-root write that blocked a deploy
+        (wt16, f"cd {wt16}/.claude/agent-memory/kit-verifier && cat >> MEMORY.md", True),
+        (wt16 / "services" / "api", "echo '- [x](x.md) — y' >> .claude/agent-memory/kit-verifier/MEMORY.md", True),
+        (wt16, "M=.claude/agent-memory/kit-verifier; cat > $M/pitfall.md <<'EOF'\nbody\nEOF", True),
+        (wt16, "printf x | tee -a MEMORY.md", True),
+        (wt16, "cat >> $MEMDIR/MEMORY.md", True),
+        # copies, moves and code that writes the file (best effort)
+        (wt16, "cp /tmp/notes.md MEMORY.md", True),
+        (wt16, "mv notes.md .claude/agent-memory/kit-verifier/pitfall.md", True),
+        (wt16, "install -m 644 notes.md .claude/agent-memory/kit-verifier/", True),
+        (wt16, "cp -t .claude/agent-memory/kit-verifier notes.md", True),
+        (wt16, "python3 -c \"open('MEMORY.md','a').write('- x')\"", True),
+        (wt16, "python3 -c \"import pathlib; pathlib.Path('.claude/agent-memory/kit-verifier/x.md').write_text('y')\"", True),
+        (wt16, "node -e \"require('fs').appendFileSync('MEMORY.md', 'x')\"", True),
+        (wt16, "printf x | dd of=MEMORY.md", True),
+        (wt16, "sed -i '' 's/a/b/' .claude/agent-memory/kit-verifier/MEMORY.md", True),
+        (wt16, "perl -pi -e 's/a/b/' MEMORY.md", True),
+        (wt16, "truncate -s 0 MEMORY.md", True),
+        (wt16, f"sed -i '' 's/a/b/' {stable}/MEMORY.md", False),
+        (wt16, f"sed -n 1p {stable}/MEMORY.md", False),
+        (wt16, f"cp notes.md {stable}/pitfall.md", False),
+        (wt16, f"python3 -c \"open('{stable}/MEMORY.md','a').write('- x')\"", False),
+        (wt16, f"cp {stable}/MEMORY.md /tmp/memory-copy.md", False),
+        (wt16, f"cat >> {stable}/MEMORY.md <<'EOF'\n- [x](x.md) — y\nEOF", False),
+        (wt16 / "services" / "api", f"cd {stable} && cat >> MEMORY.md", False),
+        (wt16, f"M={stable}; cat > $M/pitfall.md <<'EOF'\nbody\nEOF", False),
+        (wt16, f"cat {stable}/MEMORY.md", False),
+        (wt16, "mkdir -p .claude/evidence/feat-wt && echo ok > .claude/evidence/feat-wt/run.txt", False),
+        (wt16, "python3 -m pytest 2>&1 | tail -5", False),
+        # the redirection forms the shell has, quotes split anywhere, macOS's any-case names
+        (wt16, "echo x >| MEMORY.md", True),
+        (wt16, "echo x &>> MEMORY.md", True),
+        (wt16, "echo x >> MEM\"ORY\".md", True),
+        (wt16, "echo x >> memory.md", True),
+        (wt16, "bash -c \"echo x >> MEMORY.md\"", True),
+        (wt16, "echo \"$(echo x > MEMORY.md)\"", True),
+        (wt16, "python3 - <<'EOF'\nopen('MEMORY.md','a').write('x')\nEOF", True),
+        (wt16, "bash <<'EOF'\necho x >> MEMORY.md\nEOF", True),
+        # a note that only mentions a memory write is data: quoted text, a here-document body
+        (wt16, f"echo '- [Stray](s.md) — never run: cat >> MEMORY.md from a worktree' >> {stable}/MEMORY.md", False),
+        (wt16, f"cat > {stable}/stray.md <<'E'\nProbe: python3 -c \"open('MEMORY.md','a')\" in a worktree\nE", False),
+        (wt16, f"cat > {stable}/cd.md <<'E'\ncd /elsewhere && echo x > MEMORY.md\nE", False),
+        (wt16, "echo 'cd .claude/agent-memory/x; echo y > MEMORY.md' > .claude/evidence/note.txt", False),
+        (wt16, "git commit -m \"guard: open('MEMORY.md') in code counts as a write\"", False),
+    ]:
+        code, err = as_verifier(cwd, command)
+        if (code == 2) != blocked or (blocked and str(stable) not in err):
+            failed += 1
+            print(f"FAIL verifier memory {'block' if blocked else 'allow'}: {command!r} in {cwd} -> {code} {err[:160]}")
+    for agent in ("kit:implementer", "general-purpose", "verifier", "other:verifier", "security-verifier"):
+        code, _ = as_verifier(r16, "cat >> MEMORY.md", agent)
+        if code == 2:
+            failed += 1
+            print(f"FAIL only the verifier's memory writes are checked, not {agent}'s")
 
     print("guard: all good" if not failed else f"guard: {failed} failures")
     return 1 if failed else 0

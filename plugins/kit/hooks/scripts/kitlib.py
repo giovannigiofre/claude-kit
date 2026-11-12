@@ -155,6 +155,33 @@ def save_unattended(cwd, changes):
     return unattended_prefs(cwd)[0]
 
 
+# Where this project records finished work besides the code (an issue's status label and closing
+# comment, a progress file, a diary, a published page): the coordinator finds them in the repo's
+# own guidance once, confirms them with the owner and saves them in the same kit.local.json
+# (`{"lead": {"records": ["...", ...]}}`); `items.py done` prints them as the item's checklist.
+def records(cwd):
+    """(places, path): the saved record places, [] when not set or unreadable."""
+    path = Path(main_checkout(cwd) or cwd) / LOCAL_CONFIG
+    value, _ = read_json(path)
+    lead = (value or {}).get("lead")
+    places = lead.get("records") if isinstance(lead, dict) else None
+    return [" ".join(str(p).split()) for p in places if str(p).strip()] if isinstance(places, list) else [], path
+
+
+def save_records(cwd, places):
+    """Replace the saved record places; a file that does not parse is never rewritten (ValueError)."""
+    _, path = records(cwd)
+    value, ok = read_json(path)
+    if not ok:
+        raise ValueError(f"{path} is not a JSON object; fix or remove it first")
+    lead = value.get("lead") if isinstance(value.get("lead"), dict) else {}
+    value["lead"] = {**lead, "records": [" ".join(p.split()) for p in places if p.strip()]}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    exclude(path.parent.parent, LOCAL_CONFIG)
+    return records(cwd)[0]
+
+
 # Commands a thread runs for each step, to test the permission rules against. Claude Code checks
 # deny, then ask, then allow, and the first that matches wins in every scope: an ask rule anywhere
 # (a committed settings.json, the user's) beats an allow rule in settings.local.json.

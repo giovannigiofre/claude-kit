@@ -1,7 +1,7 @@
 {
   "name": "kit",
   "description": "A coordinator you talk to that runs each piece of work in a background thread (worktree, gate, evidence, PR) with its item on disk, deterministic gates (check before stop, formatters, protected paths, guard), an overnight runner, debugging, learning, a discussion mode with handoff, proposal cards, light/loop/ask mode and host/sandbox safety, and a status line",
-  "version": "1.12.0",
+  "version": "1.13.0",
   "author": {
     "name": "giovannigiofre"
   },

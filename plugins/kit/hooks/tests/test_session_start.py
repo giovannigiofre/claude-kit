@@ -138,9 +138,14 @@ def main():
         (HOME / ".claude" / "plugins").mkdir(exist_ok=True)
         (HOME / ".claude" / "plugins" / "installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {
             "kit@claude-kit": [{"scope": "user", "installPath": str(plugin.parent / "9.9.9"), "version": "9.9.9"}]}}))
-        notice = "kit updated to 9.9.9: restart Claude Code (or /reload-plugins)"
-        assert notice in run({"cwd": str(repo), "source": "startup", "session_id": "upd"}, TMPDIR=tmp)
+        notice = "kit updated to 9.9.9: when you're at the Mac, /reload-plugins (or a restart) loads it"
+        out = run({"cwd": str(repo), "source": "startup", "session_id": "upd"}, TMPDIR=tmp, CLAUDE_CODE_BRIDGE_SESSION_ID="")
+        assert notice in out and "nothing waits on it" in out, out
         assert notice not in run({"cwd": str(repo), "source": "compact", "session_id": "upd"}, TMPDIR=tmp), "said once"
+        # over Remote Control the user is on the phone: the line is said once and nothing stops for it
+        out = run({"cwd": str(repo), "source": "startup", "session_id": "upd-rc"}, TMPDIR=tmp,
+                  CLAUDE_CODE_BRIDGE_SESSION_ID="bridge-1")
+        assert notice in out and "carry on" in out, out
         (HOME / ".claude" / "plugins" / "installed_plugins.json").unlink()
 
         # kit.json is personal (kept out of git), so a linked worktree has none: the main checkout's turns it on

@@ -115,8 +115,8 @@ When a thread reports:
   a scoped fix for those files, not a new brief; a verdict whose `REVIEWED:` sha is no longer the
   branch head is stale. Then mark it `review` (`done` for local work) and apply the merge policy.
   `DECISION:` lines in a report go into your reply once, so the user can veto them. Once a PR is
-  merged, remove the thread's worktree and branch (`git worktree remove`, `git branch -D` after
-  `git fetch --prune`) and `I done` it.
+  merged, remove its worktree and branch (`git fetch --prune`, `git worktree remove`,
+  `git branch -D`), `I done` it, update the records it lists (`I records`, set on your first run).
 - **Blocked, a question, or still failing after 3 rounds:** `needs-you`, the question in one line.
 
 **Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it
@@ -138,6 +138,8 @@ hour. Before an unattended run, follow [unattended.md](unattended.md) while the 
   the PR or branch), and NEEDS YOU, ordered by what unblocks the most.
 - When nothing changed, say so in a line or not at all. When a wake-up the user didn't cause
   leaves something for them, send one PushNotification, unless the kit mod is on (it notifies).
+- Run a command the user would type yourself, with Bash: its Allow/Deny prompt reaches the phone
+  (a `!` sent over Remote Control does not run). Only a password, payment or secret waits for them.
 
 ## Stop
 

@@ -17,7 +17,8 @@ Keep it to the format below, about 25 lines; the detail lives in the PR body and
    When the brief's repo is not the one you started in, work in a worktree of that repo (the
    brief's, else `git -C <repo> fetch` then `git -C <repo> worktree add -b <branch> <repo>-<id>
    origin/<default>` with `<repo>` absolute), never in its main checkout; the kit's start-up
-   lines name the repo they apply to.
+   lines name the repo they apply to. One branch, one worktree: a second one the brief asks for
+   goes under OPEN, as another thread's work.
 2. Make the change at the scope asked, and keep changes and tests to what the brief asks for: a
    nearby fix or an extra test the brief did not need goes under OPEN, not into the commit. When
    a rule was broken in one place (a missing check, a wrong unit, an unescaped value), fix every

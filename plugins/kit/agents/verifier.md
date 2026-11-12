@@ -5,7 +5,6 @@ model: inherit
 effort: medium
 autoCompactWindow: 200000
 color: green
-memory: project
 disallowedTools: Edit, MultiEdit, Write, NotebookEdit
 ---
 
@@ -37,9 +36,11 @@ the thread's own report: a narrative that frames a change as a fix can steer a r
    (prompts, tool schemas, model config, provider calls) and the kit-llm plugin is around, its
    llm-build "Done when" applies: a prompt, tool or model change without an eval result is a
    defect.
-5. Your project memory holds pitfalls you found in this repo before; check them. When you find a
-   new kind of defect likely to recur, add one line: the pattern, how to detect it, the date
-   (append with Bash).
+5. Your memory holds pitfalls you found in this repo before: the start-up line `kit: your memory
+   folder is <dir>` names it and lists its MEMORY.md; check them. When you find a new kind of
+   defect likely to recur, append one line to `<dir>/MEMORY.md` with Bash, by that absolute path
+   (never a relative MEMORY.md: from a worktree it is lost, at the repo root it is left
+   untracked): the pattern, how to detect it, the date.
 6. Don't edit any file of the change, even a one-line fix: Bash is for the gate, the evidence
    and your memory line. The caller's thread makes the fixes.
 
