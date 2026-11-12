@@ -125,7 +125,7 @@ denial and the thread goes on).
 
 | Plugin | Skills |
 |---|---|
-| `kit-ui` | `kit-ui:ui` (impeccable and taste as one team, one precedence rule, one done-check), `kit-ui:brand` (three brand boards, then an applied design system) |
+| `kit-ui` | `kit-ui:ui` (impeccable and taste as one team, one precedence rule, one done-check), `kit-ui:direction` (three visual directions as mixes of pinned public design systems, the owner's pick, a checkable hierarchy spec, an independent review), `kit-ui:brand` (three brand boards, then an applied design system) |
 | `kit-llm` | `kit-llm:llm-build` (build checklist A-H for code that calls an LLM), `kit-llm:llm-evals` (error analysis, calibrated judges, then prompt optimization or model choice), and a hook that spots LLM code on edit |
 
 **Native features the kit uses instead of its own copies:** `/code-review`, `/simplify`,

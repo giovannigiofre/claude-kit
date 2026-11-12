@@ -1,6 +1,6 @@
 ---
 name: extras
-description: Offers one of the kit's domain plugins when a task needs it and this project does not have it - kit-ui for UI or frontend design, a redesign, polish, a design or accessibility audit, or a brand; kit-llm for code that calls an LLM (an SDK or a provider's HTTP API), prompts, tool schemas, evals, prompt tuning or model choice. Use only when the matching kit-ui:* or kit-llm:* skills are missing from your skill list.
+description: Offers one of the kit's domain plugins when a task needs it and this project does not have it - kit-ui for UI or frontend design, a visual direction or a mock-up from scratch, a redesign, polish, a design or accessibility audit, or a brand; kit-llm for code that calls an LLM (an SDK or a provider's HTTP API), prompts, tool schemas, evals, prompt tuning or model choice. Use only when the matching kit-ui:* or kit-llm:* skills are missing from your skill list.
 ---
 
 # Offer a kit domain plugin
@@ -10,7 +10,7 @@ never need them don't carry their descriptions:
 
 | Plugin | For | Brings |
 |---|---|---|
-| `kit-ui` | screens, pages, redesigns, polish, design audits, brands | `kit-ui:ui`, `kit-ui:brand` |
+| `kit-ui` | screens, pages, visual directions and mock-ups from scratch, redesigns, polish, design audits, brands | `kit-ui:ui`, `kit-ui:direction`, `kit-ui:brand` |
 | `kit-llm` | code that calls an LLM, prompts, tools, evals, model choice | `kit-llm:llm-build`, `kit-llm:llm-evals`, a hook that spots LLM code on edit |
 
 1. **Ask once** with AskUserQuestion, header "Kit plugin": "This looks like <UI | LLM> work. Use

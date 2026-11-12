@@ -16,6 +16,9 @@ brief at them; this list stays generic.
 - **Browser or end-to-end tests:** use the project's own test helpers (sign-in, fixtures, waits)
   and read the known e2e pitfalls in the project's local facts file first; name both in the brief.
   None written down yet: the thread puts what it learns under OPEN, for `CLAUDE.local.md`.
+- **Reference files** (a method, a style guide, a design system): tie each file to the step that
+  uses it and the output that proves it was read ("the spec cites rule X from file Y:line"), never
+  a bare list of paths: threads skip files a brief only lists.
 - **UI text that shows what people typed** (a name, a title, an address): long unbroken words
   wrap (`overflow-wrap: anywhere`, or the design system's way) and the evidence shows one at
   phone width.
