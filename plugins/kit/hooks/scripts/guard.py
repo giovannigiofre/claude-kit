@@ -1211,6 +1211,7 @@ def record_denial(cwd, rule, why, session):
 
 MEMORY_DIR = Path(".claude") / "agent-memory" / "kit-verifier"
 MEMORY_COPIERS = {"cp", "mv", "install", "ln", "rsync", "ditto"}
+MEMORY_EDITORS = {"sed", "gsed", "perl"}  # in place (-i): the files they name are written
 MEMORY_CODE = re.compile(r"\bopen\s*\(|write_text|write_bytes|writeFile|appendFile|shutil\.(?:copy|move)|\.rename\(")
 
 
@@ -1218,7 +1219,8 @@ def memory_write(command, cwd):
     """For the kit verifier (in every repo): the memory file this command writes outside its one
     memory folder, <main checkout>/.claude/agent-memory/kit-verifier (subagent_start.py names it),
     else None. A write counts when its target (`>`, `>>`, tee, the destination of cp/mv/install/ln/
-    rsync, or a quoted path in code that opens or writes a file: best effort) is a MEMORY.md, lies
+    rsync, dd's of=, a file sed -i/perl -i/truncate names, or a quoted path in code that opens or
+    writes a file: best effort) is a MEMORY.md, lies
     in an agent-memory folder, or is made after a `cd` into one; plain NAME=value variables are put
     in, and a target still holding a variable counts as outside. Temp folders are left alone (fixtures)."""
     if "MEMORY.md" not in command and "agent-memory" not in command:
@@ -1241,6 +1243,11 @@ def memory_write(command, cwd):
             dest = next((argv[i + 1] for i, a in enumerate(argv[:-1]) if a in ("-t", "--target-directory")), None)
             if dest or len(args) >= 2:
                 targets.append(dest or args[-1])
+        elif argv and Path(argv[0]).name == "dd":
+            targets += [a[3:] for a in argv[1:] if a.startswith("of=")]
+        elif argv and (Path(argv[0]).name == "truncate" or (Path(argv[0]).name in MEMORY_EDITORS and any(
+                a.startswith("-i") or a == "--in-place" or re.fullmatch(r"-\w*i\w*", a) for a in argv[1:]))):
+            targets += [a for a in argv[1:] if not a.startswith("-") and ("MEMORY.md" in a or "agent-memory" in a)]
     if MEMORY_CODE.search(command):  # python/node/perl writing a file: any quoted path naming memory
         targets += re.findall(r"[\"']([^\"'\s]*(?:MEMORY\.md|agent-memory)[^\"'\s]*)[\"']", command)
     for raw in targets:

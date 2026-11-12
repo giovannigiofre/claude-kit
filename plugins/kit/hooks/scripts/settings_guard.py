@@ -26,6 +26,7 @@ settings at all.
 """
 
 import difflib
+import fnmatch
 import json
 import os
 import re
@@ -279,22 +280,82 @@ def summary(tool, inp, path):
 
 
 ALLOW_STEP = re.compile(r"\bunattended\b.*\b(?:push|rebase|merge)\s*=\s*['\"]?allow\b", re.I | re.S)
+GLOB = re.compile(r"[*?\[]")
+LOCAL = "kit.local.json"
 
 
 def is_local(path, cwd):
     """True for a repo's .claude/kit.local.json, where the owner's unattended answer lives."""
-    return any(p.name.lower() == "kit.local.json" and p.parent.name.lower() == ".claude" for p in _forms(path, cwd))
+    return any(p.name.lower() == LOCAL and p.parent.name.lower() == ".claude" for p in _forms(path, cwd))
+
+
+def _words(command):
+    """The command's words as the shell passes them, quotes and backslashes taken out (`al''low`,
+    `al\\low` and `a"llow"` are all `allow`), plus the words with every quote character simply
+    dropped (`$'…'`, unbalanced quotes)."""
+    out = []
+    try:
+        lex = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lex.whitespace_split, lex.commenters = True, ""
+        out = list(lex)
+    except ValueError:
+        pass
+    return out + re.sub(r"\$'|[\\'\"]", "", command).split()
+
+
+def _braces(word, room=64):
+    """`kit.local.{json,x}` as the shell expands it (one brace at a time, at most `room` words)."""
+    m = re.search(r"\{([^{}]*,[^{}]*)\}", word)
+    if not m:
+        return [word]
+    out = []
+    for alt in m.group(1).split(","):
+        out += _braces(word[:m.start()] + alt + word[m.end():], room)
+        if len(out) >= room:
+            break
+    return out[:room]
+
+
+def _names_local(word):
+    """True when a word names kit.local.json, or is a glob or brace form the shell may expand to it
+    (`.claude/kit.loc*.json`, `kit.local.{json,bak}`, `.claude/*`); a bare glob counts only with
+    three letters of its own (`*.json`, not `*`)."""
+    for w in _braces(word.lower()):
+        if LOCAL in w:
+            return True
+        head, _, base = w.rpartition("/")
+        if not GLOB.search(base) or not fnmatch.fnmatchcase(LOCAL, base):
+            continue
+        if head:
+            if fnmatch.fnmatchcase(".claude", head.rsplit("/", 1)[-1]):
+                return True
+        elif len(re.sub(r"\[[^\]]*\]|[*?]", "", base)) >= 3:
+            return True
+    return False
+
+
+def _sets_unattended(words):
+    """`items.py unattended push=allow` (or the `I` function) in any spelling: a `step=value` word
+    after `unattended` whose value is not `ask` (only `ask` can be saved without the owner)."""
+    low = [w.lower() for w in words]
+    for i, w in enumerate(low):
+        if w == "unattended" and any("=" in a and a.partition("=")[2] != "ask" for a in low[i + 1:]):
+            return True
+    return False
 
 
 def local_targets(command):
     """The owner's unattended answer, as a command may change it: `items.py unattended push=allow`
-    (or the `I` shell function), or a command that names kit.local.json and is not a plain read."""
+    (or the `I` shell function), or a command that names kit.local.json (a glob or brace form
+    included) and is not a plain read. Quotes and backslashes are seen through."""
     out = []
     if read_only(command):
         return out
-    if ALLOW_STEP.search(command):
+    words = _words(command)
+    if ALLOW_STEP.search(command) or _sets_unattended(words):
         out.append("kit.local.json (unattended …=allow)")
-    if "kit.local.json" in re.sub(r"\$'|[\\'\"]", "", command).lower():
+    named = any(LOCAL in w.lower() for w in words)
+    if named or any(_names_local(w) for part in writing_parts(command) for w in _words(part)):  # a glob where it may write
         out.append(".claude/kit.local.json")
     return out
 

@@ -70,6 +70,10 @@ def main():
             (f"python3 {SCRIPTS / 'items.py'} unattended rebase=ask merge=ALLOW", "prompt"),
             (f"python3 {SCRIPTS / 'items.py'} unattended", "allow"),
             (f"python3 {SCRIPTS / 'items.py'} unattended push=ask", "allow"),
+            # quotes and backslashes the shell takes out (verifier round 2)
+            (f"python3 {SCRIPTS / 'items.py'} unattended push=al''low", "prompt"),
+            (f"python3 {SCRIPTS / 'items.py'} unattended push=al\\low", "prompt"),
+            (f"python3 {SCRIPTS / 'items.py'} unatt''ended push=allow", "prompt"),
         ]
         expect(repo, cases)
         (repo / ".claude" / "kit.json").unlink()
@@ -115,6 +119,7 @@ def main():
             "git rebase --abort",
             "git rebase origin/main",
             f"cd {wt} && git push -u origin docs/records-1112",
+            "cd ./.claude/worktrees/records && git push -u origin docs/records-1112",
             f"git push -u origin docs/records-1112 > {site}/.claude/worktrees/records-push.log 2>&1",
             f"git push -u origin docs/x > {tmp}/push.log 2>&1",
             "git push origin docs/x > .claude/push.log 2>&1",
@@ -153,6 +158,11 @@ def main():
             "git push origin `git branch --show-current`", "(git push origin docs/x)", "git push origin docs/x 2>&1 | tee x.log",
             "git push origin docs/x | tail -f", "git push origin docs/x; tail -f push.log", "cd $WT && git push origin docs/x",
             "git push origin docs/x 2>&1 | grep -E x notes.md", "git push origin docs/x >> $LOG",
+            # folders bash reads differently: OLDPWD, PWD, the dirs stack, a user's home; CDPATH for a bare name
+            "cd ~- && git push origin docs/x", "git -C ~- push origin docs/x", "cd ~1 && git push origin docs/x",
+            "cd ~+ && git push origin docs/x", "git -C ~root push origin docs/x", "cd ~+/x && git push origin docs/x",
+            "cd .claude/worktrees/records && git push -u origin docs/records-1112",
+            "git push origin docs/x ", "git push origin docs/x", "git push origin docs/x​",
             # merges and rebases that do more
             "gh pr merge 12", "gh pr merge 12 --admin --squash", "gh pr merge 12 --auto --squash",
             "gh pr merge 12 --squash --body x", "gh pr merge 12 --squash --merge", "gh pr merge --squash --delete-branch",
@@ -192,6 +202,41 @@ def main():
         git(site, "remote", "remove", "upstream")
         expect(site, [("gh pr merge 209 --squash", "prompt")], {**env, "GH_REPO": "someone/else"}, label="GH_REPO: ")
         expect(site, [("gh pr merge 209 --squash", "allow")], {**env, "GH_REPO": "example-org/shop"}, label="GH_REPO origin: ")
+        expect(site, [("gh pr merge 209 --squash", "prompt"), ("gh pr merge 209 -R example-org/shop --squash", "prompt")],
+               {**env, "GH_HOST": "evil.example"}, label="GH_HOST: ")
+        expect(site, [("gh pr merge 209 --squash", "allow")], {**env, "GH_HOST": "github.com"}, label="GH_HOST github: ")
+        # push.default upstream/tracking push a branch made from origin/main onto main (verifier round 2)
+        git(site, "config", "branch.docs/diary-1111.remote", "origin")
+        git(site, "config", "branch.docs/diary-1111.merge", "refs/heads/main")
+        for mode, want in (("upstream", "prompt"), ("tracking", "prompt"), ("Upstream", "prompt"), ("matching", "prompt"),
+                           ("simple", "allow"), ("current", "allow")):
+            git(site, "config", "push.default", mode)
+            expect(site, [("git push origin docs/diary-1111", want)], env, label=f"push.default {mode}: ")
+        git(site, "config", "--unset", "push.default")
+        expect(site, [("git push origin docs/diary-1111", "allow")], env, label="push.default unset: ")
+        # origin's push URL: another repo is refused, the same repo spelled another way is not
+        git(site, "config", "remote.origin.pushurl", "git@github.com:someone/else.git")
+        expect(site, [("git push origin docs/diary-1111", "prompt")], env, label="pushurl elsewhere: ")
+        git(site, "config", "remote.origin.pushurl", "https://github.com/example-org/shop.git")
+        expect(site, [("git push origin docs/diary-1111", "allow")], env, label="pushurl same repo: ")
+        git(site, "config", "--unset", "remote.origin.pushurl")
+        git(site, "config", "url.git@github.com:someone/else.git.pushInsteadOf", "git@github.com:example-org/shop.git")
+        expect(site, [("git push origin docs/diary-1111", "prompt")], env, label="pushInsteadOf: ")
+        git(site, "config", "--remove-section", "url.git@github.com:someone/else.git")
+        # a log that is a link to another file: truncating it would empty the owner's answer
+        soft, hard, folder = Path(tmp) / "k.log", Path(tmp) / "h.log", Path(tmp) / "d"
+        soft.symlink_to(local)
+        os.link(local, hard)
+        folder.symlink_to(site)
+        before = local.read_text()
+        expect(site, [(f"git push origin docs/x > {soft}", "prompt"), (f"git push origin docs/x >> {hard}", "prompt"),
+                      (f"git push origin docs/x > {folder}/push.log", "prompt"),
+                      (f"git push origin docs/x > {folder}/.claude/push.log", "allow")], env, label="linked log: ")
+        if local.read_text() != before:
+            failed += 1
+            print("FAIL the owner's answer changed")
+        for p in (soft, hard, folder):
+            p.unlink()
         # a kit.local.json in git is anyone's file, not the owner's answer
         git(site, "add", "-f", ".claude/kit.local.json")
         expect(site, [("git push origin docs/diary-1111", "prompt")], env, label="tracked kit.local.json: ")

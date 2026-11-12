@@ -125,13 +125,26 @@ def main():
                           ("Edit", {"file_path": str(saved), "old_string": "ask", "new_string": "allow"}),
                           ("Bash", {"command": "echo '{}' > .claude/kit.local.json"}),
                           ("Bash", {"command": f"python3 {items} unattended push=allow"}),
-                          ("Bash", {"command": f"python3 {items} unattended merge='allow' rebase=ask"})]:
+                          ("Bash", {"command": f"python3 {items} unattended merge='allow' rebase=ask"}),
+                          # quoted, escaped and globbed spellings the shell turns into the same (verifier round 2)
+                          ("Bash", {"command": f"python3 {items} unattended push=al''low"}),
+                          ("Bash", {"command": f"python3 {items} unattended push=al\\low"}),
+                          ("Bash", {"command": f'python3 {items} unattended push=a"llow"'}),
+                          ("Bash", {"command": f"python3 {items} unatt''ended push=allow"}),
+                          ("Bash", {"command": "I unattended merge=allow"}),
+                          ("Bash", {"command": "cp /tmp/x .claude/kit.loc*.json"}),
+                          ("Bash", {"command": "cp /tmp/x .claude/kit.local.{json,bak}"}),
+                          ("Bash", {"command": "cp /tmp/x .claude/kit.loc?l.json"}),
+                          ("Bash", {"command": "rm .claude/*"}),
+                          ("Bash", {"command": "cd .claude && cp /tmp/x kit.loc*.json"}),
+                          ("Bash", {"command": "cp /tmp/x $'.claude/kit.local.json'"})]:
             decision, reason = hook(tool, inp, plain, env)
             check(decision == "ask" and reason.startswith(LABEL), f"the saved answer asks: {tool} {inp} {decision} {reason}")
             decision, reason = hook(tool, inp, plain, env, agent_id="a1", agent_type="kit:implementer")
             check(decision == "deny", f"and a subagent is refused: {tool} {inp} {decision} {reason}")
         for command in ("cat .claude/kit.local.json", f"python3 {items} unattended", f"python3 {items} unattended push=ask",
-                        f"python3 {items} records"):
+                        f"python3 {items} records", "rm -rf dist/*", "cp a.txt b*", "ls .claude/kit.loc*.json",
+                        "for f in .claude/*; do echo $f; done"):
             decision, reason = hook("Bash", {"command": command}, plain, env)
             check(decision == "pass", f"reading or saving ask passes: {command}: {decision} {reason}")
 

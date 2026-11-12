@@ -22,17 +22,19 @@ command must be exactly one of these shapes (SHAPES), made only of letters, digi
   push    [cd <dir> &&] git [-C <dir>] push [-u|--set-upstream] [-q] origin <branch>: an existing
           local branch (not a tag of the same name, no refs/ or heads/ prefix) that is not the
           default, main, master or a guard.protectedBranches one, with no remote.origin.push
-          refspec configured
+          refspec, push.default unset, simple or current, and origin's push URL its fetch URL
   rebase  [cd <dir> &&] [GIT_EDITOR=true] git [-C <dir>] rebase <the remote default, e.g.
           origin/main> (not while the default branch is checked out) | --continue | --abort
   merge   [cd <dir> &&] gh pr merge <n> [--repo|-R <owner/repo of origin>] one of --squash|--merge|
           --rebase (-s|-m|-r) [--delete-branch|-d]; without -R only where origin is the only
-          remote and GH_REPO does not name another repo
+          remote; GH_REPO, when set, names origin's repo and GH_HOST, when set, is github.com
 
-Each may end in `2>&1`, `| tail -N` or `| head -N`, or `> f.log` / `>> f.txt` / `.out` (with
-`2>&1`) when that file is untracked and under this checkout's .claude/ or a temp folder, never in
-.git. Anything else gets no answer, so Claude Code asks (or, in a background thread that cannot
-ask, refuses) as before. So does a command the kit guard asks about or denies, and deny rules
+<dir> is absolute, `.`/`..`-relative, `~` or `~/…` (never `~-`, `~1`, `~user`), and a `cd` never
+takes a bare relative name, which CDPATH could send elsewhere. Each may end in `2>&1`,
+`| tail -N` or `| head -N`, or `> f.log` / `>> f.txt` / `.out` (with `2>&1`) when that file, as
+it really is (not a symlink or hard link), is untracked and under this checkout's .claude/ or a
+temp folder, never in .git. Anything else gets no answer, so Claude Code asks (or, in a
+background thread that cannot ask, refuses) as before. So does a command the kit guard asks about or denies, and deny rules
 refuse before any prompt. A kit:implementer thread (that exact agent type) gets push and rebase;
 merge is the coordinator's, answered for the main session only. Standard library only.
 """
@@ -67,7 +69,7 @@ def own_script(command):
         resolved = script.resolve(strict=True)
     except OSError:
         return False
-    if resolved.name == "items.py" and "unattended" in argv[2:] and any("=allow" in a.lower() for a in argv[2:]):
+    if resolved.name == "items.py" and settings_guard._sets_unattended(argv[2:]):
         return False  # saving `allow` is the owner's answer, never Claude's own (settings_guard asks)
     return resolved.name in SCRIPTS and PLUGIN in resolved.parents
 
@@ -86,7 +88,9 @@ def allowed(command, config, cwd=None):
 # characters may appear (no quotes, `#`, `;`, `$`, backticks, brackets, `<`, `*`, `:`, `+`, `\`,
 # newlines), and each shape is a full match on the command with its blanks collapsed.
 SAFE = re.compile(r"[A-Za-z0-9_./~=|>&\- ]+", re.A)
-PATH = r"[A-Za-z0-9_./~][A-Za-z0-9_./~-]*"  # a directory or log file (not `-`: `cd -` goes back)
+# a directory or log file: not `-` (`cd -` goes back), and a leading `~` only as `~` or `~/…`, since
+# bash reads `~-`, `~+`, `~1` and `~user` as other folders (OLDPWD, PWD, the dirs stack, a home)
+PATH = r"(?:~(?:/[A-Za-z0-9_./~-]*)?|[A-Za-z0-9_./][A-Za-z0-9_./~-]*)"
 BRANCH = r"[A-Za-z0-9][A-Za-z0-9_./-]*"
 LEAD = rf"(?:cd (?P<cd>{PATH}) && )?"
 GIT = rf"git(?: -C (?P<dir>{PATH}))?"
@@ -120,9 +124,23 @@ def temp_roots():
 
 def output_file_ok(target, cwd, root):
     """A log the step's output may go to: an untracked file under this checkout's (or its main
-    checkout's) .claude/, or one under a temp folder; never in .git, never a file git tracks."""
-    real = Path(os.path.realpath(str(resolve(target, cwd))))
-    if ".git" in real.parts or not real.parent.is_dir():
+    checkout's) .claude/, or one under a temp folder; never in .git, never a file git tracks. The
+    file is judged where it really is: not a symlink or a hard link (`k.log` linked to
+    kit.local.json would be truncated), and its real name ends in .log, .txt or .out too."""
+    literal = resolve(target, cwd)
+    real = Path(os.path.realpath(str(literal)))
+    if os.path.islink(literal) or ".git" in real.parts or not real.parent.is_dir():
+        return False
+    if real.suffix not in (".log", ".txt", ".out") or real.name.lower() == "kit.local.json" \
+            or settings_guard.NAME.fullmatch(real.name):
+        return False
+    try:
+        st = os.lstat(real)
+        if not os.path.isfile(real) or st.st_nlink > 1:
+            return False
+    except FileNotFoundError:
+        pass
+    except OSError:
         return False
     if kitlib.git_out(real.parent, "ls-files", "--error-unmatch", "--", real.name):
         return False  # tracked, in this checkout or any other
@@ -133,15 +151,30 @@ def output_file_ok(target, cwd, root):
     return any(_under(real, t) for t in temp_roots())
 
 
-def origin_slug(root):
-    url = kitlib.git_out(root, "remote", "get-url", "origin")
+def _slug(url):
     m = re.search(r"github\.com[:/]+([\w.-]+/[\w.-]+?)(?:\.git)?/?$", url)
     return m.group(1).lower() if m else ""
 
 
+def origin_slug(root):
+    return _slug(kitlib.git_out(root, "remote", "get-url", "origin"))
+
+
+PUSH_DEFAULTS = {"", "simple", "current"}  # upstream/tracking push `feat` to the branch it tracks (origin/main)
+
+
 def push_ok(root, branch, protected):
-    """`git push origin <branch>` moves only that local branch: no ref prefix, not a tag, not the
-    default or a protected branch, and no push refspec in the config that would map it elsewhere."""
+    """`git push origin <branch>` moves only that local branch to the same name on origin: no ref
+    prefix, not a tag, not the default or a protected branch, no push refspec in the config that
+    would map it elsewhere, a push.default that keeps the name (unset, simple or current: with
+    upstream or tracking a branch made from origin/main is pushed onto main), and origin pushes
+    where it fetches from (no pushurl or pushInsteadOf pointing at another repo)."""
+    if kitlib.git_out(root, "config", "--get", "push.default").lower() not in PUSH_DEFAULTS:
+        return False
+    fetch_url = kitlib.git_out(root, "remote", "get-url", "origin")
+    push_url = kitlib.git_out(root, "remote", "get-url", "--push", "origin")
+    if not fetch_url or (push_url != fetch_url and (not origin_slug(root) or _slug(push_url) != origin_slug(root))):
+        return False
     if branch.startswith(("refs/", "heads/", "tags/", "remotes/")) or ".." in branch or "//" in branch \
             or branch.endswith((".lock", "/", ".")):
         return False
@@ -161,11 +194,14 @@ def merge_ok(root, repo, flags):
     slug = origin_slug(root)
     if not slug or len([f for f in flags if f in METHODS]) != 1 or len(set(flags)) != len(flags):
         return False
-    if repo:
-        return repo.lower() == slug
+    host = os.environ.get("GH_HOST", "").strip().lower()
+    if host and host != "github.com":
+        return False  # gh would merge on another host's repo of the same name
     gh_repo = os.environ.get("GH_REPO", "").strip().lower()
     if gh_repo and gh_repo.split("/")[-2:] != slug.split("/"):
         return False
+    if repo:
+        return repo.lower() == slug
     return kitlib.git_out(root, "remote").split() == ["origin"]
 
 
@@ -173,10 +209,10 @@ def unattended_step(command, cwd, agent=None):
     """The step ('push', 'rebase' or 'merge') this command is, when the owner allowed that step in
     this repo and the command is exactly that step's shape; else None. `agent` is the subagent's
     type (None for the main session)."""
-    command = command.strip()
+    command = command.strip(" \t\n")  # not str.strip(): a no-break space is part of a bash word
     if not SAFE.fullmatch(command):
         return None
-    plain = " ".join(command.split())
+    plain = re.sub(" +", " ", command)
     step = m = None
     for name, shape in SHAPES.items():
         m = shape.fullmatch(plain)
@@ -187,7 +223,10 @@ def unattended_step(command, cwd, agent=None):
         return None
     if agent is not None and (step == "merge" or agent != "kit:implementer"):
         return None  # a thread pushes and rebases its branch; the coordinator merges
-    here = resolve(m.group("cd"), cwd) if m.group("cd") else Path(cwd)
+    cd = m.group("cd")
+    if cd and not (cd.startswith(("/", "~", "./", "../")) or cd in (".", "..")):
+        return None  # `cd name` may follow CDPATH (the shell's, unseen here) to another folder
+    here = resolve(cd, cwd) if cd else Path(cwd)
     where = resolve(m.groupdict().get("dir"), here) if m.groupdict().get("dir") else here
     root = kitlib.git_root(where)
     if not root:

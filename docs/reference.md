@@ -393,17 +393,22 @@ the prompt. The command is matched whole against one shape per step, never parse
 only letters, digits, blanks and `_ . / ~ = | > & -` (no quote, `#`, `;`, `$`, backtick, bracket
 or newline): `[cd <dir> &&] git [-C <dir>] push [-u|--set-upstream] [-q] origin <branch>` for an
 existing local branch that is not the default, `main`, `master`, `HEAD`, a guard
-`protectedBranches` one or also a tag, with no `refs/`/`heads/` prefix and no `remote.origin.push`
-configured; `[GIT_EDITOR=true] git rebase origin/<default>` off the default branch, `--continue`,
+`protectedBranches` one or also a tag, with no `refs/`/`heads/` prefix, no `remote.origin.push`
+configured, `push.default` unset, `simple` or `current` (with `upstream` a branch made from
+origin/main is pushed onto main) and origin's push URL its own repo;
+`[GIT_EDITOR=true] git rebase origin/<default>` off the default branch, `--continue`,
 `--abort`; `gh pr merge N [--repo|-R <origin's slug>] --squash|--merge|--rebase [--delete-branch]`,
-without `-R` only where `origin` is the only remote and `GH_REPO` names no other repo. Each may
-end in `2>&1`, `| tail -N` / `| head -N`, or `> f.log` / `>> f.txt` / `.out` (with `2>&1`) for a
-file git does not track, under the checkout's own `.claude/` or a temp folder (never `.git`).
+without `-R` only where `origin` is the only remote, and only while `GH_REPO` names no other repo
+and `GH_HOST` no other host. A `<dir>` starting with `~` is `~` or `~/…` (not `~-`, `~1`), and
+`cd` takes no bare relative name (CDPATH). Each may end in `2>&1`, `| tail -N` / `| head -N`, or
+`> f.log` / `>> f.txt` / `.out` (with `2>&1`) for a file git does not track, under the checkout's
+own `.claude/` or a temp folder (never `.git`), judged where it really is (no symlink or hard link).
 Anything else is not answered. A thread gets push and rebase only when its agent type is exactly
 `kit:implementer`; merge is the main session's. A command settings_guard flags or the active
 guard asks or denies is never answered. Saving `allow` is the owner's: settings_guard asks for
-any change to a `.claude/kit.local.json` and for `items.py unattended …=allow` in every repo (a
-subagent's is refused), permission.py never answers that command, and a `kit.local.json` that git
+any change to a `.claude/kit.local.json` (a glob or brace form of it too) and for any
+`items.py unattended step=value` other than `=ask`, quotes and backslashes seen through, in every
+repo (a subagent's is refused), permission.py never answers that command, and a `kit.local.json` that git
 tracks is neither read nor written (`git rm --cached` it first, if it is yours).
 Nothing else is touched: the guard has already judged the command, and the permission system
 decides the rest. `/fewer-permission-prompts` (built in)
