@@ -207,26 +207,31 @@ push=ask rebase=ask merge=ask` and whether it is set; a missing, broken or missp
 `ask`. The coordinator asks only when an unattended run starts and nothing is set, saves the
 answer and briefs every thread of the run with that line ([unattended.md](../plugins/kit/skills/lead/unattended.md)).
 A thread does not run a step set to `ask` and hands back `needs push` (rebase, merge); `allow`
-runs it. The line carries the effective value, so a saved `allow` prints as `ask` with a note
-naming what to change. Claude Code checks deny, then ask, then allow rules, and the first match
-wins whichever scope it is in. So the command checks the rules in managed settings, the user's
-`~/.claude/settings.json`, and the repo's `.claude/settings.json` and `settings.local.json`
-against the step's commands, in the forms the kit prescribes (`git push -u`, `--force-with-lease`,
-`gh pr merge --squash --delete-branch`); a tool-name glob such as `*` counts as matching, and so
-do the kit guard's own `guard.denyCommands` / `askCommands` in kit.json. A matching deny or ask
-rule (a committed `Bash(git push*)` ask, say)
-keeps the step at `ask`: the note names the rule and its file, and says that an allow rule in
-`settings.local.json` cannot override it. With no allow rule covering the step, the note names
-the rules to add to `.claude/settings.local.json` (`Bash(git push:*)`, `Bash(git rebase:*)`,
-`Bash(gh pr merge:*)` and `Bash(git merge:*)`). A settings file that does not parse also keeps
-the step at `ask`. A deny rule refuses without a prompt, so one that refuses only some forms (a
-project that forbids force pushes) is named in the note and the step stays `allow`; one that
-refuses every form keeps it at `ask`. The command then prints a PROPOSAL, never applied by it: per
-settings file, the ask rules to remove (never a deny rule) and the rules to add (to `settings.local.json`),
-a warning when a rule also matches other commands, whether the file is committed, and a diff. The
-coordinator applies it only when the owner asks, after an AskUserQuestion with the diff as a
-preview, through an ordinary Edit that `settings_guard.py` turns into Claude Code's own prompt
-(Permission prompts).
+runs it. An `allow` is answered by the kit's PermissionRequest hook (`permission.py`, Permission
+prompts) in the step's plain forms, so an ask rule in any scope (a committed `Bash(git push*)`,
+say) or a missing allow rule does not hold it back, and no settings file changes. The line
+carries the effective value: a saved `allow` prints as `ask`, with a note naming the rule, while
+a settings file (managed, `~/.claude/settings.json`, the repo's `settings.json` or
+`settings.local.json`) does not parse, the kit guard's own `guard.denyCommands` / `askCommands`
+match the step (the hook never answers past them), or deny rules refuse every plain form. A deny
+rule refuses without a prompt, so one on some forms only is named in the note and the step stays
+`allow`. A force push, a compound command (`git commit … && git push`) or any other form is not
+answered: it prompts when attended and is refused in a background thread, so a thread hands it back.
+
+`records`: where the project records finished work besides the code, in the same
+`kit.local.json` (`lead.records`, a list of `"<place>: <what to update>"` lines): the tracker's
+status label and closing comment, a progress or status file, a changelog or diary, a published
+page. Not set, it prints how to find them; the coordinator reads the repo's guidance on its first
+run, confirms the list with the user once and saves it (`records set "…" "…"`, which replaces
+the list). `done` then prints the list as the item's checklist, so a merged item is not called
+done while its issue, progress file or diary still say otherwise.
+
+A command the user would type (a login, a script, a setup step) the coordinator runs itself with
+Bash: the Allow/Deny prompt reaches the user on the phone too over Remote Control, where a line
+starting with `!` is sent as a message and does not run. Only a step that needs the user's hands
+(a password, a payment, a secret) waits for them. A hook or script can tell a Remote Control
+session by `CLAUDE_CODE_BRIDGE_SESSION_ID` in its environment (Claude Code 2.1.199+); the kit
+does not need to, since the Bash route works in both.
 
 A thread briefed with the BRIEF.md text carries the `ITEM:` line; when it finishes, the hook
 files its report under the item (`reported | done, 2 decision(s), agent <id>` in the LOG); when
@@ -380,8 +385,19 @@ session that has not loaded it) each one still wakes the coordinator.
 `permission.py` (PermissionRequest, matcher Bash) allows, without a prompt, a command that is
 exactly kit.json `check` or `verify`, or the kit's own `gate.py`, `lessons.py`, `items.py`,
 `proposals.py` or `compact_logs.py` by their real path, unless the command changes a settings
-file (below). Nothing else is touched: the guard has already judged the
-command, and the permission system decides the rest. `/fewer-permission-prompts` (built in)
+file (below). In any git repo, kit.json or not, it also answers the git steps the owner saved
+as `allow` in `.claude/kit.local.json` (`items.py unattended`), whatever rule raised the prompt:
+`git [-C dir] push [-u] <remote> <branch>` for a branch that is not the default, `main`,
+`master`, `HEAD` or a guard `protectedBranches` one (no `:` refspec, `+` or flag beyond `-u`/`-q`);
+`[GIT_EDITOR=true] git rebase origin/<default>` off the default branch, `--continue`, `--abort`;
+`gh pr merge N [--repo <origin's slug>] --squash|--merge|--rebase [--delete-branch]`. A leading
+`cd <dir> &&`, `2>&1`, a pipe into `tail`/`head`/`grep`/`cut`/`wc`, a `.log`/`.txt`/`.out` file
+in a temp folder or the checkout (not `.git` or `.claude`, bar its worktrees), and reads after
+`;` or `&&` are fine; anything else, `$(…)` or a second line included, is not answered. A thread
+(agent_id set) gets push and rebase only when it is a kit:implementer; merge is the main
+session's. A command settings_guard flags or the active guard asks or denies is never answered.
+Nothing else is touched: the guard has already judged the command, and the permission system
+decides the rest. `/fewer-permission-prompts` (built in)
 writes a broader read-only allowlist to project settings if you want one.
 
 `settings_guard.py` (PreToolUse: Write, Edit, MultiEdit, NotebookEdit, Bash, Monitor) answers

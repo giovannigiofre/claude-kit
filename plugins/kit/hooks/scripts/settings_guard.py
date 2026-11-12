@@ -2,8 +2,8 @@
 """PreToolUse (Write|Edit|MultiEdit|NotebookEdit|Bash|Monitor): changing a Claude Code settings
 file always asks the owner.
 
-The owner may have Claude change a settings file (say the PROPOSAL `items.py unattended`
-prints), but only by approving that exact change in Claude Code's own prompt. So an Edit, Write,
+The owner may have Claude change a settings file (say a permission rule), but only by approving
+that exact change in Claude Code's own prompt. So an Edit, Write,
 MultiEdit or NotebookEdit of a settings file, and a shell command that names one and is not a
 plain read, gets permissionDecision "ask" in every permission mode. The reason starts
 "Sovrascrittura dei settings di Claude Code:" and names the file and the change. From a subagent

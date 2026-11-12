@@ -5,6 +5,9 @@ and EXPECT. Each one is a verifier finding that cost a round before. Keep the pr
 (its helper files, its tracker, its pitfalls) in its gitignored `CLAUDE.local.md` and point the
 brief at them; this list stays generic.
 
+- **Every brief: one branch in one worktree.** A thread writes only inside its own worktree, so
+  a brief never asks it to create or work a second worktree or branch (a docs fix on another
+  branch, a follow-up PR): a second branch is a second thread.
 - **A new database migration:** an upgrade test that starts from the previous schema, with rows
   in it, and runs the migration; the PR says how to roll back or roll forward if it fails in
   production.

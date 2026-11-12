@@ -17,9 +17,9 @@ sys.path.insert(0, str(SCRIPT.parent))
 import subagent_start  # noqa: E402
 
 
-def run(cwd, config_dir):
+def run(cwd, config_dir, agent="kit:implementer"):
     out = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True, timeout=30,
-                         input=json.dumps({"cwd": str(cwd), "agent_type": "kit:implementer"}),
+                         input=json.dumps({"cwd": str(cwd), "agent_type": agent}),
                          env={**os.environ, "CLAUDE_CONFIG_DIR": str(config_dir)})
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)["hookSpecificOutput"]["additionalContext"] if out.stdout.strip() else ""
@@ -64,6 +64,34 @@ def main():
         assert "pitfall_0.md" not in text, "the oldest pitfalls are the ones cut"
         assert "project_deploy" not in text and "ghp_" not in text, "feedback lines only, no secrets"
         assert re.search(r"\(cut \d+ of 41 lines", text), "the cut is said"
+
+        # the verifier's memory: one absolute folder in the main checkout, named from a worktree's
+        # subfolder too, in a repo without kit.json, made and kept out of git; nothing at the cwd
+        other, otree = tmp / "site", tmp / "site-wt"
+        other.mkdir()
+        for args in (["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                                      "commit", "-q", "--allow-empty", "-m", "init"]):
+            subprocess.run(["git", "-C", str(other), *args], check=True)
+        subprocess.run(["git", "-C", str(other), "worktree", "add", "-q", "-b", "w", str(otree)], check=True)
+        (otree / "services" / "api").mkdir(parents=True)
+        folder = other / ".claude" / "agent-memory" / "kit-verifier"
+        for cwd in (otree / "services" / "api", otree, other):
+            got = run(cwd, config, "kit:verifier")
+            assert got.startswith(f"kit: your memory folder is {folder} (") and "is empty so far" in got, got
+        assert folder.is_dir() and not (otree / ".claude").exists() and not (otree / "services" / "api" / ".claude").exists()
+        assert not list(other.glob("MEMORY.md")) and not list(otree.rglob("MEMORY.md")), "nothing written at a cwd"
+        status = subprocess.run(["git", "-C", str(other), "status", "--porcelain", "--untracked-files=all"],
+                                capture_output=True, text=True).stdout
+        assert status == "", f"the folder stays out of git: {status!r}"
+        (folder / "MEMORY.md").write_text("".join(f"- [Trap {i}](trap_{i}.md) — {'detail ' * 25}\n" for i in range(60)))
+        got = run(otree, config, "kit:verifier")
+        assert "- trap_59.md: detail" in got and "trap_0.md" not in got and f"read {folder / 'MEMORY.md'})" in got, got
+        assert len(got) < subagent_start.MEMORY_CHARS + 1000, len(got)
+        assert run(otree, config) == "", "an implementer in a repo without kit.json still gets nothing"
+        assert "kit: your memory folder is" not in run(tree, config), "nor in a repo with one"
+        assert run(tmp, config, "kit:verifier") == "", "outside git: nothing"
+        assert "memory:" not in (SCRIPT.parents[2] / "agents" / "verifier.md").read_text().split("---")[1], \
+            "the verifier no longer asks Claude Code for a cwd-relative memory folder"
     print("subagent_start: all checks passed")
 
 

@@ -43,6 +43,9 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    (not `while read`), gh run watch or gh pr checks --watch; never a Monitor
                    command, one run in the background or ended with &, or one allowCommands
                    names; guard.waits = false turns this rule off
+  memory           the kit verifier writing a memory file (a MEMORY.md, anything in an
+                   agent-memory folder) outside <main checkout>/.claude/agent-memory/kit-verifier;
+                   checked in every repo, kit.json or not, since the verifier is the kit's
   project          kit.json guard.denyCommands / guard.askCommands: the project's own rules,
                    each {"pattern": "<regex over the command>", "reason": "..."}; /kit:learn
                    writes one when a lesson deserves a check instead of a sentence
@@ -1205,12 +1208,60 @@ def record_denial(cwd, rule, why, session):
         pass
 
 
+MEMORY_DIR = Path(".claude") / "agent-memory" / "kit-verifier"
+
+
+def memory_write(command, cwd):
+    """For the kit verifier (in every repo): the memory file this command writes outside its one
+    memory folder, <main checkout>/.claude/agent-memory/kit-verifier (subagent_start.py names it),
+    else None. A write counts when its target (`>`, `>>`, tee) is a MEMORY.md, lies in an
+    agent-memory folder, or is made after a `cd` into one; plain NAME=value variables are put in,
+    and a target still holding a variable counts as outside. Temp folders are left alone (fixtures)."""
+    if "MEMORY.md" not in command and "agent-memory" not in command:
+        return None
+    main = kitlib.main_checkout(cwd)
+    stable = Path(os.path.realpath(str(Path(main) / MEMORY_DIR))) if main else None
+    env = {m.group(1): m.group(2).strip("\"'") for m in
+           re.finditer(r"(?:^|[\s;&|])([A-Za-z_]\w*)=(\"[^\"]*\"|'[^']*'|[^\s;&|]+)", command)}
+    base = Path(cwd)
+    found = re.search(r"(?:^|[;&|]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", command)
+    if found:
+        base = Path(os.path.expanduser(with_vars(found.group(1).strip("\"'"), env)))
+        base = base if base.is_absolute() else Path(cwd) / base
+    temps = [Path(os.path.realpath(str(t))) for t in temp_roots()]
+    for m in re.finditer(r"(?:\d?>>?|\btee(?:\s+-a)?)\s*(\"[^\"]+\"|'[^']+'|[^\s;&|<>]+)", command):
+        target = with_vars(m.group(1).strip("\"'"), env)
+        if target.startswith("&") or target == "/dev/null":
+            continue
+        path = Path(os.path.expanduser(target))
+        path = Path(os.path.realpath(str(path if path.is_absolute() else base / path)))
+        if not (path.name == "MEMORY.md" or "agent-memory" in path.parts or "agent-memory" in base.parts):
+            continue
+        if "$" not in target and any(under(path, t) for t in temps):
+            continue
+        if "$" in target or stable is None or not under(path, stable):
+            return target
+    return None
+
+
 def main():
     data = kitlib.read_input()
     tool = data.get("tool_name") or ""
     tool_input = data.get("tool_input") or {}
     cwd = Path(data.get("cwd") or os.getcwd())
     root = Path(os.path.normpath(str(kitlib.git_root(cwd) or cwd)))
+    if tool == "Bash" and data.get("agent_id") and str(data.get("agent_type") or "").endswith("verifier"):
+        try:
+            stray = memory_write(str(tool_input.get("command") or ""), cwd)
+        except Exception:
+            stray = None
+        if stray:
+            main_dir = kitlib.main_checkout(cwd)
+            where = Path(main_dir) / MEMORY_DIR if main_dir else "the folder the kit named at start-up"
+            print(f"kit guard (memory): this writes {stray}, outside your memory folder {where}. Write the "
+                  "pitfall there, by that absolute path: a memory written anywhere else is lost with its "
+                  "worktree, or left untracked in the repo.", file=sys.stderr)
+            return 2
     if tool == "Bash":
         config = kitlib.load_config(root)[0]
         if config is not None and (config.get("protect") or config.get("onEdit")):  # only when bash_edits.py will compare

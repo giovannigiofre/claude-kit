@@ -442,6 +442,47 @@ def main():
         failed += 1
         print(f"FAIL a project rule's reason is told: {err[:160]}")
 
+    # the verifier's memory: only in the main checkout's folder, in a repo without kit.json too
+    # (shapes from real verifier runs: `cd <dir> && cat >> MEMORY.md`, `M=<dir>; cat > $M/x.md`)
+    h16, r16 = setup(project_kit=False)
+    stable = r16 / ".claude" / "agent-memory" / "kit-verifier"
+    stable.mkdir(parents=True)
+    wt16 = r16.parent / "app-wt"
+    subprocess.run(["git", "-C", str(r16), "worktree", "add", "-q", "-b", "feat/wt", str(wt16)], check=True)
+    (wt16 / "services" / "api").mkdir(parents=True)
+
+    def as_verifier(cwd, command, agent="kit:verifier"):
+        env = dict(os.environ, HOME=str(h16), TMPDIR=str(h16 / "tmp"), CLAUDE_CONFIG_DIR=str(h16 / ".claude"))
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd), "session_id": "s16",
+                   "agent_id": "v1", "agent_type": agent}
+        out = subprocess.run([sys.executable, str(SCRIPT)], input=json.dumps(payload), capture_output=True,
+                             text=True, env=env, timeout=30)
+        return out.returncode, out.stderr
+
+    for cwd, command, blocked in [
+        (r16, "cat >> MEMORY.md <<'EOF'\n- [x](x.md) — y\nEOF", True),  # the repo-root write that blocked a deploy
+        (wt16, f"cd {wt16}/.claude/agent-memory/kit-verifier && cat >> MEMORY.md", True),
+        (wt16 / "services" / "api", "echo '- [x](x.md) — y' >> .claude/agent-memory/kit-verifier/MEMORY.md", True),
+        (wt16, "M=.claude/agent-memory/kit-verifier; cat > $M/pitfall.md <<'EOF'\nbody\nEOF", True),
+        (wt16, "printf x | tee -a MEMORY.md", True),
+        (wt16, "cat >> $MEMDIR/MEMORY.md", True),
+        (wt16, f"cat >> {stable}/MEMORY.md <<'EOF'\n- [x](x.md) — y\nEOF", False),
+        (wt16 / "services" / "api", f"cd {stable} && cat >> MEMORY.md", False),
+        (wt16, f"M={stable}; cat > $M/pitfall.md <<'EOF'\nbody\nEOF", False),
+        (wt16, f"cat {stable}/MEMORY.md", False),
+        (wt16, "mkdir -p .claude/evidence/feat-wt && echo ok > .claude/evidence/feat-wt/run.txt", False),
+        (wt16, "python3 -m pytest 2>&1 | tail -5", False),
+    ]:
+        code, err = as_verifier(cwd, command)
+        if (code == 2) != blocked or (blocked and str(stable) not in err):
+            failed += 1
+            print(f"FAIL verifier memory {'block' if blocked else 'allow'}: {command!r} in {cwd} -> {code} {err[:160]}")
+    for agent in ("kit:implementer", "general-purpose"):
+        code, _ = as_verifier(r16, "cat >> MEMORY.md", agent)
+        if code == 2:
+            failed += 1
+            print(f"FAIL only the verifier's memory writes are checked, not {agent}'s")
+
     print("guard: all good" if not failed else f"guard: {failed} failures")
     return 1 if failed else 0
 

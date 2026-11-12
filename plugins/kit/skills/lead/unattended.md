@@ -13,20 +13,14 @@ answers a permission prompt, and a thread or you waiting on one waits for hours.
    answer: `I unattended push=allow rebase=ask merge=ask`. It goes into this repo's gitignored
    `.claude/kit.local.json`: never global, never committed. Do not ask again in this repo; the
    user changes it by saying so.
-3. **For a step set to `allow`**, the command checks the permission rules in every scope, and the
-   line it prints is the effective value. A saved `allow` stays `ask` while a deny or ask rule
-   anywhere matches the step (managed settings, the user's `~/.claude/settings.json`, the repo's
-   `.claude/settings.json` or `settings.local.json`). Claude Code checks deny and ask before
-   allow, so an allow rule cannot override one: the user changes that rule. It also stays `ask`
-   while no allow rule covers the step: the user adds the rule the note names to
-   `.claude/settings.local.json`. Tell the user the exact rule and file, and brief the line
-   exactly as the command prints it. The command also prints a PROPOSAL with a diff per file.
-   Apply it only when the user asks you to: ask with AskUserQuestion, the question naming the
-   file and the change (a committed file reaches every contributor), the diff in an option's
-   `preview`, options «Applica la modifica ai settings» and «Non applicare». On «Applica» make an
-   ordinary Edit per file; the kit's hook turns it into Claude Code's own Yes/No prompt headed
-   «Sovrascrittura dei settings di Claude Code:». The user approves twice with buttons and types
-   nothing, or edits the file by hand. Never edit settings unasked; a thread's edit is refused.
+3. **For a step set to `allow`**, the kit's PermissionRequest hook answers its prompt, an ask
+   rule's included, when the command is the plain form, run alone: `git push -u origin <branch>`,
+   `git rebase origin/<default>` (`--continue`, `--abort`), and for you only `gh pr merge N
+   --squash --delete-branch`; a pipe to `tail` or a log file is fine. A force push or a compound
+   command is not answered: a thread hands it back. The line the command prints is the effective
+   value: a saved `allow` stays `ask` while a deny rule refuses every plain form, a guard rule
+   asks for it, or a settings file does not parse; tell the user the rule and file the note
+   names, and brief the line exactly as printed. Never edit settings for this.
 4. **Brief every thread of the run with the `UNATTENDED:` line**, and SendMessage it to threads
    already working. A thread does not run a step set to `ask`: it commits and hands back `needs
    push` (or rebase, merge). The same holds for your own commands. Put what waits under NEEDS

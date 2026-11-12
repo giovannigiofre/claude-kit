@@ -116,7 +116,8 @@ When a thread reports:
   branch head is stale. Then mark it `review` (`done` for local work) and apply the merge policy.
   `DECISION:` lines in a report go into your reply once, so the user can veto them. Once a PR is
   merged, remove the thread's worktree and branch (`git worktree remove`, `git branch -D` after
-  `git fetch --prune`) and `I done` it.
+  `git fetch --prune`) and `I done` it, then update each record it lists (`I records`: where the
+  project records work, found in its guidance and confirmed with the user on your first run).
 - **Blocked, a question, or still failing after 3 rounds:** `needs-you`, the question in one line.
 
 **Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it
@@ -126,11 +127,10 @@ high-risk PR still waits. Not set yet: when the first PR is ready, ask whether t
 yourself or leave them for review, and write the answer to `.claude/kit.json` `lead.merge`.
 
 The user is the author of every commit and PR: threads commit under the repo's configured git
-identity (kit.json `author`), with no AI co-author lines or footers; on a branch a thread created
-for its item it may amend, rebase and force-push with `--force-with-lease`, never on the default
-branch or one it didn't create. Deploys, migrations, deleting data and anything outside the repo
-need the user's go-ahead. Your own docs or diary commits ride with the next merge, at most one an
-hour. Before an unattended run, follow [unattended.md](unattended.md) while the user is still here.
+identity (kit.json `author`), with no AI co-author lines or footers, and never rewrite the
+default branch or a branch they didn't create. Deploys, migrations, deleting data and anything
+outside the repo need the user's go-ahead. Your own docs or diary commits ride with the next
+merge, at most one an hour. Before an unattended run, follow [unattended.md](unattended.md).
 
 ## Replies
 
@@ -138,6 +138,8 @@ hour. Before an unattended run, follow [unattended.md](unattended.md) while the 
   the PR or branch), and NEEDS YOU, ordered by what unblocks the most.
 - When nothing changed, say so in a line or not at all. When a wake-up the user didn't cause
   leaves something for them, send one PushNotification, unless the kit mod is on (it notifies).
+- Run a command the user would type yourself, with Bash: its Allow/Deny prompt reaches the phone
+  (a `!` sent over Remote Control does not run). Only a password, payment or secret waits for them.
 
 ## Stop
 

@@ -213,10 +213,13 @@ project.
   evening: a permission prompt becomes a denial and the work goes on; `off` removes it. Whether
   threads may push, rebase and merge while you are away is a per-repo choice the coordinator asks
   once, at the first unattended run, and keeps in the repo's gitignored `.claude/kit.local.json`
-  (`ask` until you say otherwise). For `allow`, the kit names the permission rule to add, and
-  any ask or deny rule elsewhere, such as a committed `Bash(git push*)` ask, that keeps the step
-  at `ask` because an allow rule cannot override one. It shows the change as a diff; you edit the
-  file, or ask the coordinator to, and approve its edit with two buttons. Any change to a Claude
+  (`ask` until you say otherwise). For `allow`, the kit's PermissionRequest hook answers that
+  step's prompt, a committed `Bash(git push*)` ask rule's included, when the command is the plain
+  form: `git push -u origin <branch>` (a thread's own branch, never the default or a protected
+  one), `git rebase origin/<default>` / `--continue` / `--abort`, `gh pr merge N --squash
+  --delete-branch` (the coordinator only), with nothing around it but reads and logs. A force
+  push or a compound command still prompts and is handed back; a deny rule and the guard's own
+  rules still win. No settings file changes. Any change to a Claude
   Code settings file asks you in Claude Code's own prompt, headed «Sovrascrittura dei settings di
   Claude Code:», in every mode, and a background thread's is refused.
   Not for a

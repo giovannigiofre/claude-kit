@@ -24,14 +24,21 @@ queued | agent - | - | from <source>`), so a handed-off or taken item is seen. S
     python3 items.py show|path <id>
     python3 items.py done <id>
     python3 items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow]
+    python3 items.py records [set "<place>: <what to update>" ...]
+
+`records` prints where this project records finished work besides the code (the tracker's labels
+and closing comment, progress or status files, a diary, a published page), saved once in the main
+checkout's gitignored .claude/kit.local.json `lead.records` (kitlib.records); not set, it says how
+to find them. `done` prints them as the item's checklist.
 
 `unattended` prints this repo's unattended git preferences as the brief line `UNATTENDED: push=..
 rebase=.. merge=..`, saying when they are not set yet; with arguments it saves them in the main
 checkout's gitignored .claude/kit.local.json (kitlib.unattended_prefs). The line carries the
-effective value: a saved `allow` prints as `ask`, with the file and rule to change, while a deny or
-ask rule in any settings scope matches the step or no allow rule covers it (kitlib.unattended_effective).
-It then prints a PROPOSAL, the settings change per file as a JSON diff, which it never applies
-(kitlib.unattended_proposal).
+effective value: an `allow` is answered by the kit's PermissionRequest hook in its plain forms
+(permission.py), so a settings ask rule or a missing allow rule does not hold it back; it prints as
+`ask`, with the rule to change, while a settings file does not parse, a kit guard rule asks or
+denies the step, or deny rules refuse every plain form (kitlib.unattended_effective). It never
+writes a settings file.
 """
 
 import json
@@ -311,20 +318,33 @@ def main(argv=None):
         for k in kitlib.UNATTENDED_STEPS:
             if k in notes:
                 print(notes[k])
-        proposal = kitlib.unattended_proposal(root)
-        if proposal:
-            print("PROPOSAL, not applied: this command never writes settings. Only when the owner asks, the "
-                  "coordinator shows this diff and makes it with one Edit per file, which Claude Code asks the owner "
-                  "to approve; the owner can also edit the file by hand.")
-            for p in proposal:
-                what = [f'remove "{r}" from permissions.{b}' for b, r in p["remove"]]
-                what += [f'add "{r}" to permissions.allow' for r in p["add"]]
-                print(f"- {p['file']}" + (" (committed: the change reaches everyone who works in this repo)"
-                                          if p["committed"] else "") + ": " + "; ".join(what))
-                for r in p["broad"]:
-                    print(f'  "{r}" also asks for other commands: removing it drops that prompt too; '
-                          f"a narrower rule may be what the owner wants")
-                print(p["diff"])
+        if "allow" in effective.values():
+            print("The kit's PermissionRequest hook answers an allowed step's prompt in its plain form, one command "
+                  "(`git push -u origin <branch>`, `git rebase origin/<default>`, `gh pr merge N --squash "
+                  "--delete-branch`); a force push or a compound command is not answered: hand it back.")
+        return 0
+    if cmd == "records":
+        if rest[:1] == ["set"]:
+            if not rest[1:]:
+                print('items: records set needs the places, each one quoted ("<place>: <what to update>")', file=sys.stderr)
+                return 2
+            try:
+                kitlib.save_records(root, rest[1:])
+            except ValueError as exc:
+                print(f"items: {exc}", file=sys.stderr)
+                return 1
+        elif rest:
+            print(f"items: records takes nothing or `set <place> ...`, not {rest[0]!r}", file=sys.stderr)
+            return 2
+        places, path = kitlib.records(root)
+        if places:
+            print(f"RECORDS (from {path}):")
+            print("\n".join(f"- {p}" for p in places))
+        else:
+            print("RECORDS: not set for this repo. Read its guidance (AGENTS.md, CLAUDE.md, CONTRIBUTING, docs/) for "
+                  "where finished work is recorded besides the code: the tracker (issue status, labels, closing "
+                  "comment, a project board), progress or status files, a changelog or diary, a published page. "
+                  "Confirm the list with the user once, then save it: items.py records set \"<place>: <what>\" ...")
         return 0
     if cmd in ("log", "report", "verdict", "done", "show", "path"):
         if not rest:
@@ -339,6 +359,12 @@ def main(argv=None):
             ok = write(root, item_id, name, text, "reported" if cmd == "report" else "verdict")
         elif cmd == "done":
             ok = done(root, item_id)
+            places, _ = kitlib.records(root)
+            if ok and places:
+                print(f"items: {item_id} done. Its records, each updated before you tell the user it is done:")
+                print("\n".join(f"- [ ] {p}" for p in places))
+            elif ok:
+                print(f"items: {item_id} done. This repo's record places are not set: `items.py records`.")
         elif cmd == "path":
             p = find(root, item_id)
             ok = bool(p)
