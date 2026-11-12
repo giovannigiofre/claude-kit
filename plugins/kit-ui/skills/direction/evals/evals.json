@@ -1,0 +1,44 @@
+{
+  "skill_name": "direction",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "nel repo acme (Next.js, apps/web, nessun DESIGN.md, logo e nome già decisi, colore del brand #1F4FD8) voglio un nuovo aspetto per home, elenco bandi e scheda bando: proponimi delle direzioni visive, io scelgo e poi la applichiamo. Fammi vedere prima come procederesti: passi, fonti, cosa mi mostri e dove registri la scelta. Non scrivere codice.",
+      "expected_output": "kit-ui:direction: a five-line study, three directions that differ in at least two of form/type/density/colour temperature, each a mix with one source per role and the brand's #1F4FD8 taking the colour role, shown in one artifact with the same three screens at 390 and 1440, the owner's pick saved in the artifact and DESIGN.md, a hierarchy spec of checkable rules with file:line sources, then kit-ui:ui A or B and an independent review.",
+      "files": [],
+      "assertions": [
+        {"name": "three-different-directions", "text": "The plan proposes exactly three directions and says they must differ in at least two of form language, type, density and colour temperature"},
+        {"name": "mix-with-roles", "text": "Each direction is stated as a mix of named sources with roles (form, type scale, colour, motion, density), at most one source per role, with a fit line and a rejected line"},
+        {"name": "brand-outranks-sources", "text": "The brand colour #1F4FD8 (and the existing logo and name) fill their roles; no external source replaces them"},
+        {"name": "same-screens-one-artifact", "text": "All three directions are shown in one artifact with the same screens (home, elenco, scheda) at phone and desktop widths"},
+        {"name": "owner-picks-recorded", "text": "The owner picks; the plan does not pick for them, and records the pick in the artifact and in DESIGN.md with date, who and attributions"},
+        {"name": "checkable-spec", "text": "The hierarchy spec is a list of rules each with a check (a measurement on a screenshot or in code) and a source cited as file:line, a project file or the owner's words"},
+        {"name": "independent-review", "text": "After building, someone who did not build it (a fresh thread or kit:verifier) marks every spec rule pass or fail and runs one critique"},
+        {"name": "references-tied-to-steps", "text": "The plan reads a few reference files, each tied to the step that cites it, not a bulk read of the clones"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "stessa richiesta di prima ma la rete è bloccata: `python3 -I refs.py find fintech` esce con codice 2 e 'cannot reach'. Come vai avanti?",
+      "expected_output": "Continue the same flow on impeccable's references (reference/new-work.md, craft-floor.md), say 'references: offline' in the report, no retries in a loop, no installing packages or other ways around the block.",
+      "files": [],
+      "assertions": [
+        {"name": "continues-offline", "text": "The plan continues the direction flow instead of stopping"},
+        {"name": "uses-impeccable-references", "text": "It falls back to impeccable's own references (new-work, craft floor)"},
+        {"name": "says-offline", "text": "It states in the report that references were offline"},
+        {"name": "no-workaround", "text": "It does not try to get the sources another way (npm packages, mirrors, a proxy change)"}
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "ecco la direzione che abbiamo scelto ieri per l'app (vetro smerigliato, Inter, densità alta): criticala prima che la applichiamo. Il DESIGN.md del progetto dice che i testi sotto 14 px non si usano.",
+      "expected_output": "A critique of the existing direction against the project's DESIGN.md first, then craft rules with file:line; a source rule allowing 12 px captions is dropped because DESIGN.md outranks it, and the report names that call; one critique template, not two.",
+      "files": [],
+      "assertions": [
+        {"name": "project-rule-wins", "text": "The 14 px minimum from DESIGN.md is kept over any external source that allows smaller text, and the report names it as a precedence call"},
+        {"name": "one-critique", "text": "It uses one critique method (open-design's critique template or impeccable's critique), not both"},
+        {"name": "evidence-per-finding", "text": "Each finding cites the screen or the rule and a source file:line or project file"}
+      ]
+    }
+  ]
+}

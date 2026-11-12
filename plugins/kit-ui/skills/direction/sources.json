@@ -1,0 +1,164 @@
+{
+  "note": "Design references kit-ui:direction reads in place, from a sparse clone at a pinned commit (scripts/refs.py). Nothing here is copied into the kit or a project; each clone keeps its LICENSE. size/files/seconds: a real fetch on 2026-11-12. Bump a sha only after reading what changed.",
+  "sources": [
+    {
+      "id": "open-design",
+      "repo": "nexu-io/open-design",
+      "url": "https://github.com/nexu-io/open-design.git",
+      "sha": "a37dc822b5ed7021c3a985290689c1111d0d056d",
+      "paths": ["/LICENSE", "/craft/", "/design-systems/README.md", "/design-systems/*/DESIGN.md", "/design-templates/critique/"],
+      "license": "Apache-2.0",
+      "attribution": "OpenDesign (nexu-io), Apache-2.0; its craft/ is adapted from referodesign/refero_skill (MIT)",
+      "good_for": "craft rules (typography, colour, laws of UX, states, forms, motion, anti-slop) + 152 DESIGN.md systems by brand and by style + a critique template",
+      "size": "1802KB",
+      "files": 169,
+      "seconds": 1.5
+    },
+    {
+      "id": "refero",
+      "repo": "referodesign/refero_skill",
+      "url": "https://github.com/referodesign/refero_skill.git",
+      "sha": "2382e518f90096df607196b9a635da2d1bc142f9",
+      "paths": ["/LICENSE", "/skills/refero-design/SKILL.md", "/skills/refero-design/references/", "!/skills/refero-design/references/mcp-tools.md"],
+      "license": "MIT",
+      "attribution": "Refero (referodesign/refero_skill), MIT",
+      "good_for": "the upstream of OpenDesign craft/: anti-AI-slop, copywriting, icons, motion, craft details (its MCP is left out)",
+      "size": "117KB",
+      "files": 11,
+      "seconds": 0.9
+    },
+    {
+      "id": "awesome-design-md",
+      "repo": "VoltAgent/awesome-design-md",
+      "url": "https://github.com/VoltAgent/awesome-design-md.git",
+      "sha": "fcc70284932276d085f01ef9f83edde90b1258cb",
+      "paths": ["/LICENSE", "/design-md/1win/DESIGN.md", "/design-md/aljazeera/DESIGN.md", "/design-md/dell-1996/DESIGN.md", "/design-md/dji/DESIGN.md", "/design-md/hp/DESIGN.md", "/design-md/jobright/DESIGN.md", "/design-md/mercury/DESIGN.md", "/design-md/mydealz/DESIGN.md", "/design-md/nerdwallet/DESIGN.md", "/design-md/nintendo-2001/DESIGN.md", "/design-md/oracle/DESIGN.md", "/design-md/oura/DESIGN.md", "/design-md/sap/DESIGN.md"],
+      "license": "MIT",
+      "attribution": "VoltAgent awesome-design-md, MIT",
+      "good_for": "13 brand DESIGN.md files open-design lacks (66 of its 84 overlap): fintech, news, hardware, enterprise",
+      "size": "417KB",
+      "files": 14,
+      "seconds": 0.9
+    },
+    {
+      "id": "govuk",
+      "repo": "alphagov/govuk-design-system",
+      "url": "https://github.com/alphagov/govuk-design-system.git",
+      "sha": "5f31aa7e06a2d9324e6fd4289eeaf815c4a00d46",
+      "paths": ["/LICENSE", "/src/components/*/index.md", "/src/patterns/*/index.md", "/src/styles/*/index.md", "/src/accessibility/index.md"],
+      "license": "MIT",
+      "attribution": "GOV.UK Design System, MIT (Crown Copyright)",
+      "good_for": "public-service forms, errors, question pages, check answers, plain type scale and spacing: for users who are not tech-savvy",
+      "size": "431KB",
+      "files": 87,
+      "seconds": 1.3
+    },
+    {
+      "id": "bootstrap-italia",
+      "repo": "italia/bootstrap-italia",
+      "url": "https://github.com/italia/bootstrap-italia.git",
+      "sha": "9b1a1c02700fb3efa808b040736c9e566a7a5c9c",
+      "paths": ["/LICENSE", "/docs/form/", "/docs/organizzare-i-contenuti/tipografia.md", "/docs/organizzare-i-contenuti/testo.md", "/src/scss/base/_variables.scss"],
+      "license": "BSD-3-Clause",
+      "attribution": "Bootstrap Italia (Designers Italia), BSD-3-Clause",
+      "good_for": "the Italian public administration's look: Titillium type, PA blue, form controls, in Italian",
+      "size": "225KB",
+      "files": 16,
+      "seconds": 0.9
+    },
+    {
+      "id": "radix-colors",
+      "repo": "radix-ui/colors",
+      "url": "https://github.com/radix-ui/colors.git",
+      "sha": "dbdb85470547c7d34b9001f48fddb08ded335979",
+      "paths": ["/LICENSE", "/README.md", "/src/light.ts", "/src/dark.ts"],
+      "license": "MIT",
+      "attribution": "Radix Colors (WorkOS), MIT",
+      "good_for": "12-step colour scales with a role per step, light and dark: a colour role when the brand has only one hue",
+      "size": "116KB",
+      "files": 4,
+      "seconds": 0.9
+    },
+    {
+      "id": "tailwind-theme",
+      "repo": "tailwindlabs/tailwindcss",
+      "url": "https://github.com/tailwindlabs/tailwindcss.git",
+      "sha": "b08bf83a327271dfb7e3cd485fd793da15013f7c",
+      "paths": ["/LICENSE", "/packages/tailwindcss/theme.css"],
+      "license": "MIT",
+      "attribution": "Tailwind CSS (Tailwind Labs), MIT",
+      "good_for": "the default oklch palette, type, spacing, radius, shadow and easing scales most Tailwind projects start from",
+      "size": "20KB",
+      "files": 2,
+      "seconds": 1.0
+    },
+    {
+      "id": "primer",
+      "repo": "primer/primitives",
+      "url": "https://github.com/primer/primitives.git",
+      "sha": "47736486bf67b2a14ba1ada61fa0f57af29bb875",
+      "paths": ["/LICENSE", "/DESIGN_TOKENS_GUIDE.md", "/src/tokens/base/", "/src/tokens/functional/"],
+      "license": "MIT",
+      "attribution": "GitHub Primer Primitives, MIT",
+      "good_for": "dense, data-heavy product UI: functional colour roles, high-contrast and dimmed themes, size and motion tokens",
+      "size": "771KB",
+      "files": 36,
+      "seconds": 1.2
+    },
+    {
+      "id": "carbon",
+      "repo": "carbon-design-system/carbon",
+      "url": "https://github.com/carbon-design-system/carbon.git",
+      "sha": "1e17b61f5dc8873d68eabcc5c3cce2da41c4e5ba",
+      "paths": ["/LICENSE", "/packages/type/src/scale.ts", "/packages/type/src/styles.ts", "/packages/motion/src/", "/packages/layout/src/tokens.ts", "/packages/colors/src/index.ts"],
+      "license": "Apache-2.0",
+      "attribution": "IBM Carbon Design System, Apache-2.0",
+      "good_for": "enterprise type scale (productive vs expressive), motion durations and easings by purpose, 2x grid spacing",
+      "size": "35KB",
+      "files": 8,
+      "seconds": 1.8
+    }
+  ],
+  "rejected": [
+    {
+      "repo": "nexu-io/open-design skills/",
+      "why": "85 of 171 skills are stubs (\"This catalogue entry advertises...\"); the CLI and daemon are not published (@open-design/cli is 404 on npm)"
+    },
+    {
+      "repo": "npm open-design-mcp, @feimacode/open-design-agent-kit*, @xsyl06/my-od",
+      "why": "unofficial packages republishing OpenDesign: supply-chain risk, and git gives the same files pinned"
+    },
+    {
+      "repo": "referodesign/refero_skill MCP",
+      "why": "a remote service; the skill reads the reference files only"
+    },
+    {
+      "repo": "uswds/uswds",
+      "why": "mixed licence: public domain with parts under other terms (LICENSE.md: \"A few parts of this project are not in the public domain\")"
+    },
+    {
+      "repo": "Shopify/polaris",
+      "why": "archived and unmaintained (README, Sept 2026); Primer and Carbon cover the same ground"
+    },
+    {
+      "repo": "material-foundation/material-color-utilities",
+      "why": "a code library (HCT maths), nothing a direction reads"
+    },
+    {
+      "repo": "radix-ui/themes",
+      "why": "overlaps radix-colors; its tokens are component CSS"
+    },
+    {
+      "repo": "shadcn-ui/ui",
+      "why": "a project on shadcn has its tokens in its own code; the repo's skills are about its CLI"
+    },
+    {
+      "repo": "microsoft/fluentui",
+      "why": "very large monorepo, not cloned; Primer and Carbon cover dense product UI"
+    },
+    {
+      "repo": "Apple Human Interface Guidelines",
+      "why": "a website with no public git source or reuse licence; open-design has apple/DESIGN.md"
+    }
+  ]
+}

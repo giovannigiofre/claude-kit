@@ -65,9 +65,10 @@ which styles the next result used instead, and extend the list.
 | **B. New page or screen in a product with a design system** (most app work) | impeccable | impeccable `context --target <main stylesheet>` → `new-work` "extend an existing surface" in the right mode → `shape` if the UX is unclear → build with project tokens only → optionally borrow patterns from taste `references/app-screens.md` (KPIs, tables, forms, empty and error states), design system first → done-check. No taste `draw`. |
 | **C. Polish, critique or audit of existing UI** | impeccable | impeccable `critique` then `audit` → fix with the commands they name (`polish`, `layout`, `typeset`, `harden`, `clarify`, `adapt`) → for a marketing page add taste's before/after inspection (`inspect.mjs --out .taste-skill/before` and `after`) → done-check |
 | **D. New brand or rebrand** | `kit-ui:brand` | Use kit-ui:brand unchanged. Optionally one taste `draw.mjs --options 3` as an extra source of palette and type candidates, labelled as such. |
+| **E. New visual direction, or a mock-up or prototype from scratch** | `kit-ui:direction` | kit-ui:direction first (three directions as mixes of pinned design systems, the owner's pick, a checkable hierarchy spec); then build here as A or B with its DESIGN.md. |
 
-Mockups and prototypes on a Design canvas (Artifact "Design" type) are task B or A by content:
-the canvas is only the medium.
+Mockups and prototypes on a Design canvas (Artifact "Design" type) are task B or A by content when
+the look is settled, E when it is not: the canvas is only the medium.
 
 ## 3. Done-check (every type except D, which has its own)
 

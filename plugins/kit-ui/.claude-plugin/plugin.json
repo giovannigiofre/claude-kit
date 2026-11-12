@@ -1,7 +1,7 @@
 {
   "name": "kit-ui",
-  "description": "UI and brand work: routes design tasks between impeccable and taste with one precedence rule and one done-check, and turns a brand brief into three options, then an applied design system",
-  "version": "1.0.0",
+  "description": "UI and brand work: routes design tasks between impeccable and taste with one precedence rule and one done-check, proposes three visual directions from pinned public design systems with a checkable hierarchy spec, and turns a brand brief into three options, then an applied design system",
+  "version": "1.1.0",
   "author": {
     "name": "giovannigiofre"
   }

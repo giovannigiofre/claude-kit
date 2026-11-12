@@ -673,6 +673,7 @@ python3 plugins/kit/hooks/tests/test_auto_mode_sync.py
 python3 plugins/kit/skills/investigate/tests/test_compact_logs.py
 python3 plugins/kit/skills/overnight/tests/test_overnight.py
 python3 plugins/kit-llm/hooks/tests/test_llm_detect.py
+python3 plugins/kit-ui/skills/direction/tests/test_refs.py
 claude plugin test plugins/kit               # the mod (modes, safety, status line, watchdog) against the engine
 ```
 

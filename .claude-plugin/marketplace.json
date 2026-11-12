@@ -13,7 +13,7 @@
     {
       "name": "kit-ui",
       "source": "./plugins/kit-ui",
-      "description": "UI and brand work (impeccable + taste routing, brand boards). Project scope: the kit offers it when a task needs it."
+      "description": "UI and brand work (impeccable + taste routing, visual directions from pinned design systems, brand boards). Project scope: the kit offers it when a task needs it."
     },
     {
       "name": "kit-llm",
