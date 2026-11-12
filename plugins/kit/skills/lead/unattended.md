@@ -20,7 +20,9 @@ answers a permission prompt, and a thread or you waiting on one waits for hours.
    merge N --squash --delete-branch`, ending at most in `| tail -N` or a log under `.claude/` or
    a temp folder. Any other command is not answered: a thread hands it back. The line the command prints is the effective
    value: a saved `allow` stays `ask` while a deny rule refuses every plain form, a guard rule
-   asks for it, or a settings file does not parse; tell the user the rule and file the note
+   asks for it, a settings file does not parse, or the repo's git configuration or hooks changed
+   since the user saved it (the note says so: only the user saves `allow` again, by running the
+   command themselves); tell the user the rule and file the note
    names, and brief the line exactly as printed. Never edit settings for this.
 4. **Brief every thread of the run with the `UNATTENDED:` line**, and SendMessage it to threads
    already working. A thread does not run a step set to `ask`: it commits and hands back `needs

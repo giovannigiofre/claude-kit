@@ -219,7 +219,10 @@ project.
   default, a protected one or a tag), `git rebase origin/<default>` / `--continue` / `--abort`,
   `gh pr merge N --squash --delete-branch` (the coordinator only), followed at most by `| tail
   -N` or a log file left untracked under `.claude/` or a temp folder. A force push or any other
-  command still prompts and is handed back; a deny rule and the guard's own rules still win. Only
+  command still prompts and is handed back; a deny rule and the guard's own rules still win. Your
+  `allow` is for the repo's git configuration and hooks of that moment: a remote URL, an
+  `insteadOf`, `push.default`, `core.sshCommand`, a hook script changed since, and the step is
+  `ask` again until you save `allow` once more. Only
   you save `allow`: a change to `kit.local.json`, or `I unattended push=allow` run by Claude,
   asks you, and a tracked `kit.local.json` is not read. No settings file changes. Any change to a Claude
   Code settings file asks you in Claude Code's own prompt, headed «Sovrascrittura dei settings di

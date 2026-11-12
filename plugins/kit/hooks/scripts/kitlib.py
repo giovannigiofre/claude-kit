@@ -7,6 +7,7 @@ uses its main checkout's: config_file.
 """
 
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -111,14 +112,43 @@ def main_checkout(cwd):
 
 
 # The owner's unattended git preferences for one repository, in its main checkout's gitignored
-# `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "ask", "rebase": "ask", "merge": "ask"}}}`):
-# local to this machine and this repo, never global, never committed. `ask` (the default, and
-# whatever is missing, misspelt or unreadable) means nobody answers a permission prompt during an
-# unattended run, so a thread hands that step back; `allow` means the kit's PermissionRequest hook
-# answers the step's prompt in its plain forms (permission.unattended_step), unless a rule says
-# otherwise (unattended_effective).
+# `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "ask", "rebase": "ask", "merge": "ask",
+# "for": {"origin": "<push URL>", "digest": "<sha256>"}}}}`): local to this machine and this repo,
+# never global, never committed. `ask` (the default, and whatever is missing, misspelt or
+# unreadable) means nobody answers a permission prompt during an unattended run, so a thread hands
+# that step back; `allow` means the kit's PermissionRequest hook answers the step's prompt in its
+# plain forms (permission.unattended_step), unless a rule says otherwise (unattended_effective).
+# `for` is what the `allow` was given for (git_fingerprint): the hook answers only while the repo's
+# git configuration and hooks are still those.
 UNATTENDED_STEPS = ("push", "rebase", "merge")
 LOCAL_CONFIG = ".claude/kit.local.json"
+
+
+def git_fingerprint(root):
+    """What an unattended `allow` is given for: origin's effective push URL, and a digest of the
+    git configuration in force (every file and include, every key but branch.*) and of the hook
+    scripts git would run (the hooks folder, core.hooksPath honoured). A remote URL, an insteadOf
+    or pushurl, push.default, core.sshCommand, core.editor, a credential helper, hooksPath, a hook
+    file: changing any gives another digest, so a saved `allow` no longer applies until the owner
+    saves it again (an approved push, rebase or merge would otherwise land elsewhere or run that
+    code). branch.* keys are left out: `git push -u` and `git worktree add -b` write them."""
+    origin = git_out(root, "remote", "get-url", "--push", "origin")
+    entries = git_out(root, "config", "--list", "-z", strip=False).split("\0")
+    lines = sorted(e for e in entries if e and not e.startswith("branch."))
+    digest = hashlib.sha256("\n".join(lines).encode("utf-8", "surrogateescape"))
+    hooks = git_out(root, "rev-parse", "--path-format=absolute", "--git-path", "hooks") \
+        or os.path.join(str(root), git_out(root, "rev-parse", "--git-path", "hooks") or ".git/hooks")
+    try:
+        files = sorted(p for p in Path(hooks).iterdir() if p.is_file())
+    except OSError:
+        files = []
+    for p in files:
+        digest.update(f"\n{p.name}\n".encode("utf-8", "surrogateescape"))
+        try:
+            digest.update(p.read_bytes())
+        except OSError:
+            digest.update(b"unreadable")
+    return {"origin": origin, "digest": digest.hexdigest()}
 
 
 def local_config(cwd):
@@ -152,15 +182,29 @@ def unattended_prefs(cwd):
     return prefs, any(k in own for k in UNATTENDED_STEPS), path
 
 
+def unattended_for(cwd):
+    """The fingerprint (git_fingerprint) the repo's `allow` was saved for, else {}."""
+    value, _ = _local_value(cwd)
+    lead = (value or {}).get("lead")
+    own = lead.get("unattended") if isinstance(lead, dict) else None
+    pinned = own.get("for") if isinstance(own, dict) else None
+    return pinned if isinstance(pinned, dict) else {}
+
+
 def save_unattended(cwd, changes):
     """Write `changes` ({step: ask|allow}) into the repo's kit.local.json beside its other keys and
-    keep the file out of git; returns the prefs now in force. A file that does not parse is never
-    rewritten (ValueError)."""
+    keep the file out of git; returns the prefs now in force. Saving an `allow` also records what
+    it is for (`for`: the main checkout's git_fingerprint now); saving only `ask` keeps the earlier
+    record, so Claude cannot refresh it through the one form it may run unasked. A file that does
+    not parse is never rewritten (ValueError)."""
     prefs, _, _ = unattended_prefs(cwd)
     value, path = _local_value(cwd, write=True)
     lead = value.get("lead") if isinstance(value.get("lead"), dict) else {}
     own = {**prefs, **changes}
     value["lead"] = {**lead, "unattended": {k: own[k] for k in UNATTENDED_STEPS}}
+    pinned = git_fingerprint(path.parent.parent) if "allow" in changes.values() else unattended_for(cwd)
+    if pinned:
+        value["lead"]["unattended"]["for"] = pinned
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
     exclude(path.parent.parent, LOCAL_CONFIG)
@@ -278,6 +322,14 @@ def unattended_effective(cwd):
     effective, notes = {k: "ask" for k in UNATTENDED_STEPS}, {}
     steps = [k for k in UNATTENDED_STEPS if prefs[k] == "allow"]
     if not steps:
+        return effective, notes
+    pinned = unattended_for(cwd)
+    if pinned != git_fingerprint(git_root(cwd) or cwd):
+        for step in steps:
+            notes[step] = (f"{step}: allow saved for origin {pinned.get('origin') or '?'} with the git configuration "
+                           "and hooks of that moment, and they have changed since (a remote URL, an insteadOf or "
+                           "pushurl, push.default, core.sshCommand, hooksPath, a hook script, …): it stays ask "
+                           f"until the owner runs `items.py unattended {step}=allow` again.")
         return effective, notes
     files, rules, unreadable = permission_files(cwd), [], []
     for f in files:

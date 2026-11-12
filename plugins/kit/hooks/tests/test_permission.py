@@ -34,6 +34,10 @@ def git(repo, *args):
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
+def kitlib_git(repo, *args):
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
 def main():
     failed = 0
 
@@ -103,7 +107,12 @@ def main():
         git(site, "add", ".claude/notes.log")
 
         def prefs(**steps):
-            local.write_text(json.dumps({"lead": {"unattended": {k: steps.get(k, "ask") for k in ("push", "rebase", "merge")}}}))
+            # the owner's command, under the hook's environment: it records what the allow is for
+            args = [f"{k}={steps.get(k, 'ask')}" for k in ("push", "rebase", "merge")]
+            subprocess.run([sys.executable, str(SCRIPTS / "items.py"), "unattended", *args], cwd=str(site), env=env,
+                           check=True, capture_output=True, timeout=60)
+
+        allow_all = dict(push="allow", rebase="allow", merge="allow")
 
         approved = [
             "git push -u origin docs/diary-1111",
@@ -191,15 +200,21 @@ def main():
         expect(wt, [("git push -u origin docs/records-1112", "prompt")], env, agent="kit:verifier", label="verifier: ")
         for other in ("general-purpose", "implementer", "evil-implementer", "kit:implementer2"):
             expect(wt, [("git push -u origin docs/records-1112", "prompt")], env, agent=other, label=f"agent {other}: ")
+        # Each explicit check below is tested on its own: the owner saves allow again (prefs) after the
+        # configuration changes, since any change alone already puts every step back to ask (further down).
         # a push refspec in the config maps the branch elsewhere
         git(site, "config", "remote.origin.push", "refs/heads/*:refs/heads/main")
+        prefs(**allow_all)
         expect(site, [("git push origin docs/diary-1111", "prompt")], env, label="remote.origin.push: ")
         git(site, "config", "--unset-all", "remote.origin.push")
+        prefs(**allow_all)
         # a bare `gh pr merge` picks its repo from the remotes and GH_REPO: only origin's counts
         git(site, "remote", "add", "upstream", "git@github.com:someone/else.git")
+        prefs(**allow_all)
         expect(site, [("gh pr merge 209 --squash", "prompt"), ("gh pr merge 209 -R example-org/shop --squash", "allow"),
                       ("gh pr merge 209 -R someone/else --squash", "prompt")], env, label="two remotes: ")
         git(site, "remote", "remove", "upstream")
+        prefs(**allow_all)
         expect(site, [("gh pr merge 209 --squash", "prompt")], {**env, "GH_REPO": "someone/else"}, label="GH_REPO: ")
         expect(site, [("gh pr merge 209 --squash", "allow")], {**env, "GH_REPO": "example-org/shop"}, label="GH_REPO origin: ")
         expect(site, [("gh pr merge 209 --squash", "prompt"), ("gh pr merge 209 -R example-org/shop --squash", "prompt")],
@@ -208,21 +223,75 @@ def main():
         # push.default upstream/tracking push a branch made from origin/main onto main (verifier round 2)
         git(site, "config", "branch.docs/diary-1111.remote", "origin")
         git(site, "config", "branch.docs/diary-1111.merge", "refs/heads/main")
+        expect(site, [("git push origin docs/diary-1111", "allow")], env, label="branch.* keys are not pinned: ")
         for mode, want in (("upstream", "prompt"), ("tracking", "prompt"), ("Upstream", "prompt"), ("matching", "prompt"),
                            ("simple", "allow"), ("current", "allow")):
             git(site, "config", "push.default", mode)
+            prefs(**allow_all)
             expect(site, [("git push origin docs/diary-1111", want)], env, label=f"push.default {mode}: ")
         git(site, "config", "--unset", "push.default")
+        prefs(**allow_all)
         expect(site, [("git push origin docs/diary-1111", "allow")], env, label="push.default unset: ")
         # origin's push URL: another repo is refused, the same repo spelled another way is not
         git(site, "config", "remote.origin.pushurl", "git@github.com:someone/else.git")
+        prefs(**allow_all)
         expect(site, [("git push origin docs/diary-1111", "prompt")], env, label="pushurl elsewhere: ")
         git(site, "config", "remote.origin.pushurl", "https://github.com/example-org/shop.git")
+        prefs(**allow_all)
         expect(site, [("git push origin docs/diary-1111", "allow")], env, label="pushurl same repo: ")
         git(site, "config", "--unset", "remote.origin.pushurl")
         git(site, "config", "url.git@github.com:someone/else.git.pushInsteadOf", "git@github.com:example-org/shop.git")
+        prefs(**allow_all)
         expect(site, [("git push origin docs/diary-1111", "prompt")], env, label="pushInsteadOf: ")
         git(site, "config", "--remove-section", "url.git@github.com:someone/else.git")
+        prefs(**allow_all)
+        # The allow is for the git configuration and hooks of the moment the owner saved it (round 3):
+        # the shapes read as plain git, but an insteadOf, a changed remote, core.sshCommand, a hook
+        # script would send the same text elsewhere or run that code. Any change is a prompt, for every
+        # step, until the owner saves allow again; `=ask`, which Claude may run, never refreshes it.
+        steps = [("git push origin docs/diary-1111", "prompt"), ("git rebase origin/main", "prompt"),
+                 ("GIT_EDITOR=true git rebase --continue", "prompt"), ("gh pr merge 209 --squash", "prompt"),
+                 (f"git -C {wt} push -u origin docs/records-1112", "prompt")]
+        git(site, "config", "url.git@github.com:someone/else.git.insteadOf", "git@github.com:example-org/shop.git")
+        expect(site, steps, env, label="insteadOf: ")
+        git(site, "config", "--remove-section", "url.git@github.com:someone/else.git")
+        expect(site, [("git push origin docs/diary-1111", "allow")], env, label="insteadOf removed: ")
+        git(site, "remote", "set-url", "origin", "git@github.com:someone/else.git")
+        expect(site, steps, env, label="origin moved: ")
+        git(site, "remote", "set-url", "origin", "git@github.com:example-org/shop.git")
+        expect(site, [("git push origin docs/diary-1111", "allow")], env, label="origin back: ")
+        for key, value in (("core.sshCommand", "ssh -o ProxyCommand=x"), ("core.editor", "vim"),
+                           ("core.hooksPath", str(Path(tmp) / "hooks")), ("credential.helper", "!x"),
+                           ("include.path", str(Path(tmp) / "more.gitconfig"))):
+            git(site, "config", key, value)
+            expect(site, steps, env, label=f"{key}: ")
+            git(site, "config", "--unset", key)
+            expect(site, [("git push origin docs/diary-1111", "allow")], env, label=f"{key} unset: ")
+        hook = Path(kitlib_git(site, "rev-parse", "--path-format=absolute", "--git-path", "hooks")) / "pre-push"
+        hook.write_text("#!/bin/sh\ntouch pwned\n")
+        expect(site, steps, env, label="a hook file: ")
+        expect(wt, [("git push -u origin docs/records-1112", "prompt")], env, agent="kit:implementer", label="a hook file, thread: ")
+        hook.unlink()
+        expect(site, [("git push origin docs/diary-1111", "allow")], env, label="hook removed: ")
+        git(site, "config", "core.sshCommand", "ssh")
+        subprocess.run([sys.executable, str(SCRIPTS / "items.py"), "unattended", "rebase=ask"], cwd=str(site), env=env,
+                       check=True, capture_output=True, timeout=60)
+        expect(site, [("git push origin docs/diary-1111", "prompt")], env, label="=ask does not re-pin: ")
+        prefs(**allow_all)
+        expect(site, [("git push origin docs/diary-1111", "allow")], env, label="the owner's allow re-pins: ")
+        git(site, "config", "--unset", "core.sshCommand")
+        expect(site, [("git push origin docs/diary-1111", "prompt")], env, label="and the next change prompts again: ")
+        prefs(**allow_all)
+        # `gh repo set-default` leaves remote.origin.gh-resolved: gh merges the PR of that repo (round 3)
+        git(site, "config", "remote.origin.gh-resolved", "someone/else")
+        prefs(**allow_all)
+        expect(site, [("gh pr merge 209 --squash", "prompt"), ("gh pr merge 209 -R example-org/shop --squash", "prompt"),
+                      ("git push origin docs/diary-1111", "allow")], env, label="gh-resolved elsewhere: ")
+        git(site, "config", "remote.origin.gh-resolved", "base")
+        prefs(**allow_all)
+        expect(site, [("gh pr merge 209 --squash", "allow")], env, label="gh-resolved base: ")
+        git(site, "config", "--unset", "remote.origin.gh-resolved")
+        prefs(**allow_all)
         # a log that is a link to another file: truncating it would empty the owner's answer
         soft, hard, folder = Path(tmp) / "k.log", Path(tmp) / "h.log", Path(tmp) / "d"
         soft.symlink_to(local)

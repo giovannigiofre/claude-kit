@@ -188,14 +188,45 @@ def main():
         local.unlink()
         code, out, err = run(repo, "unattended", "push=allow", "merge=ask", env=env)
         saved = json.loads(local.read_text())
+        pinned = saved["lead"]["unattended"].pop("for", None)
         check(code == 0 and saved["lead"]["unattended"] == {"push": "allow", "rebase": "ask", "merge": "ask"}, f"saved: {saved} {err}")
+        check(set(pinned or {}) == {"origin", "digest"} and pinned["origin"] == "" and len(pinned["digest"]) == 64,
+              f"an allow is saved for the git configuration and hooks of the moment (this repo has no origin): {pinned}")
         settings = repo / ".claude" / "settings.local.json"
         check(out.startswith("UNATTENDED: push=allow rebase=ask merge=ask") and "(from " in out and "stays ask" not in out
-              and "PermissionRequest hook answers" in out and "force push" in out,
+              and "PermissionRequest hook answers" in out and "force push" in out and "for origin (none)" in out,
               f"allow needs no allow rule: the kit's hook answers the plain form, and says a force push is handed back: {out}")
         code, out, _ = run(repo, "unattended", "rebase=allow", env=env)
-        check(json.loads(local.read_text())["lead"]["unattended"] == {"push": "allow", "rebase": "allow", "merge": "ask"},
+        saved = json.loads(local.read_text())
+        check(saved["lead"]["unattended"].pop("for", None) == pinned
+              and saved["lead"]["unattended"] == {"push": "allow", "rebase": "allow", "merge": "ask"},
               "a later answer keeps the earlier ones")
+        # the configuration changed since (a hook, core.sshCommand, a remote): every allow reads as ask,
+        # the note says so, `=ask` (which Claude may run) does not refresh the record, the owner's allow does
+        subprocess.run(["git", "-C", str(repo), "config", "core.sshCommand", "ssh"], check=True)
+        code, out, _ = run(repo, "unattended", env=env)
+        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "changed since" in out
+              and "push=allow` again" in out, f"a changed git configuration puts every allow back to ask: {out}")
+        code, out, _ = run(repo, "unattended", "merge=ask", env=env)
+        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "changed since" in out
+              and json.loads(local.read_text())["lead"]["unattended"]["for"] == pinned, f"=ask keeps the record: {out}")
+        code, out, _ = run(repo, "unattended", "push=allow", env=env)
+        check(out.startswith("UNATTENDED: push=allow rebase=allow merge=ask") and "changed since" not in out
+              and json.loads(local.read_text())["lead"]["unattended"]["for"] != pinned, f"the owner's allow re-pins: {out}")
+        subprocess.run(["git", "-C", str(repo), "config", "--unset", "core.sshCommand"], check=True)
+        code, out, _ = run(repo, "unattended", env=env)
+        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask"), f"and the next change prompts again: {out}")
+        hooks = Path(subprocess.run(["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-path", "hooks"],
+                                    check=True, capture_output=True, text=True).stdout.strip())
+        hooks.mkdir(parents=True, exist_ok=True)
+        run(repo, "unattended", "rebase=allow", env=env)
+        (hooks / "pre-push").write_text("#!/bin/sh\nexit 0\n")
+        code, out, _ = run(repo, "unattended", env=env)
+        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "a hook script" in out,
+              f"a hook script added since puts every allow back to ask: {out}")
+        (hooks / "pre-push").unlink()
+        code, out, _ = run(repo, "unattended", env=env)
+        check(out.startswith("UNATTENDED: push=allow rebase=allow merge=ask"), f"the hook gone, the record matches again: {out}")
         status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--", ".claude/kit.local.json"],
                                 capture_output=True, text=True).stdout
         check(status == "", f"kit.local.json stays out of git: {status!r}")

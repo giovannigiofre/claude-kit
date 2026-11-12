@@ -27,7 +27,15 @@ command must be exactly one of these shapes (SHAPES), made only of letters, digi
           origin/main> (not while the default branch is checked out) | --continue | --abort
   merge   [cd <dir> &&] gh pr merge <n> [--repo|-R <owner/repo of origin>] one of --squash|--merge|
           --rebase (-s|-m|-r) [--delete-branch|-d]; without -R only where origin is the only
-          remote; GH_REPO, when set, names origin's repo and GH_HOST, when set, is github.com
+          remote; GH_REPO, when set, names origin's repo and GH_HOST, when set, is github.com, and
+          no `gh repo set-default` record (remote.origin.gh-resolved) points gh at another repo
+
+Every step is answered only while the repo's git configuration and hooks are those the owner saved
+`allow` for (kitlib.git_fingerprint, recorded by `items.py unattended <step>=allow`): the shapes
+above read as plain git, but an insteadOf, a pushurl, a changed remote URL, core.sshCommand,
+core.editor, a credential helper, core.hooksPath or a hook script would make the same text push,
+rebase or merge somewhere else, or run that code. Any change puts the step back to ask until the
+owner saves allow again.
 
 <dir> is absolute, `.`/`..`-relative, `~` or `~/…` (never `~-`, `~1`, `~user`), and a `cd` never
 takes a bare relative name, which CDPATH could send elsewhere. Each may end in `2>&1`,
@@ -200,6 +208,9 @@ def merge_ok(root, repo, flags):
     gh_repo = os.environ.get("GH_REPO", "").strip().lower()
     if gh_repo and gh_repo.split("/")[-2:] != slug.split("/"):
         return False
+    resolved = kitlib.git_out(root, "config", "--get", "remote.origin.gh-resolved").strip().lower()
+    if resolved and resolved != "base":
+        return False  # `gh repo set-default`'s record: gh would merge the PR of that other repo
     if repo:
         return repo.lower() == slug
     return kitlib.git_out(root, "remote").split() == ["origin"]
@@ -251,6 +262,8 @@ def unattended_step(command, cwd, agent=None):
     prefs, _, _ = kitlib.unattended_prefs(root)
     if prefs.get(step) != "allow" or settings_guard.command_targets(command, str(here)):
         return None
+    if kitlib.unattended_for(root) != kitlib.git_fingerprint(root):
+        return None  # the git configuration or a hook changed since the owner saved allow: theirs to look at
     if active:
         try:
             if guard.check_bash(command, here, Path(os.path.normpath(str(root))), opts):

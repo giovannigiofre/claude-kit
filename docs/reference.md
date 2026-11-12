@@ -201,10 +201,15 @@ python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|all
 
 `unattended`: the owner's git preferences for unattended runs in this repo, in the main
 checkout's `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "ask", "rebase": "ask",
-"merge": "ask"}}}`), which the command adds to `.git/info/exclude`: local to this machine and
-repo, never global, never committed. Without arguments it prints the brief line `UNATTENDED:
-push=ask rebase=ask merge=ask` and whether it is set; a missing, broken or misspelt value is
-`ask`. The coordinator asks only when an unattended run starts and nothing is set, saves the
+"merge": "ask", "for": {"origin": "<push URL>", "digest": "<sha256>"}}}}`), which the command
+adds to `.git/info/exclude`: local to this machine and repo, never global, never committed.
+Without arguments it prints the brief line `UNATTENDED: push=ask rebase=ask merge=ask` and
+whether it is set; a missing, broken or misspelt value is `ask`. Saving an `allow` records what
+it is for (`for`): origin's push URL and a digest of the git configuration in force (every key
+but `branch.*`) and of the hook scripts; when any of that changes afterwards (a remote URL, an
+`insteadOf`, `push.default`, `core.sshCommand`, `core.hooksPath`, a hook file, …) the line
+prints `ask` with that note until the owner saves `allow` again. Saving only `ask` keeps the
+record as it was. The coordinator asks only when an unattended run starts and nothing is set, saves the
 answer and briefs every thread of the run with that line ([unattended.md](../plugins/kit/skills/lead/unattended.md)).
 A thread does not run a step set to `ask` and hands back `needs push` (rebase, merge); `allow`
 runs it. An `allow` is answered by the kit's PermissionRequest hook (`permission.py`, Permission
@@ -398,8 +403,13 @@ configured, `push.default` unset, `simple` or `current` (with `upstream` a branc
 origin/main is pushed onto main) and origin's push URL its own repo;
 `[GIT_EDITOR=true] git rebase origin/<default>` off the default branch, `--continue`,
 `--abort`; `gh pr merge N [--repo|-R <origin's slug>] --squash|--merge|--rebase [--delete-branch]`,
-without `-R` only where `origin` is the only remote, and only while `GH_REPO` names no other repo
-and `GH_HOST` no other host. A `<dir>` starting with `~` is `~` or `~/…` (not `~-`, `~1`), and
+without `-R` only where `origin` is the only remote, and only while `GH_REPO` names no other repo,
+`GH_HOST` no other host and no `gh repo set-default` record (`remote.origin.gh-resolved`) another
+repo. Every step is answered only while the repo's git configuration and hooks are those the
+owner saved `allow` for (the `for` record of `items.py unattended`): the shapes read as plain git,
+but an `insteadOf`, a `pushurl`, a changed remote URL, `core.sshCommand`, `core.editor`, a
+credential helper, `core.hooksPath` or a hook script would make the same text push, rebase or
+merge elsewhere, or run that code. A `<dir>` starting with `~` is `~` or `~/…` (not `~-`, `~1`), and
 `cd` takes no bare relative name (CDPATH). Each may end in `2>&1`, `| tail -N` / `| head -N`, or
 `> f.log` / `>> f.txt` / `.out` (with `2>&1`) for a file git does not track, under the checkout's
 own `.claude/` or a temp folder (never `.git`), judged where it really is (no symlink or hard link).

@@ -40,7 +40,10 @@ effective value: an `allow` is answered by the kit's PermissionRequest hook in i
 denies the step, or deny rules refuse every plain form (kitlib.unattended_effective). It never
 writes a settings file. Saving an `allow` is the owner's answer: the kit never runs it unasked
 (permission.py leaves it to the prompt, settings_guard asks for it), and a kit.local.json that git
-tracks is neither read nor written.
+tracks is neither read nor written. An `allow` is saved for the repo's git configuration and hooks
+of that moment (kitlib.git_fingerprint, `for` in the file): when they change (a remote URL, an
+insteadOf, push.default, core.sshCommand, a hook script, …) the line prints `ask` with that note
+until the owner saves allow again; saving only `ask` never refreshes that record.
 """
 
 import json
@@ -324,9 +327,11 @@ def main(argv=None):
             if k in notes:
                 print(notes[k])
         if "allow" in effective.values():
+            origin = kitlib.unattended_for(root).get("origin") or "(none)"
             print("The kit's PermissionRequest hook answers an allowed step's prompt in its plain form, one command "
                   "(`git push -u origin <branch>`, `git rebase origin/<default>`, `gh pr merge N --squash "
-                  "--delete-branch`); a force push or a compound command is not answered: hand it back.")
+                  f"--delete-branch`), for origin {origin} with the git configuration and hooks the owner saved it "
+                  "for; a force push or a compound command is not answered: hand it back.")
         return 0
     if cmd == "records":
         if rest[:1] == ["set"]:
