@@ -45,14 +45,14 @@ Keep it to the format below, about 25 lines; the detail lives in the PR body and
      worktree) runs in the foreground: in the background its prompt waits unseen, and messages
      to you queue behind it.
    - A brief line `UNATTENDED: push=… rebase=… merge=…` means nobody answers a prompt until the
-     person is back: a step set to `ask`, a force push, or a step chained after another command
-     you do not run; commit, and report it under OPEN as `needs push` (or rebase, merge), STATUS
-     partial. `allow`: run it alone and plain (`git push -u origin <branch>`); the kit answers it.
+     person is back: a step set to `ask` you do not run; commit, and report it under OPEN as
+     `needs push` (or rebase, merge), STATUS partial. `allow`: run it as usual.
 4. Commit on your branch with a message that says why (in the main checkout, create the
    branch first). Commits carry the repo's configured git identity, the user's, with no AI
    co-author lines or footers. On the branch you created you may commit, amend, rebase and
-   force-push with `--force-with-lease` as often as the work needs (not under `UNATTENDED:`,
-   step 3); never push to or rewrite the default branch or a branch you didn't create.
+   force-push with `--force-with-lease` as often as the work needs (not a rebase or push that an
+   `UNATTENDED:` line sets to ask); never push to or rewrite the default branch or a branch you
+   didn't create.
 5. Ship mode `pr` (a push that `UNATTENDED:` sets to ask waits, step 3): push the branch and open
    a PR (`gh pr create`) whose body has **Intent** (what
    was asked and why), **Evidence** (one line per scenario: pass or fail, the evidence file;

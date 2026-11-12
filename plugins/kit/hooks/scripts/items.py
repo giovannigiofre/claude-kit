@@ -34,16 +34,10 @@ to find them. `done` prints them as the item's checklist.
 `unattended` prints this repo's unattended git preferences as the brief line `UNATTENDED: push=..
 rebase=.. merge=..`, saying when they are not set yet; with arguments it saves them in the main
 checkout's gitignored .claude/kit.local.json (kitlib.unattended_prefs). The line carries the
-effective value: an `allow` is answered by the kit's PermissionRequest hook in its plain forms
-(permission.py), so a settings ask rule or a missing allow rule does not hold it back; it prints as
-`ask`, with the rule to change, while a settings file does not parse, a kit guard rule asks or
-denies the step, or deny rules refuse every plain form (kitlib.unattended_effective). It never
-writes a settings file. Saving an `allow` is the owner's answer: the kit never runs it unasked
-(permission.py leaves it to the prompt, settings_guard asks for it), and a kit.local.json that git
-tracks is neither read nor written. An `allow` is saved for the repo's git configuration and hooks
-of that moment (kitlib.git_fingerprint, `for` in the file): when they change (a remote URL, an
-insteadOf, push.default, core.sshCommand, a hook script, …) the line prints `ask` with that note
-until the owner saves allow again; saving only `ask` never refreshes that record.
+effective value: a saved `allow` prints as `ask`, with the file and rule to change, while a deny or
+ask rule in any settings scope matches the step or no allow rule covers it (kitlib.unattended_effective).
+It then prints a PROPOSAL, the settings change per file as a JSON diff, which it never applies
+(kitlib.unattended_proposal).
 """
 
 import json
@@ -320,18 +314,23 @@ def main(argv=None):
         effective, notes = kitlib.unattended_effective(root)
         line = "UNATTENDED: " + " ".join(f"{k}={effective[k]}" for k in kitlib.UNATTENDED_STEPS)
         print(line + (f"  (from {path})" if is_set else "  (not set for this repo: ask the user, then save the answer)"))
-        if kitlib.local_config(root)[1]:
-            print(f"{path} is tracked by git, so it is not read: an answer that came with the repo is not the "
-                  "owner's. Tell the user; the kit saves theirs only once the file is untracked.")
         for k in kitlib.UNATTENDED_STEPS:
             if k in notes:
                 print(notes[k])
-        if "allow" in effective.values():
-            origin = kitlib.unattended_for(root).get("origin") or "(none)"
-            print("The kit's PermissionRequest hook answers an allowed step's prompt in its plain form, one command "
-                  "(`git push -u origin <branch>`, `git rebase origin/<default>`, `gh pr merge N --squash "
-                  f"--delete-branch`), for origin {origin} with the git configuration and hooks the owner saved it "
-                  "for; a force push or a compound command is not answered: hand it back.")
+        proposal = kitlib.unattended_proposal(root)
+        if proposal:
+            print("PROPOSAL, not applied: this command never writes settings. Only when the owner asks, the "
+                  "coordinator shows this diff and makes it with one Edit per file, which Claude Code asks the owner "
+                  "to approve; the owner can also edit the file by hand.")
+            for p in proposal:
+                what = [f'remove "{r}" from permissions.{b}' for b, r in p["remove"]]
+                what += [f'add "{r}" to permissions.allow' for r in p["add"]]
+                print(f"- {p['file']}" + (" (committed: the change reaches everyone who works in this repo)"
+                                          if p["committed"] else "") + ": " + "; ".join(what))
+                for r in p["broad"]:
+                    print(f'  "{r}" also asks for other commands: removing it drops that prompt too; '
+                          f"a narrower rule may be what the owner wants")
+                print(p["diff"])
         return 0
     if cmd == "records":
         if rest[:1] == ["set"]:

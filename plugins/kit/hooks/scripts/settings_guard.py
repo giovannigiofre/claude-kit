@@ -2,8 +2,8 @@
 """PreToolUse (Write|Edit|MultiEdit|NotebookEdit|Bash|Monitor): changing a Claude Code settings
 file always asks the owner.
 
-The owner may have Claude change a settings file (say a permission rule), but only by approving
-that exact change in Claude Code's own prompt. So an Edit, Write,
+The owner may have Claude change a settings file (say the PROPOSAL `items.py unattended`
+prints), but only by approving that exact change in Claude Code's own prompt. So an Edit, Write,
 MultiEdit or NotebookEdit of a settings file, and a shell command that names one and is not a
 plain read, gets permissionDecision "ask" in every permission mode. The reason starts
 "Sovrascrittura dei settings di Claude Code:" and names the file and the change. From a subagent
@@ -11,9 +11,7 @@ plain read, gets permissionDecision "ask" in every permission mode. The reason s
 built-in such as statusline-setup, which gets "ask". The hook never answers "allow": deny rules,
 the guard and Claude Code's own protection of these files still apply, and permission.py never
 allows a command this hook flags. Any error, kitlib missing included, means "ask". It acts only in
-a project with .claude/kit.json, like every kit hook, with one exception: the owner's unattended
-answer (a repo's .claude/kit.local.json, and `items.py unattended …=allow`) is guarded in every
-repo, since that answer is what lets permission.py approve git steps. Standard library only.
+a project with .claude/kit.json, like every kit hook. Standard library only.
 
 Settings files: settings*.json, in any case, in any `.claude` directory (the user's, a repo's, a
 worktree's) or in CLAUDE_CONFIG_DIR, and the managed settings (managed-settings.json, or anything
@@ -26,7 +24,6 @@ settings at all.
 """
 
 import difflib
-import fnmatch
 import json
 import os
 import re
@@ -279,87 +276,6 @@ def summary(tool, inp, path):
     return f"comando {snip(inp.get('command', ''), 80)}"
 
 
-ALLOW_STEP = re.compile(r"\bunattended\b.*\b(?:push|rebase|merge)\s*=\s*['\"]?allow\b", re.I | re.S)
-GLOB = re.compile(r"[*?\[]")
-LOCAL = "kit.local.json"
-
-
-def is_local(path, cwd):
-    """True for a repo's .claude/kit.local.json, where the owner's unattended answer lives."""
-    return any(p.name.lower() == LOCAL and p.parent.name.lower() == ".claude" for p in _forms(path, cwd))
-
-
-def _words(command):
-    """The command's words as the shell passes them, quotes and backslashes taken out (`al''low`,
-    `al\\low` and `a"llow"` are all `allow`), plus the words with every quote character simply
-    dropped (`$'…'`, unbalanced quotes)."""
-    out = []
-    try:
-        lex = shlex.shlex(command, posix=True, punctuation_chars=True)
-        lex.whitespace_split, lex.commenters = True, ""
-        out = list(lex)
-    except ValueError:
-        pass
-    return out + re.sub(r"\$'|[\\'\"]", "", command).split()
-
-
-def _braces(word, room=64):
-    """`kit.local.{json,x}` as the shell expands it (one brace at a time, at most `room` words)."""
-    m = re.search(r"\{([^{}]*,[^{}]*)\}", word)
-    if not m:
-        return [word]
-    out = []
-    for alt in m.group(1).split(","):
-        out += _braces(word[:m.start()] + alt + word[m.end():], room)
-        if len(out) >= room:
-            break
-    return out[:room]
-
-
-def _names_local(word):
-    """True when a word names kit.local.json, or is a glob or brace form the shell may expand to it
-    (`.claude/kit.loc*.json`, `kit.local.{json,bak}`, `.claude/*`); a bare glob counts only with
-    three letters of its own (`*.json`, not `*`)."""
-    for w in _braces(word.lower()):
-        if LOCAL in w:
-            return True
-        head, _, base = w.rpartition("/")
-        if not GLOB.search(base) or not fnmatch.fnmatchcase(LOCAL, base):
-            continue
-        if head:
-            if fnmatch.fnmatchcase(".claude", head.rsplit("/", 1)[-1]):
-                return True
-        elif len(re.sub(r"\[[^\]]*\]|[*?]", "", base)) >= 3:
-            return True
-    return False
-
-
-def _sets_unattended(words):
-    """`items.py unattended push=allow` (or the `I` function) in any spelling: a `step=value` word
-    after `unattended` whose value is not `ask` (only `ask` can be saved without the owner)."""
-    low = [w.lower() for w in words]
-    for i, w in enumerate(low):
-        if w == "unattended" and any("=" in a and a.partition("=")[2] != "ask" for a in low[i + 1:]):
-            return True
-    return False
-
-
-def local_targets(command):
-    """The owner's unattended answer, as a command may change it: `items.py unattended push=allow`
-    (or the `I` shell function), or a command that names kit.local.json (a glob or brace form
-    included) and is not a plain read. Quotes and backslashes are seen through."""
-    out = []
-    if read_only(command):
-        return out
-    words = _words(command)
-    if ALLOW_STEP.search(command) or _sets_unattended(words):
-        out.append("kit.local.json (unattended …=allow)")
-    named = any(LOCAL in w.lower() for w in words)
-    if named or any(_names_local(w) for part in writing_parts(command) for w in _words(part)):  # a glob where it may write
-        out.append(".claude/kit.local.json")
-    return out
-
-
 def opted_in(cwd):
     """Like every kit hook, this one acts only in a project with .claude/kit.json, the worktree's or
     its main checkout's (a broken one counts)."""
@@ -372,16 +288,16 @@ def decide(data):
     tool = data.get("tool_name") or ""
     inp = data.get("tool_input") or {}
     cwd = data.get("cwd") or os.getcwd()
-    opted = opted_in(cwd)  # the unattended answer is guarded everywhere: it is the opt-in on its own
+    if not opted_in(cwd):
+        return None
     if tool in ("Bash", "Monitor"):
-        command = str(inp.get("command") or "")
-        targets = (command_targets(command, cwd) if opted else []) + local_targets(command)
+        targets = command_targets(str(inp.get("command") or ""), cwd)
         if not targets:
             return None
         where = ", ".join(dict.fromkeys(shown(t) for t in targets))
     elif tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
         path = inp.get("file_path") or inp.get("notebook_path")
-        if not path or not ((opted and is_settings(path, cwd)) or is_local(path, cwd)):
+        if not path or not is_settings(path, cwd):
             return None
         target = _forms(path, cwd)[0]
         where = shown(target)

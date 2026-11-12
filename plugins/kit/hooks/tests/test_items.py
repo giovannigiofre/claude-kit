@@ -188,83 +188,43 @@ def main():
         local.unlink()
         code, out, err = run(repo, "unattended", "push=allow", "merge=ask", env=env)
         saved = json.loads(local.read_text())
-        pinned = saved["lead"]["unattended"].pop("for", None)
         check(code == 0 and saved["lead"]["unattended"] == {"push": "allow", "rebase": "ask", "merge": "ask"}, f"saved: {saved} {err}")
-        check(set(pinned or {}) == {"origin", "digest"} and pinned["origin"] == "" and len(pinned["digest"]) == 64,
-              f"an allow is saved for the git configuration and hooks of the moment (this repo has no origin): {pinned}")
         settings = repo / ".claude" / "settings.local.json"
-        check(out.startswith("UNATTENDED: push=allow rebase=ask merge=ask") and "(from " in out and "stays ask" not in out
-              and "PermissionRequest hook answers" in out and "force push" in out and "for origin (none)" in out,
-              f"allow needs no allow rule: the kit's hook answers the plain form, and says a force push is handed back: {out}")
+        check(out.startswith("UNATTENDED: push=ask ") and "(from " in out and '"Bash(git push:*)"' in out
+              and str(settings) in out and "rebase:*" not in out,
+              f"allow without an allow rule stays ask and names the exact rule and file to add: {out}")
         code, out, _ = run(repo, "unattended", "rebase=allow", env=env)
-        saved = json.loads(local.read_text())
-        check(saved["lead"]["unattended"].pop("for", None) == pinned
-              and saved["lead"]["unattended"] == {"push": "allow", "rebase": "allow", "merge": "ask"},
+        check(json.loads(local.read_text())["lead"]["unattended"] == {"push": "allow", "rebase": "allow", "merge": "ask"},
               "a later answer keeps the earlier ones")
-        # the configuration changed since (a hook, core.sshCommand, a remote): every allow reads as ask,
-        # the note says so, `=ask` (which Claude may run) does not refresh the record, the owner's allow does
-        subprocess.run(["git", "-C", str(repo), "config", "core.sshCommand", "ssh"], check=True)
-        code, out, _ = run(repo, "unattended", env=env)
-        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "changed since" in out
-              and "push=allow` again" in out, f"a changed git configuration puts every allow back to ask: {out}")
-        code, out, _ = run(repo, "unattended", "merge=ask", env=env)
-        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "changed since" in out
-              and json.loads(local.read_text())["lead"]["unattended"]["for"] == pinned, f"=ask keeps the record: {out}")
-        code, out, _ = run(repo, "unattended", "push=allow", env=env)
-        check(out.startswith("UNATTENDED: push=allow rebase=allow merge=ask") and "changed since" not in out
-              and json.loads(local.read_text())["lead"]["unattended"]["for"] != pinned, f"the owner's allow re-pins: {out}")
-        subprocess.run(["git", "-C", str(repo), "config", "--unset", "core.sshCommand"], check=True)
-        code, out, _ = run(repo, "unattended", env=env)
-        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask"), f"and the next change prompts again: {out}")
-        hooks = Path(subprocess.run(["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-path", "hooks"],
-                                    check=True, capture_output=True, text=True).stdout.strip())
-        hooks.mkdir(parents=True, exist_ok=True)
-        run(repo, "unattended", "rebase=allow", env=env)
-        (hooks / "pre-push").write_text("#!/bin/sh\nexit 0\n")
-        code, out, _ = run(repo, "unattended", env=env)
-        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "a hook script" in out,
-              f"a hook script added since puts every allow back to ask: {out}")
-        (hooks / "pre-push").unlink()
-        code, out, _ = run(repo, "unattended", env=env)
-        check(out.startswith("UNATTENDED: push=allow rebase=allow merge=ask"), f"the hook gone, the record matches again: {out}")
         status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--", ".claude/kit.local.json"],
                                 capture_output=True, text=True).stdout
         check(status == "", f"kit.local.json stays out of git: {status!r}")
         code, _, err = run(repo, "unattended", "push=yes", env=env)
         check(code == 2 and "ask or allow" in err, f"a wrong value is refused: {err}")
-        # a kit.local.json in git came with the repo: it is not read, and nothing is saved into it
-        subprocess.run(["git", "-C", str(repo), "add", "-f", ".claude/kit.local.json"], check=True)
-        tracked_text = local.read_text()
-        code, out, _ = run(repo, "unattended", env=env)
-        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "tracked by git" in out,
-              f"a tracked file reads as ask and says why: {out}")
-        code, _, err = run(repo, "unattended", "merge=allow", env=env)
-        check(code == 1 and "tracked" in err and local.read_text() == tracked_text, f"and is never written: {err}")
-        code, _, err = run(repo, "records", "set", "x", env=env)
-        check(code == 1 and local.read_text() == tracked_text, f"records are not saved into it either: {err}")
-        subprocess.run(["git", "-C", str(repo), "rm", "-q", "--cached", ".claude/kit.local.json"], check=True)
         check(not settings.exists(), "the kit never writes permission settings")
 
-        # ask rules only raise the prompt the kit's hook answers (a committed settings.json's, as one real
-        # repo has, or the user's); a deny refuses before any prompt, so only one on every plain form holds it back
-        local_rules = json.dumps({"permissions": {"deny": ["Bash(git push --force:*)"]}})
+        # the owner's allow rules make it allow, unless a deny or ask rule in any scope matches:
+        # Claude Code checks deny, then ask, then allow, so settings.local.json cannot override one
+        local_rules = json.dumps({"permissions": {"allow": ["Bash(git push:*)", "Bash(git rebase:*)"],
+                                                  "deny": ["Bash(git push --force:*)"]}})
         settings.write_text(local_rules)
+        code, out, _ = run(repo, "unattended", env=env)
+        check(out.startswith("UNATTENDED: push=allow rebase=allow merge=ask") and "stays ask" not in out,
+              f"allow rules present, a narrower deny not matching: allow: {out}")
         shared = repo / ".claude" / "settings.json"
         rshared = str(shared.resolve().parent / "settings.json")  # the report names the resolved checkout
         shared.write_text(json.dumps({"permissions": {"ask": ["Bash(git push*)", "Bash(git rebase *)", "Bash(gh pr merge*)"]}}))
-        user = home / ".claude" / "settings.json"
-        user.write_text(json.dumps({"permissions": {"ask": ["Bash(git rebase:*)", "*"]}}))
         code, out, _ = run(repo, "unattended", env=env)
-        check(out.startswith("UNATTENDED: push=allow rebase=allow merge=ask") and "stays ask" not in out
-              and "refuses" not in out, f"ask rules in any scope, and a narrower deny, leave allow: {out}")
+        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask"), f"a project ask rule wins over the local allow: {out}")
+        check('"Bash(git push*)" in ' + rshared in out and '"Bash(git rebase *)" in ' + rshared in out
+              and "cannot override" in out and "merge: allow saved" not in out,
+              f"it names the ask rule, its file, and that settings.local.json cannot override it: {out}")
         shared.write_text(json.dumps({"permissions": {"deny": ["Bash(git push:*)"]}}))
+        user = home / ".claude" / "settings.json"
+        user.write_text(json.dumps({"permissions": {"ask": ["Bash(git rebase:*)"]}}))
         code, out, _ = run(repo, "unattended", env=env)
-        check(out.startswith("UNATTENDED: push=ask rebase=allow") and '"Bash(git push:*)" in ' + rshared in out
-              and "every plain form" in out, f"a deny on every plain form keeps it at ask and names the rule: {out}")
-        shared.write_text(json.dumps({"permissions": {"deny": ["Bash(git push -u*)"]}}))
-        code, out, _ = run(repo, "unattended", env=env)
-        check(out.startswith("UNATTENDED: push=allow") and "refuses git push -u origin feature-branch outright" in out,
-              f"a deny on one form names it and keeps allow: {out}")
+        check(out.startswith("UNATTENDED: push=ask rebase=ask") and str(user) in out and '"Bash(git push:*)" in ' + rshared in out,
+              f"a deny rule, and an ask rule in the user's settings, keep it at ask too: {out}")
         user.write_text("{ broken")
         shared.unlink()
         code, out, _ = run(repo, "unattended", env=env)
@@ -273,21 +233,38 @@ def main():
         user.unlink()
         check(settings.read_text() == local_rules and json.loads(local.read_text())["lead"]["unattended"]["push"] == "allow",
               "the kit changed no permission settings, and the owner's saved answer stands")
-        # the kit guard's own rules: the hook never answers past them
+        # the forms the kit prescribes count: an ask rule on just --force-with-lease or --delete-branch blocks the step
+        settings.write_text(json.dumps({"permissions": {"allow": ["Bash(git push:*)", "Bash(git rebase:*)", "Bash(gh pr merge:*)",
+                                                                  "Bash(git merge:*)"]}}))
+        run(repo, "unattended", "merge=allow", env=env)
+        code, out, _ = run(repo, "unattended", env=env)
+        check(out.startswith("UNATTENDED: push=allow rebase=allow merge=allow"), f"all three allowed first: {out}")
+        for rules, line in [(["Bash(git push --force*)"], "push=ask rebase=allow merge=allow"),
+                            (["Bash(gh pr merge * --delete-branch)"], "push=allow rebase=allow merge=ask"),
+                            (["*"], "push=ask rebase=ask merge=ask")]:
+            shared.write_text(json.dumps({"permissions": {"ask": rules}}))
+            code, out, _ = run(repo, "unattended", env=env)
+            check(out.startswith("UNATTENDED: " + line) and f'"{rules[0]}" in {rshared}' in out,
+                  f"an ask rule {rules} on a prescribed form keeps that step at ask: {out}")
+        # a deny refuses without a prompt, so one on some forms only (a project that forbids force pushes) names them
+        shared.write_text(json.dumps({"permissions": {"deny": ["Bash(git push --force*)", "Bash(git push * --force*)"]}}))
+        code, out, _ = run(repo, "unattended", env=env)
+        check(out.startswith("UNATTENDED: push=allow rebase=allow merge=allow") and "refuses git push --force-with-lease" in out
+              and "PROPOSAL" not in out, f"a deny on some forms names them and keeps allow, proposing nothing: {out}")
+        shared.unlink()
         kit_json = repo / ".claude" / "kit.json"
         kit_before = kit_json.read_text()
-        kit_json.write_text(json.dumps({"check": "true", "guard": {"askCommands": [{"pattern": "^git push"}]}}))
+        kit_json.write_text(json.dumps({"check": "true", "guard": {"askCommands": [{"pattern": "--force-with-lease"}]}}))
         code, out, _ = run(repo, "unattended", env=env)
-        check(out.startswith("UNATTENDED: push=ask rebase=allow merge=ask") and "guard.askCommands" in out,
-              f"the kit guard's own askCommands keeps the step at ask: {out}")
-        kit_json.write_text(json.dumps({"check": "true", "guard": {"askCommands": [{"pattern": "^git push"}],
+        check(out.startswith("UNATTENDED: push=ask rebase=allow merge=allow") and "guard.askCommands" in out,
+              f"the kit guard's own askCommands counts as an ask: {out}")
+        kit_json.write_text(json.dumps({"check": "true", "guard": {"askCommands": [{"pattern": "--force-with-lease"}],
                                                                    "allowCommands": ["^git push"]}}))
         code, out, _ = run(repo, "unattended", env=env)
         check(out.startswith("UNATTENDED: push=allow"), f"unless the guard's allowCommands lets it through: {out}")
-        kit_json.write_text(json.dumps({"check": "true", "guard": {"askCommands": [{"pattern": "--force-with-lease"}]}}))
-        code, out, _ = run(repo, "unattended", env=env)
-        check(out.startswith("UNATTENDED: push=allow"), f"a guard rule on a form the hook never answers does not count: {out}")
         kit_json.write_text(kit_before)
+        run(repo, "unattended", "merge=ask", env=env)
+        settings.write_text(local_rules)
         for rule, command, want in [("*", "git push", True), ("B*(git push:*)", "git push -u origin b", True),
                                     ("mcp__*", "git push", False), ("Edit", "git push", False),("Bash(git push*)", "git push -u origin b", True), ("Bash(git push:*)", "git push", True),
                                     ("Bash(git push *)", "git push", True), ("Bash(git *)", "git rebase origin/main", True),
@@ -295,6 +272,37 @@ def main():
                                     ("Bash(git push:*)", "git pushx", False), ("Bash(git status)", "git push", False),
                                     ("Read(./x)", "git push", False), ("Bash(git push --force:*)", "git push", False)]:
             check(items.kitlib.bash_rule_matches(rule, command) == want, f"rule {rule} vs {command!r}: want {want}")
+
+        # the PROPOSAL for a project that commits ask rules (as one real repo does): printed, never applied
+        repo2 = Path(tmp) / "repo2"
+        (repo2 / ".claude").mkdir(parents=True)
+        subprocess.run(["git", "-C", str(repo2), "init", "-q"], check=True)
+        committed = repo2 / ".claude" / "settings.json"
+        committed.write_text(json.dumps({"permissions": {"ask": ["Bash(git push*)", "Bash(git reset --hard*)",
+                                                                 "Bash(git rebase *)", "Bash(gh pr merge*)"],
+                                                         "deny": ["Bash(git push --force*)"]}}, indent=2) + "\n")
+        subprocess.run(["git", "-C", str(repo2), "add", ".claude/settings.json"], check=True)
+        subprocess.run(["git", "-C", str(repo2), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                        "commit", "-qm", "settings"], check=True)
+        before = committed.read_bytes()
+        code, out, err = run(repo2, "unattended", "push=allow", "rebase=allow", "merge=allow", env=env)
+        r2 = str(committed.resolve())
+        r2local = str(committed.resolve().parent / "settings.local.json")
+        check(code == 0 and out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "PROPOSAL, not applied" in out,
+              f"blocked steps print a proposal: {out} {err}")
+        check(f"- {r2} (committed" in out and 'remove "Bash(git push*)" from permissions.ask' in out
+              and 'remove "Bash(git rebase *)" from permissions.ask' in out
+              and 'remove "Bash(gh pr merge*)" from permissions.ask' in out and "git reset" not in out.split("PROPOSAL")[1].split("@@")[0],
+              f"the proposal names the committed file and each rule to remove, and leaves the others: {out}")
+        check(f"--- {r2}" in out and '-      "Bash(git push*)",' in out
+              and any(l in out.splitlines() for l in ['       "Bash(git reset --hard*)"', '+      "Bash(git reset --hard*)"']),
+              f"the proposal carries the JSON diff: {out}")
+        check(f"- {r2local}: add " in out and '+      "Bash(git push:*)"' in out and '+      "Bash(gh pr merge:*)"' in out,
+              f"and the allow rules settings.local.json needs: {out}")
+        check("from permissions.deny" not in out and '-      "Bash(git push --force*)"' not in out,
+              f"a deny rule is never proposed for removal: {out}")
+        check(committed.read_bytes() == before and not (repo2 / ".claude" / "settings.local.json").exists(),
+              "the proposal changes no settings file")
 
         # record places: where the project records finished work, saved in the same kit.local.json
         before = json.loads(local.read_text())

@@ -117,36 +117,6 @@ def main():
                           ("Bash", {"command": "echo {} > .claude/settings.json"})]:
             decision, reason = hook(tool, inp, plain, env)
             check(decision == "pass", f"no kit.json, no decision: {tool} {decision} {reason}")
-        # except the owner's saved answers for the unattended git steps, which are their own opt-in:
-        # changing kit.local.json, or saving `allow` with items.py, asks everywhere and is refused to a subagent
-        saved = plain / ".claude" / "kit.local.json"
-        items = SCRIPTS / "items.py"
-        for tool, inp in [("Write", {"file_path": str(saved), "content": "{}"}),
-                          ("Edit", {"file_path": str(saved), "old_string": "ask", "new_string": "allow"}),
-                          ("Bash", {"command": "echo '{}' > .claude/kit.local.json"}),
-                          ("Bash", {"command": f"python3 {items} unattended push=allow"}),
-                          ("Bash", {"command": f"python3 {items} unattended merge='allow' rebase=ask"}),
-                          # quoted, escaped and globbed spellings the shell turns into the same (verifier round 2)
-                          ("Bash", {"command": f"python3 {items} unattended push=al''low"}),
-                          ("Bash", {"command": f"python3 {items} unattended push=al\\low"}),
-                          ("Bash", {"command": f'python3 {items} unattended push=a"llow"'}),
-                          ("Bash", {"command": f"python3 {items} unatt''ended push=allow"}),
-                          ("Bash", {"command": "I unattended merge=allow"}),
-                          ("Bash", {"command": "cp /tmp/x .claude/kit.loc*.json"}),
-                          ("Bash", {"command": "cp /tmp/x .claude/kit.local.{json,bak}"}),
-                          ("Bash", {"command": "cp /tmp/x .claude/kit.loc?l.json"}),
-                          ("Bash", {"command": "rm .claude/*"}),
-                          ("Bash", {"command": "cd .claude && cp /tmp/x kit.loc*.json"}),
-                          ("Bash", {"command": "cp /tmp/x $'.claude/kit.local.json'"})]:
-            decision, reason = hook(tool, inp, plain, env)
-            check(decision == "ask" and reason.startswith(LABEL), f"the saved answer asks: {tool} {inp} {decision} {reason}")
-            decision, reason = hook(tool, inp, plain, env, agent_id="a1", agent_type="kit:implementer")
-            check(decision == "deny", f"and a subagent is refused: {tool} {inp} {decision} {reason}")
-        for command in ("cat .claude/kit.local.json", f"python3 {items} unattended", f"python3 {items} unattended push=ask",
-                        f"python3 {items} records", "rm -rf dist/*", "cp a.txt b*", "ls .claude/kit.loc*.json",
-                        "for f in .claude/*; do echo $f; done"):
-            decision, reason = hook("Bash", {"command": command}, plain, env)
-            check(decision == "pass", f"reading or saving ask passes: {command}: {decision} {reason}")
 
         # without kitlib nothing can be judged: ask
         lone = tmp / "lone"
@@ -225,7 +195,7 @@ def main():
         decision, _ = hook("Edit", {"file_path": str(repo / ".claude" / "Settings.Local.json"), **edit}, repo, env)
         check(decision == "ask", f"a settings name in another case asks (macOS ignores case): {decision}")
         for path in [repo / "src" / "settings.json", repo / ".vscode" / "settings.json", repo / ".claude" / "kit.json",
-                     repo / "README.md", repo / "docs" / "kit.local.json"]:
+                     repo / ".claude" / "kit.local.json", repo / "README.md"]:
             decision, reason = hook("Edit", {"file_path": str(path), **edit}, repo, env)
             check(decision == "pass", f"another file passes: {path}: {decision} {reason}")
         decision, _ = hook("Read", {"file_path": str(shared)}, repo, env)

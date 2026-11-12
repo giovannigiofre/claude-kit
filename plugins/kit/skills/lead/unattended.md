@@ -10,20 +10,23 @@ answers a permission prompt, and a thread or you waiting on one waits for hours.
    push=<ask|allow> rebase=<ask|allow> merge=<ask|allow>`. When it says *not set*, ask the user
    once, in one question: during unattended runs in this repo, may threads and you push, rebase,
    merge without asking (`allow`), or should each wait for them (`ask`, the default)? Save the
-   answer: `I unattended push=allow rebase=ask merge=ask`. Saving `allow` raises the user's own
-   prompt (their click is the answer), so save it while they are there. It goes into this repo's
-   gitignored `.claude/kit.local.json`: never global, never committed. Do not ask again in this
-   repo; the user changes it by saying so.
-3. **For a step set to `allow`**, the kit's PermissionRequest hook answers its prompt, an ask
-   rule's included, when the command is exactly the plain form on `origin`: `git push -u origin
-   <branch>`, `git rebase origin/<default>` (`--continue`, `--abort`), and for you only `gh pr
-   merge N --squash --delete-branch`, ending at most in `| tail -N` or a log under `.claude/` or
-   a temp folder. Any other command is not answered: a thread hands it back. The line the command prints is the effective
-   value: a saved `allow` stays `ask` while a deny rule refuses every plain form, a guard rule
-   asks for it, a settings file does not parse, or the repo's git configuration or hooks changed
-   since the user saved it (the note says so: only the user saves `allow` again, by running the
-   command themselves); tell the user the rule and file the note
-   names, and brief the line exactly as printed. Never edit settings for this.
+   answer: `I unattended push=allow rebase=ask merge=ask`. It goes into this repo's gitignored
+   `.claude/kit.local.json`: never global, never committed. Do not ask again in this repo; the
+   user changes it by saying so.
+3. **For a step set to `allow`**, the command checks the permission rules in every scope, and the
+   line it prints is the effective value. A saved `allow` stays `ask` while a deny or ask rule
+   anywhere matches the step (managed settings, the user's `~/.claude/settings.json`, the repo's
+   `.claude/settings.json` or `settings.local.json`). Claude Code checks deny and ask before
+   allow, so an allow rule cannot override one: the user changes that rule. It also stays `ask`
+   while no allow rule covers the step: the user adds the rule the note names to
+   `.claude/settings.local.json`. Tell the user the exact rule and file, and brief the line
+   exactly as the command prints it. The command also prints a PROPOSAL with a diff per file.
+   Apply it only when the user asks you to: ask with AskUserQuestion, the question naming the
+   file and the change (a committed file reaches every contributor), the diff in an option's
+   `preview`, options «Applica la modifica ai settings» and «Non applicare». On «Applica» make an
+   ordinary Edit per file; the kit's hook turns it into Claude Code's own Yes/No prompt headed
+   «Sovrascrittura dei settings di Claude Code:». The user approves twice with buttons and types
+   nothing, or edits the file by hand. Never edit settings unasked; a thread's edit is refused.
 4. **Brief every thread of the run with the `UNATTENDED:` line**, and SendMessage it to threads
    already working. A thread does not run a step set to `ask`: it commits and hands back `needs
    push` (or rebase, merge). The same holds for your own commands. Put what waits under NEEDS
