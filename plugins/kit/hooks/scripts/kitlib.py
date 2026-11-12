@@ -121,11 +121,30 @@ UNATTENDED_STEPS = ("push", "rebase", "merge")
 LOCAL_CONFIG = ".claude/kit.local.json"
 
 
+def local_config(cwd):
+    """(path, tracked): the main checkout's kit.local.json, and whether git tracks it. A tracked one
+    came with the repo (a clone, a branch), not from the owner on this machine: it is never read
+    and never written, so every step stays `ask` and no record place is set."""
+    root = Path(main_checkout(cwd) or cwd)
+    return root / LOCAL_CONFIG, bool(git_out(root, "ls-files", "--error-unmatch", "--", LOCAL_CONFIG))
+
+
+def _local_value(cwd, write=False):
+    path, tracked = local_config(cwd)
+    if tracked:
+        if write:
+            raise ValueError(f"{path} is tracked by git, so the kit neither reads nor writes it: "
+                             f"`git rm --cached {LOCAL_CONFIG}` first, if it is yours")
+        return None, path
+    value, ok = read_json(path)
+    if write and not ok:
+        raise ValueError(f"{path} is not a JSON object; fix or remove it first")
+    return value, path
+
+
 def unattended_prefs(cwd):
     """(prefs, is_set, path): every step `ask` or `allow`; is_set when the repo's file names any step."""
-    root = main_checkout(cwd) or Path(cwd)
-    path = Path(root) / LOCAL_CONFIG
-    value, _ = read_json(path)
+    value, path = _local_value(cwd)
     lead = (value or {}).get("lead")
     own = lead.get("unattended") if isinstance(lead, dict) else None
     own = own if isinstance(own, dict) else {}
@@ -137,10 +156,8 @@ def save_unattended(cwd, changes):
     """Write `changes` ({step: ask|allow}) into the repo's kit.local.json beside its other keys and
     keep the file out of git; returns the prefs now in force. A file that does not parse is never
     rewritten (ValueError)."""
-    prefs, _, path = unattended_prefs(cwd)
-    value, ok = read_json(path)
-    if not ok:
-        raise ValueError(f"{path} is not a JSON object; fix or remove it first")
+    prefs, _, _ = unattended_prefs(cwd)
+    value, path = _local_value(cwd, write=True)
     lead = value.get("lead") if isinstance(value.get("lead"), dict) else {}
     own = {**prefs, **changes}
     value["lead"] = {**lead, "unattended": {k: own[k] for k in UNATTENDED_STEPS}}
@@ -156,8 +173,7 @@ def save_unattended(cwd, changes):
 # (`{"lead": {"records": ["...", ...]}}`); `items.py done` prints them as the item's checklist.
 def records(cwd):
     """(places, path): the saved record places, [] when not set or unreadable."""
-    path = Path(main_checkout(cwd) or cwd) / LOCAL_CONFIG
-    value, _ = read_json(path)
+    value, path = _local_value(cwd)
     lead = (value or {}).get("lead")
     places = lead.get("records") if isinstance(lead, dict) else None
     return [" ".join(str(p).split()) for p in places if str(p).strip()] if isinstance(places, list) else [], path
@@ -165,10 +181,7 @@ def records(cwd):
 
 def save_records(cwd, places):
     """Replace the saved record places; a file that does not parse is never rewritten (ValueError)."""
-    _, path = records(cwd)
-    value, ok = read_json(path)
-    if not ok:
-        raise ValueError(f"{path} is not a JSON object; fix or remove it first")
+    value, path = _local_value(cwd, write=True)
     lead = value.get("lead") if isinstance(value.get("lead"), dict) else {}
     value["lead"] = {**lead, "records": [" ".join(p.split()) for p in places if p.strip()]}
     path.parent.mkdir(parents=True, exist_ok=True)

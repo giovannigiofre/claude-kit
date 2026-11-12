@@ -44,7 +44,8 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    command, one run in the background or ended with &, or one allowCommands
                    names; guard.waits = false turns this rule off
   memory           the kit verifier writing a memory file (a MEMORY.md, anything in an
-                   agent-memory folder) outside <main checkout>/.claude/agent-memory/kit-verifier;
+                   agent-memory folder; by redirect, tee, cp/mv/install/ln/rsync, or code
+                   that opens a quoted path) outside <main checkout>/.claude/agent-memory/kit-verifier;
                    checked in every repo, kit.json or not, since the verifier is the kit's
   project          kit.json guard.denyCommands / guard.askCommands: the project's own rules,
                    each {"pattern": "<regex over the command>", "reason": "..."}; /kit:learn
@@ -371,7 +372,7 @@ def tokenize(line):
     try:
         lex = shlex.shlex(line, posix=True, punctuation_chars=True)
         lex.whitespace_split = True
-        lex.commenters = "#"
+        lex.commenters = ""  # logical_lines already dropped real comments; `a#;b` is two commands
         return list(lex)
     except ValueError:
         return line.split()
@@ -1209,14 +1210,17 @@ def record_denial(cwd, rule, why, session):
 
 
 MEMORY_DIR = Path(".claude") / "agent-memory" / "kit-verifier"
+MEMORY_COPIERS = {"cp", "mv", "install", "ln", "rsync", "ditto"}
+MEMORY_CODE = re.compile(r"\bopen\s*\(|write_text|write_bytes|writeFile|appendFile|shutil\.(?:copy|move)|\.rename\(")
 
 
 def memory_write(command, cwd):
     """For the kit verifier (in every repo): the memory file this command writes outside its one
     memory folder, <main checkout>/.claude/agent-memory/kit-verifier (subagent_start.py names it),
-    else None. A write counts when its target (`>`, `>>`, tee) is a MEMORY.md, lies in an
-    agent-memory folder, or is made after a `cd` into one; plain NAME=value variables are put in,
-    and a target still holding a variable counts as outside. Temp folders are left alone (fixtures)."""
+    else None. A write counts when its target (`>`, `>>`, tee, the destination of cp/mv/install/ln/
+    rsync, or a quoted path in code that opens or writes a file: best effort) is a MEMORY.md, lies
+    in an agent-memory folder, or is made after a `cd` into one; plain NAME=value variables are put
+    in, and a target still holding a variable counts as outside. Temp folders are left alone (fixtures)."""
     if "MEMORY.md" not in command and "agent-memory" not in command:
         return None
     main = kitlib.main_checkout(cwd)
@@ -1229,8 +1233,18 @@ def memory_write(command, cwd):
         base = Path(os.path.expanduser(with_vars(found.group(1).strip("\"'"), env)))
         base = base if base.is_absolute() else Path(cwd) / base
     temps = [Path(os.path.realpath(str(t))) for t in temp_roots()]
-    for m in re.finditer(r"(?:\d?>>?|\btee(?:\s+-a)?)\s*(\"[^\"]+\"|'[^']+'|[^\s;&|<>]+)", command):
-        target = with_vars(m.group(1).strip("\"'"), env)
+    targets = [m.group(1) for m in re.finditer(r"(?:\d?>>?|\btee(?:\s+-a)?)\s*(\"[^\"]+\"|'[^']+'|[^\s;&|<>]+)", command)]
+    for seg in segments(command):  # cp/mv/install/ln/rsync: the destination is the last argument (or -t's)
+        argv = seg.get("argv") or []
+        if argv and Path(argv[0]).name in MEMORY_COPIERS:
+            args = [a for a in argv[1:] if not a.startswith("-")]
+            dest = next((argv[i + 1] for i, a in enumerate(argv[:-1]) if a in ("-t", "--target-directory")), None)
+            if dest or len(args) >= 2:
+                targets.append(dest or args[-1])
+    if MEMORY_CODE.search(command):  # python/node/perl writing a file: any quoted path naming memory
+        targets += re.findall(r"[\"']([^\"'\s]*(?:MEMORY\.md|agent-memory)[^\"'\s]*)[\"']", command)
+    for raw in targets:
+        target = with_vars(raw.strip("\"'"), env)
         if target.startswith("&") or target == "/dev/null":
             continue
         path = Path(os.path.expanduser(target))

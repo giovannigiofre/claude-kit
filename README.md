@@ -214,12 +214,14 @@ project.
   threads may push, rebase and merge while you are away is a per-repo choice the coordinator asks
   once, at the first unattended run, and keeps in the repo's gitignored `.claude/kit.local.json`
   (`ask` until you say otherwise). For `allow`, the kit's PermissionRequest hook answers that
-  step's prompt, a committed `Bash(git push*)` ask rule's included, when the command is the plain
-  form: `git push -u origin <branch>` (a thread's own branch, never the default or a protected
-  one), `git rebase origin/<default>` / `--continue` / `--abort`, `gh pr merge N --squash
-  --delete-branch` (the coordinator only), with nothing around it but reads and logs. A force
-  push or a compound command still prompts and is handed back; a deny rule and the guard's own
-  rules still win. No settings file changes. Any change to a Claude
+  step's prompt, a committed `Bash(git push*)` ask rule's included, when the command is exactly
+  the plain form on `origin`: `git push -u origin <branch>` (an existing local branch, never the
+  default, a protected one or a tag), `git rebase origin/<default>` / `--continue` / `--abort`,
+  `gh pr merge N --squash --delete-branch` (the coordinator only), followed at most by `| tail
+  -N` or a log file left untracked under `.claude/` or a temp folder. A force push or any other
+  command still prompts and is handed back; a deny rule and the guard's own rules still win. Only
+  you save `allow`: a change to `kit.local.json`, or `I unattended push=allow` run by Claude,
+  asks you, and a tracked `kit.local.json` is not read. No settings file changes. Any change to a Claude
   Code settings file asks you in Claude Code's own prompt, headed «Sovrascrittura dei settings di
   Claude Code:», in every mode, and a background thread's is refused.
   Not for a

@@ -11,7 +11,9 @@ plain read, gets permissionDecision "ask" in every permission mode. The reason s
 built-in such as statusline-setup, which gets "ask". The hook never answers "allow": deny rules,
 the guard and Claude Code's own protection of these files still apply, and permission.py never
 allows a command this hook flags. Any error, kitlib missing included, means "ask". It acts only in
-a project with .claude/kit.json, like every kit hook. Standard library only.
+a project with .claude/kit.json, like every kit hook, with one exception: the owner's unattended
+answer (a repo's .claude/kit.local.json, and `items.py unattended …=allow`) is guarded in every
+repo, since that answer is what lets permission.py approve git steps. Standard library only.
 
 Settings files: settings*.json, in any case, in any `.claude` directory (the user's, a repo's, a
 worktree's) or in CLAUDE_CONFIG_DIR, and the managed settings (managed-settings.json, or anything
@@ -276,6 +278,27 @@ def summary(tool, inp, path):
     return f"comando {snip(inp.get('command', ''), 80)}"
 
 
+ALLOW_STEP = re.compile(r"\bunattended\b.*\b(?:push|rebase|merge)\s*=\s*['\"]?allow\b", re.I | re.S)
+
+
+def is_local(path, cwd):
+    """True for a repo's .claude/kit.local.json, where the owner's unattended answer lives."""
+    return any(p.name.lower() == "kit.local.json" and p.parent.name.lower() == ".claude" for p in _forms(path, cwd))
+
+
+def local_targets(command):
+    """The owner's unattended answer, as a command may change it: `items.py unattended push=allow`
+    (or the `I` shell function), or a command that names kit.local.json and is not a plain read."""
+    out = []
+    if read_only(command):
+        return out
+    if ALLOW_STEP.search(command):
+        out.append("kit.local.json (unattended …=allow)")
+    if "kit.local.json" in re.sub(r"\$'|[\\'\"]", "", command).lower():
+        out.append(".claude/kit.local.json")
+    return out
+
+
 def opted_in(cwd):
     """Like every kit hook, this one acts only in a project with .claude/kit.json, the worktree's or
     its main checkout's (a broken one counts)."""
@@ -288,16 +311,16 @@ def decide(data):
     tool = data.get("tool_name") or ""
     inp = data.get("tool_input") or {}
     cwd = data.get("cwd") or os.getcwd()
-    if not opted_in(cwd):
-        return None
+    opted = opted_in(cwd)  # the unattended answer is guarded everywhere: it is the opt-in on its own
     if tool in ("Bash", "Monitor"):
-        targets = command_targets(str(inp.get("command") or ""), cwd)
+        command = str(inp.get("command") or "")
+        targets = (command_targets(command, cwd) if opted else []) + local_targets(command)
         if not targets:
             return None
         where = ", ".join(dict.fromkeys(shown(t) for t in targets))
     elif tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
         path = inp.get("file_path") or inp.get("notebook_path")
-        if not path or not is_settings(path, cwd):
+        if not path or not ((opted and is_settings(path, cwd)) or is_local(path, cwd)):
             return None
         target = _forms(path, cwd)[0]
         where = shown(target)

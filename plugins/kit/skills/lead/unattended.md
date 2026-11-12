@@ -10,14 +10,15 @@ answers a permission prompt, and a thread or you waiting on one waits for hours.
    push=<ask|allow> rebase=<ask|allow> merge=<ask|allow>`. When it says *not set*, ask the user
    once, in one question: during unattended runs in this repo, may threads and you push, rebase,
    merge without asking (`allow`), or should each wait for them (`ask`, the default)? Save the
-   answer: `I unattended push=allow rebase=ask merge=ask`. It goes into this repo's gitignored
-   `.claude/kit.local.json`: never global, never committed. Do not ask again in this repo; the
-   user changes it by saying so.
+   answer: `I unattended push=allow rebase=ask merge=ask`. Saving `allow` raises the user's own
+   prompt (their click is the answer), so save it while they are there. It goes into this repo's
+   gitignored `.claude/kit.local.json`: never global, never committed. Do not ask again in this
+   repo; the user changes it by saying so.
 3. **For a step set to `allow`**, the kit's PermissionRequest hook answers its prompt, an ask
-   rule's included, when the command is the plain form, run alone: `git push -u origin <branch>`,
-   `git rebase origin/<default>` (`--continue`, `--abort`), and for you only `gh pr merge N
-   --squash --delete-branch`; a pipe to `tail` or a log file is fine. A force push or a compound
-   command is not answered: a thread hands it back. The line the command prints is the effective
+   rule's included, when the command is exactly the plain form on `origin`: `git push -u origin
+   <branch>`, `git rebase origin/<default>` (`--continue`, `--abort`), and for you only `gh pr
+   merge N --squash --delete-branch`, ending at most in `| tail -N` or a log under `.claude/` or
+   a temp folder. Any other command is not answered: a thread hands it back. The line the command prints is the effective
    value: a saved `allow` stays `ask` while a deny rule refuses every plain form, a guard rule
    asks for it, or a settings file does not parse; tell the user the rule and file the note
    names, and brief the line exactly as printed. Never edit settings for this.

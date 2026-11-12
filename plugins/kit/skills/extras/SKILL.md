@@ -27,5 +27,5 @@ never need them don't carry their descriptions:
    path.
 3. **Install it** (on "Yes"): from the repo root, `claude plugin install <plugin>@claude-kit
    --scope project`. It adds the plugin to `enabledPlugins` in `.claude/settings.json`; name that
-   file in your report so the user commits it. The skills load natively from the next session, or
-   after `/reload-plugins`.
+   file in your report so the user commits it. Until the next session, use the skill by its path (step 2):
+   say once "when you're at the Mac: /reload-plugins loads it", and carry on without waiting.

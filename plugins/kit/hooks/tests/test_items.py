@@ -201,6 +201,17 @@ def main():
         check(status == "", f"kit.local.json stays out of git: {status!r}")
         code, _, err = run(repo, "unattended", "push=yes", env=env)
         check(code == 2 and "ask or allow" in err, f"a wrong value is refused: {err}")
+        # a kit.local.json in git came with the repo: it is not read, and nothing is saved into it
+        subprocess.run(["git", "-C", str(repo), "add", "-f", ".claude/kit.local.json"], check=True)
+        tracked_text = local.read_text()
+        code, out, _ = run(repo, "unattended", env=env)
+        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "tracked by git" in out,
+              f"a tracked file reads as ask and says why: {out}")
+        code, _, err = run(repo, "unattended", "merge=allow", env=env)
+        check(code == 1 and "tracked" in err and local.read_text() == tracked_text, f"and is never written: {err}")
+        code, _, err = run(repo, "records", "set", "x", env=env)
+        check(code == 1 and local.read_text() == tracked_text, f"records are not saved into it either: {err}")
+        subprocess.run(["git", "-C", str(repo), "rm", "-q", "--cached", ".claude/kit.local.json"], check=True)
         check(not settings.exists(), "the kit never writes permission settings")
 
         # ask rules only raise the prompt the kit's hook answers (a committed settings.json's, as one real

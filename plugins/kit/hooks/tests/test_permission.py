@@ -65,6 +65,11 @@ def main():
             (f"python3 {SCRIPTS / 'proposals.py'} take readme-install", "allow"),
             (f"python3 {Path(tmp) / 'items.py'} list", "prompt"),  # a script of that name elsewhere is not the kit's
             (f"python3 {SCRIPTS / 'machine_setup.py'} --apply", "prompt"), ("rm -rf /", "prompt"),
+            # saving `allow` for a git step is the owner's answer: the kit never gives it to itself
+            (f"python3 {SCRIPTS / 'items.py'} unattended push=allow", "prompt"),
+            (f"python3 {SCRIPTS / 'items.py'} unattended rebase=ask merge=ALLOW", "prompt"),
+            (f"python3 {SCRIPTS / 'items.py'} unattended", "allow"),
+            (f"python3 {SCRIPTS / 'items.py'} unattended push=ask", "allow"),
         ]
         expect(repo, cases)
         (repo / ".claude" / "kit.json").unlink()
@@ -82,10 +87,16 @@ def main():
         git(site, "remote", "add", "origin", "git@github.com:example-org/shop.git")
         git(site, "update-ref", "refs/remotes/origin/main", "HEAD")
         git(site, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+        for name in ("docs/x", "docs/finance-open-points", "docs/diary-1111c", "docs/secret", "release", "docs/tagged"):
+            git(site, "branch", name)
+        git(site, "tag", "v1.0")
+        git(site, "tag", "docs/tagged")  # a tag of the same name as a branch: the push would send both
         git(site, "checkout", "-q", "-b", "docs/diary-1111")
         wt = site / ".claude" / "worktrees" / "records"
         git(site, "worktree", "add", "-q", "-b", "docs/records-1112", str(wt))
         local = site / ".claude" / "kit.local.json"
+        (site / ".claude" / "notes.log").write_text("tracked\n")
+        git(site, "add", ".claude/notes.log")
 
         def prefs(**steps):
             local.write_text(json.dumps({"lead": {"unattended": {k: steps.get(k, "ask") for k in ("push", "rebase", "merge")}}}))
@@ -103,17 +114,30 @@ def main():
             "GIT_EDITOR=true git rebase --continue 2>&1 | tail -1",
             "git rebase --abort",
             "git rebase origin/main",
-            'git push -u origin docs/diary-1111c 2>&1 | grep -E "docs-only|\\->" | tail -2',
             f"cd {wt} && git push -u origin docs/records-1112",
-            "gh pr merge 245 --squash 2>&1 | tail -2; gh pr view 245 --json state -q .state",
-            f"git push -u origin docs/records-1112 > {site}/.claude/worktrees/records-push.log 2>&1; echo exit=$?",
-            f"git push -u origin docs/x > {tmp}/push.log 2>&1; echo exit=$?; tail -5 {tmp}/push.log",
+            f"git push -u origin docs/records-1112 > {site}/.claude/worktrees/records-push.log 2>&1",
+            f"git push -u origin docs/x > {tmp}/push.log 2>&1",
+            "git push origin docs/x > .claude/push.log 2>&1",
+            "git push origin docs/x >> .claude/push.txt",
         ]
         refused = [
-            # compound commands with other effects (logged shapes)
+            # the verifier's payloads: a `#` inside a word starts no comment, so bash runs what follows
+            f"git push origin docs/x#;touch {tmp}/pwned", f"git rebase origin/main#;touch {tmp}/pwned",
+            "git push origin docs/x # ; touch pwned", "git push origin refs/heads/main", "git push origin heads/main",
+            "git push origin refs/heads/docs/x", "git push origin v1.0", "git push origin refs/tags/v1.0",
+            "git push origin docs/tagged", "git push origin docs/missing",
+            "git push origin docs/x && echo 'evil==1.0' >> requirements.txt", "git push origin docs/x && echo done",
+            # compound commands with other effects (logged shapes, refused now: only tail or head may follow)
             'git commit -q -m "notes" && git push -u origin docs/x',
             "git add notes.md && GIT_EDITOR=true git rebase --continue 2>&1 | tail -1; git diff --name-only --diff-filter=U",
             "gh pr comment 245 --body done",
+            'git push -u origin docs/diary-1111c 2>&1 | grep -E "docs-only|\\->" | tail -2',
+            "gh pr merge 245 --squash 2>&1 | tail -2; gh pr view 245 --json state -q .state",
+            f"git push -u origin docs/records-1112 > {site}/.claude/worktrees/records-push.log 2>&1; echo exit=$?",
+            f"git push -u origin docs/x > {tmp}/push.log 2>&1; echo exit=$?; tail -5 {tmp}/push.log",
+            # logs: tracked, at a checkout's root, in another checkout's root, a missing folder
+            "git push origin docs/x > .claude/notes.log", "git push origin docs/x > push.log",
+            f"git -C {wt} push origin docs/records-1112 > {wt}/push.log", "git push origin docs/x > .claude/nope/push.log",
             # force, the default branch, and other pushes that do more
             "git push", "git push origin", "git push --force-with-lease origin docs/x", "git push -f origin docs/x",
             "git push --force origin docs/x", "git push origin +docs/x", "git push origin docs/x:main",
@@ -124,7 +148,7 @@ def main():
             "git push origin docs/x && rm -rf build", "git push origin docs/x; git reset --hard",
             "git push origin docs/x | sh", "git push origin docs/x > ~/.zshrc", "git push origin docs/x > notes.md",
             "git push origin docs/x > .git/push.log", "git push origin docs/x > .claude/settings.local.json",
-            "git push origin docs/x > .claude/push.log", "git push origin docs/x &", "git push origin docs/x || true",
+            "git push origin docs/x &", "git push origin docs/x || true",
             "git push origin docs/x\ngit push origin main", "git push origin $(git branch --show-current)",
             "git push origin `git branch --show-current`", "(git push origin docs/x)", "git push origin docs/x 2>&1 | tee x.log",
             "git push origin docs/x | tail -f", "git push origin docs/x; tail -f push.log", "cd $WT && git push origin docs/x",
@@ -155,7 +179,24 @@ def main():
         expect(wt, [("git push -u origin docs/records-1112", "allow"), ("GIT_EDITOR=true git rebase --continue", "allow"),
                     ("gh pr merge 209 --squash --delete-branch", "prompt")], env, agent="kit:implementer", label="thread: ")
         expect(wt, [("git push -u origin docs/records-1112", "prompt")], env, agent="kit:verifier", label="verifier: ")
-        expect(wt, [("git push -u origin docs/records-1112", "prompt")], env, agent="general-purpose", label="other agent: ")
+        for other in ("general-purpose", "implementer", "evil-implementer", "kit:implementer2"):
+            expect(wt, [("git push -u origin docs/records-1112", "prompt")], env, agent=other, label=f"agent {other}: ")
+        # a push refspec in the config maps the branch elsewhere
+        git(site, "config", "remote.origin.push", "refs/heads/*:refs/heads/main")
+        expect(site, [("git push origin docs/diary-1111", "prompt")], env, label="remote.origin.push: ")
+        git(site, "config", "--unset-all", "remote.origin.push")
+        # a bare `gh pr merge` picks its repo from the remotes and GH_REPO: only origin's counts
+        git(site, "remote", "add", "upstream", "git@github.com:someone/else.git")
+        expect(site, [("gh pr merge 209 --squash", "prompt"), ("gh pr merge 209 -R example-org/shop --squash", "allow"),
+                      ("gh pr merge 209 -R someone/else --squash", "prompt")], env, label="two remotes: ")
+        git(site, "remote", "remove", "upstream")
+        expect(site, [("gh pr merge 209 --squash", "prompt")], {**env, "GH_REPO": "someone/else"}, label="GH_REPO: ")
+        expect(site, [("gh pr merge 209 --squash", "allow")], {**env, "GH_REPO": "example-org/shop"}, label="GH_REPO origin: ")
+        # a kit.local.json in git is anyone's file, not the owner's answer
+        git(site, "add", "-f", ".claude/kit.local.json")
+        expect(site, [("git push origin docs/diary-1111", "prompt")], env, label="tracked kit.local.json: ")
+        git(site, "rm", "-q", "--cached", ".claude/kit.local.json")
+        expect(site, [("git push origin docs/diary-1111", "allow")], env, label="untracked again: ")
         # the kit guard's rules win: a project askCommands, a protected branch of its own
         (site / ".claude" / "kit.json").write_text(json.dumps({"guard": {"askCommands": [{"pattern": "docs/secret"}],
                                                                          "protectedBranches": ["release"]}}))

@@ -69,6 +69,8 @@ CASES = [
     ("rm -rf /", True),
     ("rm -rf ~", True),
     ("rm -rf $HOME/", True),
+    ("git push origin feat#;rm -rf ~", True),  # a `#` inside a word starts no comment: bash runs the rm
+    ("echo hi # rm -rf ~", False),  # a real comment
     ("rm -fr ..", True),
     ("rm -rf .git", True),
     ("rm -rf ../other-project", True),
@@ -466,6 +468,17 @@ def main():
         (wt16, "M=.claude/agent-memory/kit-verifier; cat > $M/pitfall.md <<'EOF'\nbody\nEOF", True),
         (wt16, "printf x | tee -a MEMORY.md", True),
         (wt16, "cat >> $MEMDIR/MEMORY.md", True),
+        # copies, moves and code that writes the file (best effort)
+        (wt16, "cp /tmp/notes.md MEMORY.md", True),
+        (wt16, "mv notes.md .claude/agent-memory/kit-verifier/pitfall.md", True),
+        (wt16, "install -m 644 notes.md .claude/agent-memory/kit-verifier/", True),
+        (wt16, "cp -t .claude/agent-memory/kit-verifier notes.md", True),
+        (wt16, "python3 -c \"open('MEMORY.md','a').write('- x')\"", True),
+        (wt16, "python3 -c \"import pathlib; pathlib.Path('.claude/agent-memory/kit-verifier/x.md').write_text('y')\"", True),
+        (wt16, "node -e \"require('fs').appendFileSync('MEMORY.md', 'x')\"", True),
+        (wt16, f"cp notes.md {stable}/pitfall.md", False),
+        (wt16, f"python3 -c \"open('{stable}/MEMORY.md','a').write('- x')\"", False),
+        (wt16, f"cp {stable}/MEMORY.md /tmp/memory-copy.md", False),
         (wt16, f"cat >> {stable}/MEMORY.md <<'EOF'\n- [x](x.md) — y\nEOF", False),
         (wt16 / "services" / "api", f"cd {stable} && cat >> MEMORY.md", False),
         (wt16, f"M={stable}; cat > $M/pitfall.md <<'EOF'\nbody\nEOF", False),

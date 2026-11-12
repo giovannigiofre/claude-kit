@@ -230,8 +230,10 @@ A command the user would type (a login, a script, a setup step) the coordinator 
 Bash: the Allow/Deny prompt reaches the user on the phone too over Remote Control, where a line
 starting with `!` is sent as a message and does not run. Only a step that needs the user's hands
 (a password, a payment, a secret) waits for them. A hook or script can tell a Remote Control
-session by `CLAUDE_CODE_BRIDGE_SESSION_ID` in its environment (Claude Code 2.1.199+); the kit
-does not need to, since the Bash route works in both.
+session by `CLAUDE_CODE_BRIDGE_SESSION_ID` in its environment (Claude Code 2.1.199+). The kit
+uses it once: when a newer kit is installed than the session runs, the start-up line says "when
+you're at the Mac, /reload-plugins (or a restart) loads it" once, and over Remote Control it asks
+Claude to carry on, since no slash command waits on the phone. Nothing else needs to tell them apart.
 
 A thread briefed with the BRIEF.md text carries the `ITEM:` line; when it finishes, the hook
 files its report under the item (`reported | done, 2 decision(s), agent <id>` in the LOG); when
@@ -386,16 +388,23 @@ session that has not loaded it) each one still wakes the coordinator.
 exactly kit.json `check` or `verify`, or the kit's own `gate.py`, `lessons.py`, `items.py`,
 `proposals.py` or `compact_logs.py` by their real path, unless the command changes a settings
 file (below). In any git repo, kit.json or not, it also answers the git steps the owner saved
-as `allow` in `.claude/kit.local.json` (`items.py unattended`), whatever rule raised the prompt:
-`git [-C dir] push [-u] <remote> <branch>` for a branch that is not the default, `main`,
-`master`, `HEAD` or a guard `protectedBranches` one (no `:` refspec, `+` or flag beyond `-u`/`-q`);
-`[GIT_EDITOR=true] git rebase origin/<default>` off the default branch, `--continue`, `--abort`;
-`gh pr merge N [--repo <origin's slug>] --squash|--merge|--rebase [--delete-branch]`. A leading
-`cd <dir> &&`, `2>&1`, a pipe into `tail`/`head`/`grep`/`cut`/`wc`, a `.log`/`.txt`/`.out` file
-in a temp folder or the checkout (not `.git` or `.claude`, bar its worktrees), and reads after
-`;` or `&&` are fine; anything else, `$(…)` or a second line included, is not answered. A thread
-(agent_id set) gets push and rebase only when it is a kit:implementer; merge is the main
-session's. A command settings_guard flags or the active guard asks or denies is never answered.
+as `allow` in an untracked `.claude/kit.local.json` (`items.py unattended`), whatever rule raised
+the prompt. The command is matched whole against one shape per step, never parsed, and may hold
+only letters, digits, blanks and `_ . / ~ = | > & -` (no quote, `#`, `;`, `$`, backtick, bracket
+or newline): `[cd <dir> &&] git [-C <dir>] push [-u|--set-upstream] [-q] origin <branch>` for an
+existing local branch that is not the default, `main`, `master`, `HEAD`, a guard
+`protectedBranches` one or also a tag, with no `refs/`/`heads/` prefix and no `remote.origin.push`
+configured; `[GIT_EDITOR=true] git rebase origin/<default>` off the default branch, `--continue`,
+`--abort`; `gh pr merge N [--repo|-R <origin's slug>] --squash|--merge|--rebase [--delete-branch]`,
+without `-R` only where `origin` is the only remote and `GH_REPO` names no other repo. Each may
+end in `2>&1`, `| tail -N` / `| head -N`, or `> f.log` / `>> f.txt` / `.out` (with `2>&1`) for a
+file git does not track, under the checkout's own `.claude/` or a temp folder (never `.git`).
+Anything else is not answered. A thread gets push and rebase only when its agent type is exactly
+`kit:implementer`; merge is the main session's. A command settings_guard flags or the active
+guard asks or denies is never answered. Saving `allow` is the owner's: settings_guard asks for
+any change to a `.claude/kit.local.json` and for `items.py unattended …=allow` in every repo (a
+subagent's is refused), permission.py never answers that command, and a `kit.local.json` that git
+tracks is neither read nor written (`git rm --cached` it first, if it is yours).
 Nothing else is touched: the guard has already judged the command, and the permission system
 decides the rest. `/fewer-permission-prompts` (built in)
 writes a broader read-only allowlist to project settings if you want one.
@@ -403,7 +412,10 @@ writes a broader read-only allowlist to project settings if you want one.
 `settings_guard.py` (PreToolUse: Write, Edit, MultiEdit, NotebookEdit, Bash, Monitor) answers
 `ask` in every permission mode for a change to a Claude Code settings file: `settings*.json` in
 any `.claude` folder or in `CLAUDE_CONFIG_DIR`, and the managed settings, in any case. Like
-every kit hook it acts only in a project with kit.json (a worktree's, else its main checkout's).
+every kit hook it acts only in a project with kit.json (a worktree's, else its main checkout's),
+bar one exception that holds in every repo: a change to `.claude/kit.local.json` (an edit, or a
+command that names it and is not a plain read) and `items.py unattended …=allow`, since the
+owner's saved `allow` is permission.py's opt-in on its own.
 A shell command counts when it names one, quotes and backslashes inside the name included, and is
 not a plain read (`cat`, `grep`, `jq`, `git diff`, …, alone or piped into one another, with no
 redirection or chain). A bare `settings.json` counts only in a Claude folder: the cwd is one, the

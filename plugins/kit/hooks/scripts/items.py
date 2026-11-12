@@ -38,7 +38,9 @@ effective value: an `allow` is answered by the kit's PermissionRequest hook in i
 (permission.py), so a settings ask rule or a missing allow rule does not hold it back; it prints as
 `ask`, with the rule to change, while a settings file does not parse, a kit guard rule asks or
 denies the step, or deny rules refuse every plain form (kitlib.unattended_effective). It never
-writes a settings file.
+writes a settings file. Saving an `allow` is the owner's answer: the kit never runs it unasked
+(permission.py leaves it to the prompt, settings_guard asks for it), and a kit.local.json that git
+tracks is neither read nor written.
 """
 
 import json
@@ -315,6 +317,9 @@ def main(argv=None):
         effective, notes = kitlib.unattended_effective(root)
         line = "UNATTENDED: " + " ".join(f"{k}={effective[k]}" for k in kitlib.UNATTENDED_STEPS)
         print(line + (f"  (from {path})" if is_set else "  (not set for this repo: ask the user, then save the answer)"))
+        if kitlib.local_config(root)[1]:
+            print(f"{path} is tracked by git, so it is not read: an answer that came with the repo is not the "
+                  "owner's. Tell the user; the kit saves theirs only once the file is untracked.")
         for k in kitlib.UNATTENDED_STEPS:
             if k in notes:
                 print(notes[k])

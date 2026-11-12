@@ -194,7 +194,10 @@ def update_notice(session_id):
     if not newer or kitlib.load_state(session_id, "kit-version").get("announced") == newer:
         return None
     kitlib.save_state(session_id, "kit-version", {"announced": newer})
-    return f"kit updated to {newer}: restart Claude Code (or /reload-plugins) to load it. Tell the user this line."
+    line = f"kit updated to {newer}: when you're at the Mac, /reload-plugins (or a restart) loads it; this session runs {loaded} until then."
+    if os.environ.get("CLAUDE_CODE_BRIDGE_SESSION_ID"):  # Remote Control: the user is on the phone
+        return line + " Tell the user this line once, at the end of a reply, and carry on: nothing waits on it."
+    return line + " Tell the user this line once; nothing waits on it."
 
 
 def main():
