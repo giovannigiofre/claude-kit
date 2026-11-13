@@ -109,7 +109,8 @@ Threads may commit, amend, rebase and force-push (with `--force-with-lease`) on 
 they created for their own items, never on the default branch or someone else's. Auto mode
 blocks history rewrites by default, and `autoMode` is read from user settings only, so the kit
 offers this rule (with `attribution` off) once per machine at session start and merges it into
-`~/.claude/settings.json` on yes (`hooks/scripts/machine_setup.py`; `--decline` stops the offer):
+the account's `settings.json` on yes (`~/.claude`, or `CLAUDE_CONFIG_DIR` for a second account on the same
+machine, each checked and set up on its own; `hooks/scripts/machine_setup.py`; `--decline` stops the offer):
 
 ```json
 {"autoMode": {"allow": ["$defaults", "On a branch an agent created for its own task (not the default branch, not one someone else pushed to), rewriting its commits (amend, rebase, setting the user's authorship) and pushing it with --force-with-lease"]}}

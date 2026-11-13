@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""The kit's settings for this machine, in ~/.claude/settings.json (user scope, which no plugin or
-project file can set):
+"""The kit's settings for this account on this machine, in the user's settings.json (user scope,
+which no plugin or project file can set; under CLAUDE_CONFIG_DIR when that is set, else ~/.claude):
 
   attribution   {"commit": "", "pr": "", "sessionUrl": false}: Claude Code adds no co-author
                 trailer, PR footer or session link, so the user is the only author
@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from kitlib import read_json  # noqa: E402
+from kitlib import config_dir, read_json  # noqa: E402
 
 ATTRIBUTION = {"commit": "", "pr": "", "sessionUrl": False}
 OWN_BRANCHES = ("On a branch an agent created for its own task (not the default branch, not one "
@@ -32,7 +32,9 @@ OWN_BRANCHES = ("On a branch an agent created for its own task (not the default 
 
 
 def settings_path():
-    return Path.home() / ".claude" / "settings.json"
+    # the account's own settings: with CLAUDE_CONFIG_DIR (a second account on the same machine) Claude
+    # Code reads settings.json there, and ~/.claude/settings.json belongs to the other account
+    return config_dir() / "settings.json"
 
 
 def kit_path():

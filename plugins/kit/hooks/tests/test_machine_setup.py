@@ -16,9 +16,12 @@ sys.path.insert(0, str(SCRIPT.parent))
 import machine_setup  # noqa: E402
 
 
-def run(home, *args):
-    out = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True,
-                         env={**os.environ, "HOME": str(home)}, timeout=30)
+def run(home, *args, config=None):
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
+    env["HOME"] = str(home)
+    if config:
+        env["CLAUDE_CONFIG_DIR"] = str(config)
+    out = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, env=env, timeout=30)
     return out.returncode, out.stdout
 
 
@@ -63,6 +66,19 @@ def main():
     kit = json.loads((declined / ".claude" / "kit.json").read_text())
     assert kit == {"mode": "loop", "machineSetup": "declined"}, kit
     assert run(declined, "--check")[0] == 0, "declined: nothing offered"
+    # a second account on the same machine (CLAUDE_CONFIG_DIR): its own settings.json gets the kit's
+    # settings, and the first account's ~/.claude/settings.json is left as it is
+    two = Path(tempfile.mkdtemp())
+    work = two / "work-account"
+    (two / ".claude").mkdir()
+    (two / ".claude" / "settings.json").write_text(json.dumps({"permissions": {"allow": ["Bash(ls)"]}}))
+    assert run(two, "--check", config=work)[0] == 1, "the second account has nothing yet"
+    code, out = run(two, "--apply", config=work)
+    applied = json.loads((work / "settings.json").read_text())
+    assert code == 0 and applied["attribution"]["commit"] == "" and applied["autoMode"]["allow"][0] == "$defaults", out
+    assert json.loads((two / ".claude" / "settings.json").read_text()) == {"permissions": {"allow": ["Bash(ls)"]}}, \
+        "the other account's settings are untouched"
+    assert run(two, "--check", config=work)[0] == 0 and run(two, "--check")[0] == 1, "each account is checked on its own"
     print("machine_setup: all checks passed")
 
 
