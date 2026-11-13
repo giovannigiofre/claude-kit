@@ -365,20 +365,90 @@ def main():
               "the emptied .claude/ is gone and not made again for a note")
         check(sh(repo, "status", "--porcelain") == "", f"git clean: {sh(repo, 'status', '--porcelain')}")
 
-    # .kit is a symlink: nothing moves into it, said once
+    # .kit is a symlink in the main checkout: it is not the kit's folder; nothing is written
+    # through it, the link is excluded, a worktree's own state still moves, and it is said once
     with tempfile.TemporaryDirectory() as tmp:
         repo = project(tmp)
+        tree = Path(tmp) / "wt"
+        sh(repo, "worktree", "add", "-q", "-b", "side", str(tree))
+        (tree / ".claude/evidence/side").mkdir(parents=True)
+        (tree / ".claude/evidence/side/e2e.txt").write_text("pass\n")
         elsewhere = Path(tmp) / "elsewhere"
         elsewhere.mkdir()
         (repo / ".kit").symlink_to(elsewhere)
-        before = exclude_lines(repo)
+        check(kitlib.state_dir(repo) == repo / ".claude", f"a linked .kit is not where new state goes: {kitlib.state_dir(repo)}")
+        check(kitlib.state_entry(repo, "lead") == repo / ".claude/lead", "nor where state is read")
         first = migrate_state.auto(repo)
-        check(len(first) == 1 and "is a symlink" in first[0], f"said why: {first}")
-        check(list(elsewhere.iterdir()) == [] and (repo / ".claude/lead/board.md").exists(), "nothing moved")
-        check(exclude_lines(repo) == before, "no exclude lines for a checkout that does not move")
+        check(any("is a symlink" in l and "stays on .claude/" in l for l in first), f"said why: {first}")
+        check(list(elsewhere.iterdir()) == [], f"nothing written through the link: {list(elsewhere.iterdir())}")
+        check((repo / ".claude/lead/board.md").exists() and (tree / ".kit/evidence/side/e2e.txt").exists(),
+              "the main checkout stays, the worktree's evidence moved")
+        check("/.kit" in exclude_lines(repo), "the link itself is excluded")
+        clean = (sh(repo, "status", "--porcelain"), sh(tree, "status", "--porcelain"))
+        check(clean == ("", ""), f"git clean in both: {clean}")
         check(migrate_state.auto(repo) == [], "said once")
         code, out = run(repo, "migrate")
         check(code == 0 and "is a symlink" in out and list(elsewhere.iterdir()) == [], f"by hand too: {out}")
+        _, out = run(repo, "status")
+        check("to move:" not in out, f"status agrees: {out}")
+
+    # a fresh project whose .kit is a symlink: it stays on .claude/, the link is excluded, said once
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / "fresh"
+        repo.mkdir()
+        sh(repo, "init", "-q", "-b", "main")
+        elsewhere = Path(tmp) / "elsewhere"
+        elsewhere.mkdir()
+        (repo / ".kit").symlink_to(elsewhere)
+        check(kitlib.state_dir(repo) == repo / ".claude", "fresh, linked .kit: new state goes to .claude/")
+        first = migrate_state.auto(repo)
+        check(len(first) == 1 and "stays on .claude/" in first[0], f"said: {first}")
+        check(migrate_state.auto(repo) == [] and list(elsewhere.iterdir()) == [], "once, nothing written through it")
+        check(sh(repo, "status", "--porcelain") == "", f"git clean: {sh(repo, 'status', '--porcelain')}")
+
+    # .claude/lead is a symlink (to a shared folder) beside movable entries: the others move and
+    # are excluded, the link gets no line of its own and is said once; migrate and status agree
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = project(tmp)
+        shared = Path(tmp) / "shared-lead"
+        os.rename(repo / ".claude/lead", shared)
+        (repo / ".claude/lead").symlink_to(shared)
+        before_status = sh(repo, "status", "--porcelain")
+        first = migrate_state.auto(repo)
+        check(any("moved this project's kit state" in l and "kit-verifier" in l for l in first), f"moved: {first}")
+        check(any(".claude/lead was not moved" in l and "a symlink" in l for l in first), f"the link said: {first}")
+        check((repo / ".kit/agent-memory/kit-verifier/MEMORY.md").exists() and (repo / ".kit/evidence").is_dir()
+              and (repo / ".kit/overnight").is_dir(), "every other entry moved")
+        check((repo / ".claude/lead").is_symlink() and (shared / "board.md").exists(), "the link left as it was")
+        lines = exclude_lines(repo)
+        check(all(l in lines for l in ("/.kit/evidence/", "/.kit/overnight/", "/.kit/agent-memory/kit-verifier/",
+                                       "/.kit/migration.json", "/.claude/kit-state-moved.txt")), f"excluded: {lines}")
+        check(not any("lead" in l for l in lines if l not in EXCLUDE), f"no line of the link's own: {lines}")
+        check(sh(repo, "status", "--porcelain") == before_status, f"git status as before: {sh(repo, 'status', '--porcelain')!r}")
+        check(migrate_state.auto(repo) == [], "said once")
+        code, out = run(repo, "migrate")
+        _, listed = run(repo, "status")
+        check(code == 0 and "to move:" not in listed, f"nothing left to move, and status agrees: {code} {out} {listed}")
+
+    # when the exclude line cannot be added, an entry still to move is a failure: migrate does
+    # not say "nothing to move" or exit 0, status lists it, and a session start says it once
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = project(tmp)
+        real = kitlib.add_exclude_lines
+        kitlib.add_exclude_lines = lambda root, lines: []
+        try:
+            lines = []
+            code, _, _, failed_ = migrate_state.migrate(repo, out=lines.append)
+            told = migrate_state.auto(repo)
+            again = migrate_state.auto(repo)
+        finally:
+            kitlib.add_exclude_lines = real
+        check(code == 1 and failed_ and not any("nothing to move" in l for l in lines), f"migrate: {code} {lines}")
+        check(not (repo / ".kit/lead").exists() and (repo / ".claude/lead/board.md").exists(), "nothing moved unhidden")
+        _, listed = run(repo, "status")
+        check("to move:" in listed, f"status lists them: {listed}")
+        check(any("did not move" in l and "could not take its line" in l for l in told), f"said: {told}")
+        check(again == [], f"said once: {again}")
 
     # two session starts at once, many times: the owner's lines stay, no line is cut, no false
     # conflict, and the runs log keeps the winner's entry
