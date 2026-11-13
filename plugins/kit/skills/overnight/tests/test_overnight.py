@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -428,6 +429,59 @@ def test_project_with_legacy_state_keeps_its_runs_in_claude():
     _, end, run_dir = run(d, fake)
     assert run_dir.parent == d / ".claude" / "overnight" and not (d / ".kit").exists(), run_dir
     assert "/.claude/overnight/" in excluded(d) and len(end["commits"]) == 2 and clean(d)
+
+
+def test_push_sends_the_branch_to_origin_once_at_the_end():
+    d, fake = repo(["change", "done"])
+    remote = Path(tempfile.mkdtemp()) / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    subprocess.run(["git", "-C", str(d), "remote", "add", "origin", str(remote)], check=True)
+    out, end, run_dir = run(d, fake, "--push")
+    branch = end["branch"]
+    assert end["pushed"] == f"pushed {branch} to origin", end
+    on_remote = subprocess.run(["git", "-C", str(remote), "rev-parse", branch], capture_output=True, text=True).stdout.strip()
+    here = subprocess.run(["git", "-C", str(d), "rev-parse", branch], capture_output=True, text=True).stdout.strip()
+    assert on_remote == here and on_remote, (on_remote, here)
+    assert "push: pushed" in (run_dir / "notes.md").read_text()
+    d, fake = repo(["change", "done"])
+    _, end, _ = run(d, fake, "--push")
+    assert end["pushed"] == "skipped: no origin remote", end
+    d, fake = repo(["noop", "noop", "noop"])
+    _, end, _ = run(d, fake, "--push")
+    assert "pushed" not in end and not end["commits"], end  # nothing to push: no push at all
+    _, end, _ = run(*repo(["change", "done"]))
+    assert "pushed" not in end, end  # without --push the run never pushes
+
+
+def test_detach_returns_at_once_and_the_run_goes_on():
+    d, fake = repo(["change", "change", "done"])  # a 3 s gate per step keeps it running past the launcher's wait
+    started = time.monotonic()
+    out = subprocess.run([sys.executable, str(SCRIPT), "improve work.txt", "--agent-cmd", f"{sys.executable} {fake}",
+                          "--gate", "sleep 3", "--rate-limit-wait", "0", "--detach"],
+                         cwd=d, capture_output=True, text=True, timeout=60, env=env(d))
+    assert out.returncode == 0 and time.monotonic() - started < 20, out.stdout + out.stderr
+    assert "started in the background, pid" in out.stdout and "overnight: branch overnight/" in out.stdout, out.stdout
+    logs = list((runs(d) / "launch").iterdir())
+    assert len(logs) == 1 and str(logs[0]) in out.stdout, logs
+    deadline = time.monotonic() + 90
+    ends = []
+    while time.monotonic() < deadline and not ends:
+        ends = [r / "end-state.json" for r in runs(d).iterdir() if (r / "end-state.json").exists()]
+        time.sleep(0.5)
+    assert ends, logs[0].read_text()
+    end = json.loads(ends[0].read_text())
+    assert len(end["commits"]) == 3 and "stop condition met" in end["stop_reason"], end
+    assert "overnight: stopped" in logs[0].read_text()
+    state = json.loads((ends[0].parent / "state.json").read_text())
+    assert "detach" not in state["args"], state["args"]
+
+
+def test_detach_reports_a_run_that_stops_at_once():
+    d, fake = repo(["change"])
+    (d / "work.txt").write_text("uncommitted\n")
+    out = subprocess.run([sys.executable, str(SCRIPT), "improve work.txt", "--agent-cmd", f"{sys.executable} {fake}",
+                          "--detach"], cwd=d, capture_output=True, text=True, timeout=60, env=env(d))
+    assert out.returncode != 0 and "working tree not clean" in out.stdout and "ended at once" in out.stdout, out.stdout
 
 
 if __name__ == "__main__":

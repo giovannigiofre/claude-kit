@@ -25,7 +25,7 @@ the model can't do alone, re-checked when a new model lands.
 | UI or LLM work | describe it | the kit asks "Use Kit UI / Kit LLM for this?" and installs that plugin for the project on yes |
 | Merging | nothing, or say so | you merge; say "merge green PRs yourself" and the coordinator saves `lead.merge: agent` in `kit.json` |
 | Finishing by hand | `/kit:go` | PR with intent, live evidence (the gate run is recorded on the exact tree), what was fixed, risk; keeps CI green; merges if the project allows it |
-| Evening | "tonight keep doing X until Y" | `kit:overnight`: a fresh session per small step, a commit only when the gate passes, caps or none |
+| Evening | "tonight keep doing X until Y" | `kit:overnight` starts at once, detached: a fresh session per small step, a commit only when the gate passes, 40 iterations and USD 25 unless you name other caps, the branch pushed once at the end |
 | Every two weeks or so | `/kit:learn` | when the session-start line says the review is due: turns repeated corrections into checks or rules, and prunes instructions that no longer help (at most 4 changes, each approved); capture and distilling run on their own, `sweep` reads transcripts for repeated corrections |
 
 Your time goes to the two ends: saying what you want, and judging the PR. The middle is the

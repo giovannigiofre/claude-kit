@@ -354,6 +354,51 @@ def cap_reached(args, state):
     return None
 
 
+DETACH_WAIT = 5  # seconds the launcher watches the run start, so an early refusal is not lost in a log
+
+
+def detach(argv):
+    """Start this runner again with `argv` in a new process session (setsid), its output in a log
+    file under the runs folder, and return at once. The coordinator launches the night from one
+    Bash call that has to return: a run tied to that call's process group, or to a background
+    command, would end with the call or the session. A run that stops within DETACH_WAIT seconds
+    (a dirty tree, a bad flag) prints its log and exit code here instead."""
+    root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel"))
+    common = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    main = Path(common).parent if Path(common).name == ".git" else root
+    runs = runs_dir(root, main)
+    exclude_runs_dir(root, runs)  # before the log exists, so the run's clean-tree check passes
+    (runs / "launch").mkdir(parents=True, exist_ok=True)
+    log_path = runs / "launch" / f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}.log"
+    with open(log_path, "w", encoding="utf-8") as log, open(os.devnull) as nothing:
+        child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), *argv], cwd=Path.cwd(),
+                                 stdin=nothing, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    try:
+        code = child.wait(timeout=DETACH_WAIT)
+    except subprocess.TimeoutExpired:
+        print(f"overnight: started in the background, pid {child.pid}; log {log_path}")
+        print(log_path.read_text(encoding="utf-8", errors="replace").rstrip())
+        return 0
+    print(log_path.read_text(encoding="utf-8", errors="replace").rstrip())
+    print(f"overnight: the run ended at once (exit {code}); log {log_path}")
+    return code
+
+
+def push_branch(root, branch):
+    """Push the run's branch to origin once, so the morning result can be read from a phone. A
+    missing remote or a refused push is recorded, never fatal: the commits stay on the branch."""
+    if not git(root, "remote", "get-url", "origin", check=False):
+        return "skipped: no origin remote"
+    try:
+        out = subprocess.run(["git", "-C", str(root), "push", "-q", "-u", "origin", branch],
+                             capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        return "failed: git push took over 300 s"
+    if out.returncode != 0:
+        return f"failed: {(out.stderr.strip().splitlines() or ['git push failed'])[-1][:200]}"
+    return f"pushed {branch} to origin"
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="kit:overnight - unattended loop of small verified steps")
     p.add_argument("objective", nargs="?", help="what to improve (or use --objective-file)")
@@ -389,6 +434,10 @@ def main(argv=None):
     p.add_argument("--agent-cmd", default=os.environ.get("KIT_OVERNIGHT_AGENT", "claude"))
     p.add_argument("--resume", help="run directory of an earlier run to continue")
     p.add_argument("--dry-run", action="store_true", help="print the plan and the first prompt, run nothing")
+    p.add_argument("--detach", action="store_true",
+                   help="start the run in its own process session, with its output in a log file, and return at once")
+    p.add_argument("--push", action="store_true",
+                   help="when the run ends with commits, push its branch to origin once (a failed push is noted, not fatal)")
     argv = sys.argv[1:] if argv is None else list(argv)
     args = p.parse_args(argv)
     if args.model and re.search(r"fable|mythos", args.model, re.I) and not args.allow_credits:
@@ -396,6 +445,8 @@ def main(argv=None):
                 "if that is what you want, or use an Opus model")
     given = {a.dest for a in p._actions
              if any(tok.split("=", 1)[0] in a.option_strings for tok in argv if tok.startswith("-"))}
+    if args.detach and not args.dry_run:
+        return detach([a for a in argv if a != "--detach"])
 
     root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel"))
     main_checkout = root
@@ -404,7 +455,7 @@ def main(argv=None):
         run_dir = Path(args.resume).resolve()
         state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
         for key, val in state["args"].items():  # a flag given now wins; an omitted one keeps the saved value
-            if key in ("resume", "dry_run"):
+            if key in ("resume", "dry_run", "detach"):
                 continue
             if key not in given:
                 setattr(args, key, val)
@@ -425,7 +476,7 @@ def main(argv=None):
             root = Path(args.worktree).resolve()
         state = {"root": str(root), "branch": branch, "run_id": run_id, "iteration": 0, "cost": 0.0,
                  "tokens": 0, "commits": [], "failures": 0, "stop_reason": None,
-                 "args": {k: v for k, v in vars(args).items() if k not in ("resume", "dry_run")}}
+                 "args": {k: v for k, v in vars(args).items() if k not in ("resume", "dry_run", "detach")}}
         common = git(Path.cwd(), "rev-parse", "--path-format=absolute", "--git-common-dir")
         main = Path(common).parent if Path(common).name == ".git" else root
         run_dir = runs_dir(root, main) / run_id
@@ -618,10 +669,14 @@ def main(argv=None):
     finally:
         log.close()
 
+    if args.push and state["commits"]:
+        state["pushed"] = push_branch(root, state["branch"])
+        note(f"push: {state['pushed']}")
+        print(f"overnight: push {state['pushed']}")
     save()
     (run_dir / "end-state.json").write_text(json.dumps(
-        {k: state[k] for k in ("branch", "iteration", "cost", "tokens", "commits", "stop_reason")}, indent=2),
-        encoding="utf-8")
+        {k: state[k] for k in ("branch", "iteration", "cost", "tokens", "commits", "stop_reason", "pushed") if k in state},
+        indent=2), encoding="utf-8")
     print(f"overnight: stopped - {state['stop_reason']}")
     print(f"overnight: {len(state['commits'])} commits on {state['branch']} in {state['iteration']} iterations, "
           f"USD {state['cost']:.2f}, {state['tokens']} tokens; run dir {run_dir}")

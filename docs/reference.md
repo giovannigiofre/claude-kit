@@ -737,8 +737,19 @@ line still work; only the status line, the watchdog and the interim-notice drop 
 
 ```
 python3 <kit>/skills/overnight/scripts/overnight.py "<objective>" --stop-when "<condition>" \
-  --worktree ../app-overnight --max-iterations 40 --max-usd 25 --effort medium [--fallback-model sonnet] [--max-turns 60]
+  --worktree ../app-overnight --max-iterations 40 --max-usd 25 --effort medium [--fallback-model sonnet] [--max-turns 60] \
+  [--push] [--detach]
 ```
+
+The coordinator starts a night itself, without an OK round or a budget question: `items.py away
+on`, then the runner with 40 iterations and USD 25 unless the owner named other caps (or none),
+stated in its reply. `--detach` starts the runner again in its own process session (setsid),
+with its output in `.kit/overnight/launch/<time>-<pid>.log`, and returns within about 5 seconds
+with the pid and the log path; a run that stops in that time (a dirty tree, a bad flag) prints its
+log and exit code instead. It is not a Bash `run_in_background` command, which ends with the
+session, and the guard's wait rule does not apply to it. `--push`: when the run ends with commits,
+the runner pushes its branch to `origin` once (`git push -u`), so the morning result can be read
+from a phone; `end-state.json` `pushed` says what happened, and a failed push never fails the run.
 
 Each iteration runs `claude -p` in permission mode `auto` unless `--permission-mode` says
 otherwise, with `--permission-prompts none` (a headless session cannot answer a prompt: anything
@@ -837,7 +848,7 @@ same model.
 | kit | `lead-verifies-before-done` | a small goal ends with a checkable done and evidence from running it |
 | kit | `verifier-catches-bug` | a claimed-done change with a planted bug is rejected |
 | kit | `go-reports-risk-and-evidence` | `/kit:go` reports intent, evidence from running the CLI, a risk rating |
-| kit | `overnight-sets-budget` | an overnight request reaches `kit:overnight` with a gate, a stop condition and a budget choice |
+| kit | `overnight-sets-budget` | an overnight request reaches `kit:overnight` with a gate, a stop condition and stated caps |
 | kit | `investigate-asks-for-evidence` | console-only production logs: one batched request for failing and working exports |
 | kit | `investigate-logs-root-cause` | the fix lands where the bad data enters, with a regression test |
 | kit | `offers-domain-plugin` | a UI request in a project without kit-ui reaches `kit:extras` |
