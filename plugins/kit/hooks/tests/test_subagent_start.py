@@ -42,6 +42,13 @@ def main():
         gate_only = run(tree, config)
         assert gate_only.startswith(f"kit: in {repo} and its worktrees, run the project's gate with `python3 ") and "gate.py\" check`" in gate_only \
             and gate_only.count("\n") == 0, gate_only
+        # with items on the board, a thread is told how to log without writing in .claude itself
+        (repo / ".claude" / "lead" / "items").mkdir(parents=True)
+        both = run(tree, config).splitlines()
+        assert len(both) == 2 and both[0] == gate_only and "items.py\" log <id> <status>" in both[1] \
+            and f"any write inside {repo}/.claude" in both[1] and "put <id> <file>" in both[1] and len(both[1]) < 640, both
+        (repo / ".claude" / "lead" / "items").rmdir()
+        (repo / ".claude" / "lead").rmdir()
         (repo / ".claude" / "kit.json").write_text('{"check": "true", "verify": "make test"}')
         assert "gate.py\" verify` (kit.json `verify`: `make test`)" in run(tree, config), "verify wins over check"
 

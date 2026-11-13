@@ -14,6 +14,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import items  # noqa: E402
+import permission  # noqa: E402
 
 
 def run(repo, *args, stdin=None, env=None):
@@ -73,6 +74,33 @@ def main():
         check(out.startswith("login-page-2\t"), f"a second item with the same name gets a suffix: {out}")
         check(items.find_id("hello\nITEM: Login-Page\nmore") == "login-page", "find_id is case-insensitive")
         check(items.find_id("no item here") is None, "no id when absent")
+
+        # put: files copied into the item's out/, by name, logged; from a thread's worktree too
+        tree = Path(tmp) / "tree"
+        subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "t-put", str(tree)], check=True)
+        (tree / "docs").mkdir()
+        (tree / "docs" / "plan.py").write_text("print(1)\n")
+        code, out, err = run(tree, "put", "login-page", "docs/plan.py")
+        check(code == 0 and out == str(folder.resolve() / "out" / "plan.py") or out == str(folder / "out" / "plan.py"),
+              f"put from a worktree lands in the main checkout's item: {code} {out} {err}")
+        check((folder / "out" / "plan.py").read_text() == "print(1)\n" and not (tree / ".claude").exists(), "copied, nothing made in the worktree")
+        check("| note | out: plan.py" in (folder / "LOG.md").read_text(), "put is logged")
+        code, _, _ = run(tree, "log", "login-page", "working", "from the worktree")
+        check(code == 0 and "| working | from the worktree" in (folder / "LOG.md").read_text(), "log from a worktree reaches the item")
+        (tree / "link").symlink_to(home / ".claude")
+        for bad in (["put", "login-page", "docs"], ["put", "login-page", "link"], ["put", "nope", "docs/plan.py"], ["put", "login-page"]):
+            code, _, err = run(tree, *bad)
+            check(code != 0 and err.startswith("items:"), f"refused: {bad} {code} {err}")
+        (folder / "out" / "evil").symlink_to(home / ".claude" / "settings.json")
+        (tree / "evil").write_text("x")
+        code, _, err = run(tree, "put", "login-page", "evil")
+        check(code == 1 and not (home / ".claude" / "settings.json").exists(), f"a symlink in out/ is never followed: {code} {err}")
+        (folder / "out" / "evil").unlink()
+        subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(tree)], check=True)
+        check(permission.allowed(f'python3 "{SCRIPTS / "items.py"}" put login-page docs/plan.py', {}, str(repo)),
+              "permission.py lets put run unasked")
+        check(not permission.allowed(f'python3 "{SCRIPTS / "items.py"}" put login-page $W/plan.py', {}, str(repo)),
+              "a variable in the command keeps the prompt")
 
         # the hooks file the thread's report and the verifier's verdict under the item. The hand-back is
         # the report; the closing text after it (last_assistant_message) is not

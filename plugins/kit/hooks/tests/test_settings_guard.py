@@ -217,6 +217,22 @@ def main():
               "permission.py does not allow a gate command that writes settings")
         check(permission.allowed("make lint", {"check": "make lint"}, str(repo)), "permission.py still allows the gate")
 
+        # a $(...) is judged as a command of its own: reading with one is a read, also beside a
+        # Claude folder (the coordinator's worktree survey asked for nothing, 2026-11-12)
+        survey = ("ls -la .claude/lead 2>/dev/null; ls .claude; for w in .claude/worktrees/*/; do "
+                  "b=$(git -C $w rev-parse --abbrev-ref HEAD); d=$(git -C $w status --porcelain | wc -l | tr -d ' '); "
+                  "u=$(git rev-list --count origin/main..$(git -C $w rev-parse HEAD)); echo \"$w $b dirty=$d ahead=$u\"; done")
+        for command in (survey, "ls .claude; echo $(git rev-parse HEAD)", "n=$(ls .claude | wc -l); echo $n"):
+            decision, reason = hook("Bash", {"command": command}, repo, env)
+            check(decision == "pass", f"a read with $(...) beside a Claude folder passes: {decision} {reason} {command}")
+        for command in ("cp x $(echo .claude/)", "ls .claude; $(echo cp) x .claude/",
+                        "echo $(cp x .claude/)", "ls .claude; echo $(echo $(cp x .claude/))", "cp x .claude/; echo $(date)",
+                        "echo $((1+1)); cp x .claude/", "ls .claude; echo $(echo hi > .claude/settings.json)",
+                        f"echo $(cat x) > {local}", "ls $(echo x; cp y .claude/)", "x=$(cp y .claude/settings.json)",
+                        "$(echo cp) /tmp/x .claude/settings.local.json", "ls .claude; echo $(date"):
+            decision, reason = hook("Bash", {"command": command}, repo, env)
+            check(decision == "ask", f"a write through or beside $(...) still asks: {decision} {command}")
+
     print("settings_guard: all checks passed" if not failed else f"settings_guard: {failed} failures")
     return 1 if failed else 0
 

@@ -64,6 +64,37 @@ def config_notes(config):
     return notes
 
 
+def asking_line(root):
+    """One line when a permission rule asks before the git steps a kit project runs all day. In
+    Ciaoguest (2026-11-13) a committed `Bash(git push*)`, `Bash(git rebase *)` and `Bash(gh pr
+    merge*)` made 50 prompts in a day on the owner's phone, four of them left unanswered for 20
+    minutes each at night, and nothing told the owner the rules were the cause."""
+    try:
+        asking = kitlib.asking_rules(root)
+    except Exception:
+        return []
+    if not asking:
+        return []
+    main = kitlib.main_checkout(root) or root
+    seen = {}
+    for found in asking.values():
+        for rule, where in found:
+            try:
+                where = Path(where).relative_to(main)
+            except (TypeError, ValueError):
+                pass
+            seen.setdefault(str(where), [])
+            if rule not in seen[str(where)]:
+                seen[str(where)].append(rule)
+    which = "; ".join(", ".join(f"`{r}`" for r in rules[:4]) + f" in {where}" for where, rules in seen.items())
+    return [f"- permission rules ask before every {', '.join(asking)} here ({which}): each one stops on a prompt "
+            "for the owner, in auto mode and from a thread too, and an allow rule cannot override it. So run each "
+            "such step once, in one command with its clean-up; never repeat one that is waiting on a prompt or was "
+            "not answered (hand it back as `needs push`). The first time one of these prompts comes up in this "
+            "session, tell the owner in one line that these rules are why, and ask once whether to change them "
+            "(lead/unattended.md steps 2-3: `items.py unattended` prints the PROPOSAL and its diff)."]
+
+
 def queued_line(root):
     """Items on disk nothing shows yet (a hand-off, a taken proposal) until the lead takes them."""
     try:
@@ -244,6 +275,7 @@ def main():
     if isinstance(lead, dict) and lead.get("notes"):
         lines.append(f"- lead notes: {lead['notes']}")
     lines.extend(config_notes(config))
+    lines.extend(asking_line(root))
     queued = queued_line(root)
     if queued:
         lines.append(queued)

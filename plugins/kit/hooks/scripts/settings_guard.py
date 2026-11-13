@@ -139,14 +139,50 @@ def _segment_writes(segment, depth):
     return name not in NON_WRITERS
 
 
+LIFTED = "__kit_substitution__"
+
+
+def _lift(text):
+    """(the text with each outermost $(...) replaced by the word LIFTED, their bodies), or
+    (None, []) for $((arithmetic)) or an unclosed $(."""
+    out, bodies, i = [], [], 0
+    while i < len(text):
+        if text.startswith("$((", i):
+            return None, []
+        if text.startswith("$(", i):
+            depth, j = 1, i + 2
+            while j < len(text) and depth:
+                depth += {"(": 1, ")": -1}.get(text[j], 0)
+                j += 1
+            if depth:
+                return None, []
+            bodies.append(text[i + 2:j - 1])
+            out.append(LIFTED)
+            i = j
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out), bodies
+
+
 def writing_parts(command, depth=0):
     """The parts of the command (pipelines, split at `;`, `&&`, `||`, `&`) that may write a file.
     Fail-safe: a stage counts as writing unless its first word is known not to write (a reader,
-    echo, mkdir, a block keyword, git status/add/commit...). A redirection or a substitution
-    anywhere makes the whole command count."""
+    echo, mkdir, a block keyword, git status/add/commit...). A redirection or backticks anywhere
+    make the whole command count; a $(...) is judged as a command of its own (see below)."""
     text = HARMLESS.sub(" ", command)
-    if ">" in text or "`" in text or "$(" in text:
+    if ">" in text or "`" in text:
         return [command]
+    if "$(" in text:
+        # `b=$(git -C $w status | wc -l)` reads: each $(...) is judged as a command of its own and
+        # stands as one word in the text around it. A body that may write, a $(...) in a part that
+        # may write (`cp x $(echo .claude/)`), arithmetic or anything unbalanced: the whole command.
+        outer, bodies = _lift(text)
+        if outer is None or depth >= 3 or any(writes(body, depth + 1) for body in bodies):
+            return [command]
+        parts = [part for part in PIPELINES.split(outer)
+                 if any(_segment_writes(stage, depth) for stage in part.split("|"))]
+        return [command] if any(LIFTED in part for part in parts) else parts
     return [part for part in PIPELINES.split(text)
             if any(_segment_writes(stage, depth) for stage in part.split("|"))]
 

@@ -199,6 +199,7 @@ resume from; the source of the idea is in CATALOG.md).
 python3 <kit>/hooks/scripts/items.py new "<name>" --brief - --from lead|handoff [--kind scout]  # id and folder printed
 python3 <kit>/hooks/scripts/items.py list [--status queued]
 python3 <kit>/hooks/scripts/items.py log <id> <status> [note]
+python3 <kit>/hooks/scripts/items.py put <id> <file>...   # copy files into the item's out/ folder
 python3 <kit>/hooks/scripts/items.py show <id>
 python3 <kit>/hooks/scripts/items.py done <id>
 python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow]
@@ -406,6 +407,20 @@ file (below). Nothing else is touched: the guard has already judged the
 command, and the permission system decides the rest. `/fewer-permission-prompts` (built in)
 writes a broader read-only allowlist to project settings if you want one.
 
+`.claude` is one of Claude Code's protected paths: a write inside it (mkdir, a redirection, Write, Edit) asks
+the owner in `default` and `acceptEdits`, goes to the classifier in `auto`, and no allow rule pre-approves it
+(only `.claude/worktrees/` is exempt). The kit keeps the board and the items under `.claude/lead/`, so its own
+scripts write there (they run unasked, above) and a thread is told at start-up, when the project has items, to
+log with `items.py log` as a command on its own, to leave a file for the coordinator with `items.py put`
+(regular files, by name, into the item's `out/`; a symlink is never followed), and never to write in the main
+checkout's `.claude` by hand. Both commands find the main checkout's items when run from a thread's worktree.
+
+An `ask` rule wins over every allow rule and over auto mode, in a compound command too. So when a rule in any
+settings scope (or the guard's `askCommands`) asks before a push, a rebase or a merge as the kit runs them, the
+start-up lines name the rules and their file (`kitlib.asking_rules`), tell Claude to run each such step once
+and never repeat one left waiting, and to tell the owner the cause at the first such prompt and ask once
+whether to change the rules, through `items.py unattended` and its PROPOSAL. The kit never changes them itself.
+
 `settings_guard.py` (PreToolUse: Write, Edit, MultiEdit, NotebookEdit, Bash, Monitor) answers
 `ask` in every permission mode for a change to a Claude Code settings file: `settings*.json` in
 any `.claude` folder or in `CLAUDE_CONFIG_DIR`, and the managed settings, in any case. Like
@@ -418,7 +433,10 @@ command `cd`s into one, or it writes and names one; a thread's worktree below
 `/Library/Application Support/ClaudeCode/`) counts when the part of the command that names it (split at `;`, `&&`, `||`, `&`) may write. This
 check fails safe: a stage counts as writing unless its first word is known not to write, which
 means a reader, `echo`, `mkdir`, a loop or block keyword, or git `status`/`add`/`commit`/`push`/…
-(`perl -e`, `ruby -e` and a `case` clause count as writing).
+(`perl -e`, `ruby -e` and a `case` clause count as writing). A `$(...)` is judged as a command of its own and
+stands as one word where it was: `ls .claude; n=$(git -C $w status | wc -l)` reads, while a body that may
+write, a `$(...)` inside a part that may write (`cp x $(echo .claude/)`), `$((...))`, backticks and a
+redirection still make the whole command count.
 The first word is the one found after `(`, `{`, `then`, `do`, wrappers such as `sudo`, `nice`,
 `timeout` and `xargs`, and assignments. The string run by `bash|sh|zsh -c` and `eval` is judged in
 turn. So `cp -r x .claude/`, `bash -c 'cp x .claude/'`, `( cp -r x .claude/ )`, `node x.js --out
