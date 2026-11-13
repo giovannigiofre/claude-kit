@@ -38,6 +38,12 @@ against the checklist in step 7 in a few lines before writing code.
    counts. An LLM may propose the grouping.
 3. Rank modes by frequency x severity. Fix obvious bugs (a missing instruction, a broken tool)
    directly; write evals only for modes that need ongoing measurement.
+4. For each mode, name the one move it calls for: data or labels (the expected answer or the
+   source is wrong), retrieval or features (the model never saw what it needed), a threshold
+   (a score or confidence cut-off is set wrong), or a fallback (the case should be refused or
+   handed off). A mode with no move named is not yet understood. Write the next iteration as
+   an experiment that could fail: the change, the mode it targets, the score expected to move
+   and by how much; a result short of that is reported as a miss, not reinterpreted.
 
 Show the user the taxonomy table and ask them to confirm or rename modes before step 3.
 
@@ -59,6 +65,9 @@ Show the user the taxonomy table and ask them to confirm or rename modes before 
   context). An end-to-end score alone can't tell which layer failed.
 - Non-determinism: run k trials per case for anything user-facing and report **pass^k** (all k
   pass) next to pass@1. A consumer advisor needs consistency, not best-of-k.
+- Release-critical cases (money, safety, a statutory outcome) gate on pass^k: a case passes
+  only when every one of its k runs passes. An average of 0.9 over five runs means one user in
+  ten gets the wrong answer.
 
 ## 4. Judges you can trust
 
@@ -70,6 +79,13 @@ Show the user the taxonomy table and ask them to confirm or rename modes before 
   train (few-shot examples) / dev (tune the judge prompt) / test (report once). Report TPR and
   TNR on test; a judge below ~0.85 on either is not a gate. Re-check after a judge-model change.
 - Judge model: capable and different from the generator where possible; pin its id.
+
+**Grader self-check, before any paid run.** Every grader, code check or judge, must score the
+reference solution as pass, and must score as fail the untouched starting state (the empty
+workspace, the unchanged input), the naive attempt (the obvious shortcut), and every decoy (an
+answer that looks right but is not). Run it on these fixed inputs, which costs nothing for a
+code check and a handful of calls for a judge. A grader that passes the starting state or a
+decoy measures nothing, and every paid run scored by it is wasted.
 
 ## 5. Gate and record
 
@@ -88,6 +104,8 @@ When the suite is trusted, say in one line which of these comes next and read it
   Asked to optimize a prompt with no trusted suite, build the suite first (steps 0-5): a prompt
   rewritten without a measure is not an improvement anyone can show.
 - **Choose or switch the model for a role:** [model-select.md](model-select.md).
+- **Test whether an instruction or a skill helps** (with and without it, a placebo arm, a
+  competing prompt): the last section of [prompt-optimize.md](prompt-optimize.md).
 
 ## 7. Checklist (report gaps against it)
 
@@ -96,7 +114,8 @@ When the suite is trusted, say in one line which of these comes next and read it
 - [ ] code checks for every objective mode
 - [ ] one binary judge per subjective mode, calibrated (TPR/TNR on a held-out label set)
 - [ ] retrieval and generation scored separately (if RAG)
-- [ ] pass^k on user-facing behaviour
+- [ ] pass^k on user-facing behaviour; all k runs pass on release-critical cases
+- [ ] every grader passes the reference and fails the start state, naive attempt and decoys
 - [ ] CI gate (deterministic) + budgeted live run
 - [ ] versioned, reproducible run records
 
