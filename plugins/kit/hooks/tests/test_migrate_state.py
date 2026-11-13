@@ -430,6 +430,51 @@ def main():
         _, listed = run(repo, "status")
         check(code == 0 and "to move:" not in listed, f"nothing left to move, and status agrees: {code} {out} {listed}")
 
+    # .claude/agent-memory is a symlink to a folder several checkouts share: lead and the rest
+    # move, the shared folder keeps kit-verifier, the link is said once over three starts, and
+    # gets no line of its own; the owner ignores the link (as before any move): git stays clean
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = project(tmp)
+        shared = Path(tmp) / "shared-memory"
+        os.rename(repo / ".claude/agent-memory", shared)
+        (repo / ".claude/agent-memory").symlink_to(shared)
+        with (repo / ".git/info/exclude").open("a") as f:
+            f.write("/.claude/agent-memory\n")
+        check(sh(repo, "status", "--porcelain") == "", "clean before")
+        starts = [migrate_state.auto(repo) for _ in range(3)]
+        check(any("moved this project's kit state" in l and "lead" in l and "kit-verifier" not in l
+                  for l in starts[0]), f"lead moved, not the shared memory: {starts[0]}")
+        check(any("kit-verifier was not moved" in l and "agent-memory is a symlink" in l for l in starts[0]),
+              f"the link said: {starts[0]}")
+        check(starts[1:] == [[], []], f"said once over three starts: {starts}")
+        check((shared / "kit-verifier/MEMORY.md").read_text() == "verifier notes\n"
+              and (shared / "other/MEMORY.md").exists(), f"the shared folder keeps it: {list(shared.iterdir())}")
+        check((repo / ".kit/lead/board.md").exists() and not (repo / ".kit/agent-memory").exists(), "only lead's side moved")
+        lines = exclude_lines(repo)
+        check(not any("agent-memory" in l for l in lines if l not in EXCLUDE + ["/.claude/agent-memory"]),
+              f"no line of the link's own: {lines}")
+        check(sh(repo, "status", "--porcelain") == "", f"git clean: {sh(repo, 'status', '--porcelain')!r}")
+        code, out = run(repo, "migrate")
+        check(code == 0 and "agent-memory is a symlink" in out, f"migrate says why it stays: {code} {out}")
+        code, out = run(repo, "undo")
+        check(code == 0 and (shared / "kit-verifier/MEMORY.md").exists(), f"undo leaves the shared folder: {out}")
+
+    # .claude itself is a symlink: nothing moves, nothing is written through it, said once
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = project(tmp)
+        shared = Path(tmp) / "shared-claude"
+        os.rename(repo / ".claude", shared)
+        (repo / ".claude").symlink_to(shared)
+        before = sorted(str(p.relative_to(shared)) for p in shared.rglob("*"))
+        starts = [migrate_state.auto(repo) for _ in range(3)]
+        check(not any("moved this project" in l for l in starts[0])
+              and any("/.claude is a symlink" in l for l in starts[0]), f"said why: {starts[0]}")
+        check(starts[1:] == [[], []], f"said once: {starts}")
+        check(not (repo / ".kit").exists() and sorted(str(p.relative_to(shared)) for p in shared.rglob("*")) == before,
+              "nothing moved or written")
+        code, out = run(repo, "migrate")
+        check(code == 0 and "nothing to move" in out, f"migrate: {out}")
+
     # when the exclude line cannot be added, an entry still to move is a failure: migrate does
     # not say "nothing to move" or exit 0, status lists it, and a session start says it once
     with tempfile.TemporaryDirectory() as tmp:
