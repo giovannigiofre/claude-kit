@@ -247,9 +247,11 @@ trusted, whatever it commits.
   built-in entries stay current; a list without it is left that way, and a non-list
   `environment` is left alone with a one-line warning.
 - Writes go through the kit's one settings writer, `kitlib.update_settings`. It holds
-  `kit-settings.lock` beside the file it writes (the config dir for the account's settings.json,
-  the project's `.claude/` for settings.local.json), which every kit write to that folder shares,
-  waiting at most 2 seconds (a busy lock skips the sync at session start with one line, and
+  a lock per file written, in the kit's temp state folder (the system temp dir's `claude-kit/`,
+  named by a hash of the file's resolved path), which every kit write to that file shares, so
+  nothing is written into the project or the config dir to lock and a symlinked settings file
+  leaves nothing in its target's folder (a `kit-settings.lock` an earlier version left beside a
+  file is removed at the next write of it), waiting at most 2 seconds (a busy lock skips the sync at session start with one line, and
   `--set`/`--remove` store the block, exit 1 and leave it for the next session start). The owner's
   commands that write settings (`items.py away on|off`, `sandbox on`, `unattended`,
   `machine_setup.py --apply|--decline`) end a busy lock, or a folder that cannot be written such as

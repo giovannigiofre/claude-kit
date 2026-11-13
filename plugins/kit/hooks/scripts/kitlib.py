@@ -747,13 +747,14 @@ def write_json_atomic(path, value, backup=None):
 
 # The one writer for Claude Code settings files (settings.json, settings.local.json) and the personal
 # kit.json. Every kit write takes a lock, re-reads the file under it and merges into what is on disk
-# at that moment, so two kit writers never lose each other's change. The lock file sits beside the
-# file being written (the config dir for the account's settings, the project's .claude/ for
-# settings.local.json), so a read-only home folder does not stop a write elsewhere. Within one
+# at that moment, so two kit writers never lose each other's change. The lock files live in the
+# kit's temp state folder (the system temp dir's claude-kit/), one per file written, named by a hash
+# of its resolved path: nothing is written into the project or the config dir to lock, so a checkout
+# stays clean and a symlinked settings file leaves nothing in its target's folder. Within one
 # process each lock is reentrant, so a writer may call another (away_on writes the marker under the
-# same lock). Claude Code does not take this lock, so the file's size and mtime are compared again
+# settings.json lock). Claude Code does not take this lock, so the file's size and mtime are compared again
 # before the replace, and a change made meanwhile is merged once more.
-SETTINGS_LOCK = "kit-settings.lock"
+SETTINGS_LOCK = "kit-settings.lock"  # the name earlier versions left beside a settings file
 SETTINGS_LOCK_WAIT = 2.0  # seconds; a stuck holder must not stall a session start
 SETTINGS_RETRIES = 5
 _settings_held = {}  # lock file -> [depth, open file]
@@ -767,19 +768,23 @@ class SettingsBusy(OSError):
         self.lock = path
 
 
-def settings_lock_file(where=None):
-    """The lock for files in folder `where` (default: the config dir). The folder is resolved, so one
-    folder reached by two spellings is one lock (a second flock on it in one process would wait)."""
-    return Path(where or config_dir()).resolve() / SETTINGS_LOCK
+def settings_lock_file(target=None):
+    """The lock for the file `target` (default: the account's settings.json), in the kit's temp state
+    folder. The target is resolved first, so one file reached by two spellings or through a symlink
+    is one lock (a second flock on it in one process would wait)."""
+    import hashlib
+    key = str(Path(target or user_settings()).resolve())
+    name = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+    return Path(tempfile.gettempdir()) / "claude-kit" / f"settings-{name}.lock"
 
 
 class settings_lock:
-    """`with kitlib.settings_lock(folder):` holds the lock for the files in `folder` (default: the
-    config dir); nested uses of one lock in one process share it. Raises SettingsBusy after
-    SETTINGS_LOCK_WAIT, or OSError when the folder cannot be created."""
+    """`with kitlib.settings_lock(file):` holds the lock for `file` (default: the account's
+    settings.json); nested uses of one lock in one process share it. Raises SettingsBusy after
+    SETTINGS_LOCK_WAIT, or OSError when the temp state folder cannot be created."""
 
-    def __init__(self, where=None):
-        self.path = settings_lock_file(where)
+    def __init__(self, target=None):
+        self.path = settings_lock_file(target)
 
     def __enter__(self):
         held = _settings_held.get(self.path)
@@ -821,6 +826,16 @@ def write_failed(exc, what):
     return f"{what} was not changed: {where} cannot be written ({exc.strerror or exc}). Make it writable, then try again."
 
 
+def drop_old_lock(path):
+    """Remove the kit-settings.lock an earlier version left beside `path` (and beside its target)."""
+    path = Path(path)
+    for folder in {path.parent, path.resolve().parent}:
+        try:
+            (folder / SETTINGS_LOCK).unlink(missing_ok=True)
+        except OSError:
+            pass  # a folder that is not ours to tidy, or a lock that is a folder: leave it
+
+
 def _signature(path):
     try:
         st = os.stat(path)
@@ -834,10 +849,10 @@ def update_settings(path, change, backup=None):
     read the file as it is now, call `change(settings)` (edit the dict in place; return False when
     there is nothing to write), copy the old file to `backup` beside `path`, then replace the target
     in one step, keeping its mode bits. Returns `written`, `same`, `broken` (not a JSON object; the
-    file is left alone) or `busy` (it kept changing). Raises SettingsBusy when the lock beside the
-    file is held, and OSError when the folder cannot be written."""
+    file is left alone) or `busy` (it kept changing). Raises SettingsBusy when the file's lock is
+    held, and OSError when the folder cannot be written."""
     path = Path(path)
-    with settings_lock(path.resolve().parent):
+    with settings_lock(path):
         for _ in range(SETTINGS_RETRIES):
             target = path.resolve()
             before = _signature(target)
@@ -849,6 +864,7 @@ def update_settings(path, change, backup=None):
             if _signature(path.resolve()) != before:
                 continue  # Claude Code or the owner wrote it meanwhile: merge again from theirs
             write_json_atomic(path, settings, backup=backup)
+            drop_old_lock(path)
             return "written"
     return "busy"
 

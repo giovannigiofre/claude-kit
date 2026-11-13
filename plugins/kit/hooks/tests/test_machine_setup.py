@@ -168,24 +168,32 @@ def main():
     # a busy settings lock, or a home folder where ~/.claude cannot be made: one line, exit 1, no traceback
     busy = Path(tempfile.mkdtemp())
     (busy / ".claude").mkdir()
-    holder = subprocess.Popen([sys.executable, "-c", "import fcntl, sys, time\n"
-                               "f = open(sys.argv[1], 'w'); fcntl.flock(f, fcntl.LOCK_EX)\n"
-                               "print('held', flush=True); time.sleep(10)", str(busy / ".claude" / "kit-settings.lock")],
-                              stdout=subprocess.PIPE, text=True)
-    holder.stdout.readline()
+    # the locks of settings.json (--apply) and kit.json (--decline), in the kit's temp state folder
+    import kitlib
+    holders = []
+    for target in (busy / ".claude" / "settings.json", busy / ".claude" / "kit.json"):
+        lock = kitlib.settings_lock_file(target)
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        holders.append(subprocess.Popen([sys.executable, "-c", "import fcntl, sys, time\n"
+                                         "f = open(sys.argv[1], 'w'); fcntl.flock(f, fcntl.LOCK_EX)\n"
+                                         "print('held', flush=True); time.sleep(10)", str(lock)],
+                                        stdout=subprocess.PIPE, text=True))
+        holders[-1].stdout.readline()
     try:
         for flag in ("--apply", "--decline"):
             code, out = run(busy, flag)
             assert code == 1 and len(out.strip().splitlines()) == 1 and "Try again" in out, (flag, out)
     finally:
-        holder.kill()
-        holder.wait()
+        for holder in holders:
+            holder.kill()
+            holder.wait()
+    assert not list((busy / ".claude").glob("*.lock")), "no lock is left beside the settings"
     assert not (busy / ".claude" / "settings.json").exists() and not (busy / ".claude" / "kit.json").exists()
     ro = Path(tempfile.mkdtemp()) / "account"
     code, out = run(Path("/proc/self"), "--apply", config=ro)
     assert code == 1 and "Traceback" not in out and "kit.json was not changed" in out and "are applied" in out, out
     assert machine_setup.missing(json.loads((ro / "settings.json").read_text())) == [], \
-        "the account's settings are written beside their own lock"
+        "the account's settings are written; their lock is in the temp folder, not the home"
     for flag in ("--apply", "--decline"):
         code, out = run(Path("/proc/self"), flag)
         assert code == 1 and len(out.strip().splitlines()) == 1 and "cannot be written" in out, (flag, out)
