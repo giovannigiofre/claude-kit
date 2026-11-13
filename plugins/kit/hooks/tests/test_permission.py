@@ -44,6 +44,8 @@ def main():
             (f'python3 "{SCRIPTS / "items.py"}" list --status queued', "allow"),
             (f"python3 {SCRIPTS / 'items.py'} new \"Login page\" --brief - --from lead", "allow"),
             (f"python3 {SCRIPTS / 'proposals.py'} take readme-install", "allow"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} migrate --root .", "allow"),  # the move out of .claude
+            (f"python3 {Path(tmp) / 'migrate_state.py'} migrate", "prompt"),
             (f"python3 {Path(tmp) / 'items.py'} list", "prompt"),  # a script of that name elsewhere is not the kit's
             (f"python3 {SCRIPTS / 'machine_setup.py'} --apply", "prompt"), ("rm -rf /", "prompt"),
         ]

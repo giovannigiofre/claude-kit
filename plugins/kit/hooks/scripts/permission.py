@@ -5,9 +5,10 @@ kit.json `check` and `verify` are commands the user wrote (personal or committed
 already run them unasked; a prompt before Claude runs one by hand is a click for nothing. The
 same for the kit's own scripts that read, record or tidy (gate.py, lessons.py, compact_logs.py)
 and the coordinator's board tools (items.py, proposals.py), which write only under the
-kit's lead/ folder (.kit/lead/, or .claude/lead/ in a project not moved yet). Only an exact `check` or `verify`, or one of those scripts by its real path, is
-allowed here; anything else stays with the permission system (and the guard has already had
-its say). A command that changes a Claude Code settings file is never allowed here, whatever it
+kit's lead/ folder (.kit/lead/, or .claude/lead/ in a project not moved yet). migrate_state.py
+moves that state folder itself and refuses while a thread is at work. Only an exact `check` or
+`verify`, or one of those scripts by its real path, is allowed here; anything else stays with
+the permission system (and the guard has already had its say). A command that changes a Claude Code settings file is never allowed here, whatever it
 runs: settings_guard.py has asked the owner about it. Standard library only.
 """
 
@@ -21,7 +22,8 @@ import kitlib  # noqa: E402
 import settings_guard  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parents[2]
-SCRIPTS = {"gate.py", "lessons.py", "compact_logs.py", "items.py", "proposals.py"}
+SCRIPTS = {"gate.py", "lessons.py", "compact_logs.py", "items.py", "proposals.py",
+           "migrate_state.py"}
 PYTHON = {"python", "python3"}
 
 
