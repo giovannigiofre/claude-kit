@@ -49,6 +49,9 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    opens a quoted path) outside <main checkout>/.claude/agent-memory/kit-verifier;
                    quoted text and here-document bodies are data, not writes; checked in every
                    repo, kit.json or not, guard off too, since the verifier is the kit's
+  retry            the same push, rebase or PR merge, as the same command text in the same folder at
+                   the same commit, a fourth time within 30 minutes: it is refused and the thread
+                   hands the step back; guard.retries = false turns this rule off
   project          kit.json guard.denyCommands / guard.askCommands: the project's own rules,
                    each {"pattern": "<regex over the command>", "reason": "..."}; /kit:learn
                    writes one when a lesson deserves a check instead of a sentence
@@ -1177,6 +1180,40 @@ def check_wait(command, tool_input, opts=None):
     return None
 
 
+RETRY_STEPS = (("git", "push"), ("git", "rebase"), ("gh", "pr", "merge"))
+RETRY_MAX = 3            # attempts of the same step at the same commit before the guard stops the next
+RETRY_WINDOW_SEC = 1800
+
+
+def check_retry(command, cwd, state, opts):
+    """A push, rebase or PR merge tried again and again at the same commit goes no differently the
+    fourth time: one thread's same `git push -u origin <branch>` ran five times in 18 minutes, each
+    stopped on a prompt nobody answered (2026-11-12). The same command text, in the same folder, at
+    the same HEAD, RETRY_MAX times within RETRY_WINDOW_SEC: the next is refused and the thread hands
+    the step back. A new commit, another branch or another command starts afresh. Never raises;
+    guard.retries = false turns it off."""
+    if opts.get("retries") is False:
+        return None
+    try:
+        import time
+        steps = [seg["argv"] for seg in segments(command) if seg.get("argv")]
+        if not any(tuple(Path(a[0]).name if i == 0 else a[i] for i in range(len(step))) == step
+                   for a in steps for step in RETRY_STEPS if len(a) >= len(step)):
+            return None
+        head = git(cwd, "rev-parse", "HEAD")
+        key = hashlib.sha1(f"{cwd}\0{head}\0{' '.join(command.split())}".encode()).hexdigest()[:16]
+        now = time.time()
+        seen = {k: [t for t in v if now - t < RETRY_WINDOW_SEC] for k, v in kitlib.load_state(state, "retries").items()}
+        tries = seen.get(key, [])
+        if len(tries) >= RETRY_MAX:
+            return ("deny", "retry", f"this exact command already ran {len(tries)} times at this commit")
+        seen[key] = tries + [now]
+        kitlib.save_state(state, "retries", {k: v for k, v in seen.items() if v})
+    except Exception:
+        return None
+    return None
+
+
 def check_agents(data, opts):
     ask, deny = opts.get("agentsAsk"), opts.get("agentsDeny")
     if not isinstance(ask, int) and not isinstance(deny, int):
@@ -1362,6 +1399,8 @@ def main():
             found = found or check_bash(str(tool_input.get("command") or ""), cwd, root, opts)
         except Exception as error:  # a crash would let the command run unchecked
             found = ("ask", "guard", f"the guard could not judge this command ({type(error).__name__})")
+        if not found and not monitor:
+            found = check_retry(str(tool_input.get("command") or ""), cwd, kitlib.state_key(data), opts)
     elif tool in ("Read", "Grep", "Glob"):
         target = str(tool_input.get("file_path") or tool_input.get("path") or "")
         if target:
@@ -1384,6 +1423,11 @@ def main():
             "permissionDecisionReason": f"kit guard ({rule}): {why}"}}))
         return 0
     record_denial(cwd, rule, why, data.get("session_id") or "")
+    if rule == "retry":
+        print(f"kit guard (retry): {why}; another try will go the same way. Stop retrying: say what the last "
+              "attempt printed and hand the step back (`needs push`, `needs rebase`, `needs merge`), or change "
+              "what is wrong first. A new commit or a different command is a fresh start.", file=sys.stderr)
+        return 2
     if rule == "wait":
         print(f"kit guard (wait): {why} holds this turn with no progress and no alarm if it hangs. "
               f"Instead, {WAIT_FIX}. A short sleep ({sleep_limit(opts):g} s or less) is fine.", file=sys.stderr)

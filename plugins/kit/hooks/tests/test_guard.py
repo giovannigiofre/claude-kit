@@ -517,6 +517,39 @@ def main():
             failed += 1
             print(f"FAIL only the verifier's memory writes are checked, not {agent}'s")
 
+    # retry: the same push, rebase or merge at the same commit stops at the fourth try, per session and thread
+    home, r17 = setup()
+    push = "git push -u origin feat/x 2>&1 | tail -3"
+    tries = [verdict(home, r17, push) for _ in range(4)]
+    if tries != ["allow", "allow", "allow", "block"]:
+        failed += 1
+        print(f"FAIL the fourth identical push at the same commit is refused: {tries}")
+    code, err = bash(home, r17, push)
+    if code != 2 or "kit guard (retry)" not in err or "needs push" not in err:
+        failed += 1
+        print(f"FAIL the refusal says to hand the step back: {code} {err}")
+    for other, why in (("git push -u origin feat/x", "a different command text"), ("git status", "another command"),
+                       ("git rebase origin/main", "another step")):
+        if verdict(home, r17, other) != "allow":
+            failed += 1
+            print(f"FAIL {why} is a fresh start: {other}")
+    if call(home, r17, "Bash", {"command": push}, session="s2")[0] == 2:
+        failed += 1
+        print("FAIL another session has its own count")
+    subprocess.run(["git", "-C", str(r17), "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q",
+                    "--allow-empty", "-m", "next"], check=True)
+    if verdict(home, r17, push) != "allow":
+        failed += 1
+        print("FAIL a new commit is a fresh start")
+    reads = [verdict(home, r17, "git log --oneline -1") for _ in range(6)]
+    if set(reads) != {"allow"}:
+        failed += 1
+        print(f"FAIL only push, rebase and PR merge are counted: {reads}")
+    home, r18 = setup(user_kit={"guard": {"retries": False}})
+    if "block" in [verdict(home, r18, push) for _ in range(5)]:
+        failed += 1
+        print("FAIL guard.retries false turns the rule off")
+
     print("guard: all good" if not failed else f"guard: {failed} failures")
     return 1 if failed else 0
 

@@ -32,7 +32,7 @@ KNOWN_KEYS = {
          "watchdog", "llm", "learn", "author", "lead"),
     "lead": ("board", "notes", "read", "backlog", "ship", "merge", "parallel", "budget", "loops"),
     "guard": ("protectedBranches", "agentsAsk", "agentsDeny", "allowCommands", "denyCommands", "askCommands",
-              "attribution", "waits", "sleepMaxSec"),
+              "attribution", "waits", "sleepMaxSec", "retries"),
     "watchdog": ("silentMin", "bashDeadlineMin", "permissionMin"),
     "learn": ("model",),
 }
