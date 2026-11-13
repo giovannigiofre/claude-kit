@@ -693,7 +693,7 @@ makes it the kit's gate for the kit.
 The self-checks one by one (no tokens):
 
 ```bash
-python3 tests/test_budget.py
+python3 tests/test_budget.py                 # text budgets, calm words, hooks.json script paths, no personal paths or hidden Unicode
 python3 plugins/kit/hooks/tests/test_guard.py
 python3 plugins/kit/hooks/tests/test_gate.py
 python3 plugins/kit/hooks/tests/test_stop_check.py
