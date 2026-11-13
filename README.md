@@ -50,10 +50,10 @@ the kit sends one notification (desktop, or phone with Remote Control).
 
 **The status line.** `$1.20 · needs you 1: a2-region · ready 1: login-page ·
 working 2: chart, cleanup · 1 waiting on a prompt · queued 2`, read again every 15 seconds (it names the
-board's items; `waiting on a prompt`: a thread stopped on a question or a permission; `unattended` appears after the safety profile while that is on). When the board gains a ready item or a question, the coordinator sends one
-PushNotification (desktop, or phone with Remote Control). Safety per project (`/kit-safety`): **Host** or
-**Sandbox**, plus `unattended on` for an evening nobody watches (a permission prompt becomes a
-denial and the thread goes on).
+board's items; `waiting on a prompt`: a thread stopped on a question or a permission; `sandbox` and `away` lead the line while they are on). When the board gains a ready item or a question, the coordinator sends one
+PushNotification (desktop, or phone with Remote Control). Safety in plain words: "I'm off to bed" and the coordinator runs `away on`
+(a permission prompt becomes a denial and the thread goes on, until your next session start);
+"use the sandbox" and it writes the kit's sandbox block for the project.
 
 ---
 
@@ -206,8 +206,8 @@ project.
   write or the GitHub MCP tools, and a commit made under an AI git identity. A project can add
   its own rules (`guard.denyCommands` / `askCommands`: a regex over the command and the reason);
   it has no deploy rule of its own. It reads shell text, so it is best effort.
-  `/kit-safety unattended on` adds Claude Code's `permissions.denyInsteadOfPrompting` for an
-  evening: a permission prompt becomes a denial and the work goes on; `off` removes it. Whether
+  Saying you are leaving makes the coordinator add Claude Code's `permissions.denyInsteadOfPrompting`
+  (`items.py away on`): a permission prompt becomes a denial and the work goes on, until your next session start. Whether
   threads may push, rebase and merge while you are away is a per-repo choice the coordinator asks
   once, at the first unattended run, and keeps in the repo's gitignored `.claude/kit.local.json`
   (`ask` until you say otherwise). For `allow`, the kit names the permission rule to add, and

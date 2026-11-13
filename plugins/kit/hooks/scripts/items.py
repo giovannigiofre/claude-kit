@@ -33,6 +33,8 @@ queued | agent - | - | from <source>`), so a handed-off or taken item is seen. S
     python3 items.py conflicts [<id> ...]
     python3 items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow]
     python3 items.py records [set "<place>: <what to update>" ...]
+    python3 items.py away on|off|status
+    python3 items.py sandbox on|off|status
 
 `status` is one snapshot of the open items read from their folders: id, kind, status, last event
 and its age, note, the agent, branch and PR the LOG or REPORT.md names, the summed `cost` lines
@@ -60,6 +62,15 @@ effective value: a saved `allow` prints as `ask`, with the file and rule to chan
 ask rule in any settings scope matches the step or no allow rule covers it (kitlib.unattended_effective).
 It then prints a PROPOSAL, the settings change per file as a JSON diff, which it never applies
 (kitlib.unattended_proposal).
+
+`away on` sets permissions.denyInsteadOfPrompting in the account's settings.json (backup first, other
+keys kept, a file that does not parse left alone), so a permission prompt becomes a denial while
+nobody is there to answer; the next interactive session start or `away off` takes it away again
+(kitlib.away_on). A value the owner set himself is left as it is.
+
+`sandbox on` writes SANDBOX into this checkout's .claude/settings.local.json beside its other keys;
+a sandbox block the owner wrote is left as it is. `sandbox off` changes nothing and prints the exact
+edit: loosening a setting is the owner's to approve (settings_guard.py asks for it), not the kit's.
 """
 
 import json
@@ -74,6 +85,55 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kitlib  # noqa: E402
 
 ITEM_LINE = re.compile(r"^\s*ITEM:\s*([a-z0-9][a-z0-9._-]*)\s*$", re.M | re.I)
+# The kit's sandbox (Claude Code's sandbox settings): the network the usual package registries and
+# GitHub need, and no read of the stores that hold credentials an agent has no use for. git's own
+# network commands run outside it, so push, fetch and pull keep the credentials they need (the
+# ssh agent, gh, .netrc), which is also why those three are not in denyRead. Inside the sandbox
+# Bash runs without a prompt (autoAllowBashIfSandboxed): the sandbox is the check.
+SANDBOX = {
+    "enabled": True,
+    "failIfUnavailable": False,
+    "allowUnsandboxedCommands": False,
+    "autoAllowBashIfSandboxed": True,
+    "excludedCommands": ["git push *", "git fetch *", "git pull *"],
+    "network": {"allowedDomains": [
+        "github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org", "*.npmjs.org",
+        "registry.yarnpkg.com", "pypi.org", "files.pythonhosted.org", "crates.io", "index.crates.io",
+        "static.crates.io", "proxy.golang.org", "sum.golang.org", "rubygems.org", "api.anthropic.com"]},
+    "filesystem": {"denyRead": ["~/.aws", "~/.docker", "~/.kube", "~/.gnupg"]},
+}
+
+
+def sandbox(here, action):
+    """(exit code, message) for `sandbox on|off|status` in the checkout at `here`."""
+    path = Path(here) / ".claude" / "settings.local.json"
+    settings, ok = kitlib.read_json(path)
+    if not ok:
+        return 1, f"{path} is not a valid JSON object; nothing was changed."
+    current = settings.get("sandbox")
+    if action == "status":
+        if current == SANDBOX:
+            return 0, f"Sandbox: on (the kit's block, in {path})."
+        if isinstance(current, dict) and current.get("enabled"):
+            return 0, f"Sandbox: on (your own block, in {path})."
+        return 0, "Sandbox: off for this checkout (the merged settings may still turn it on: /sandbox shows them)."
+    if action == "on":
+        if current == SANDBOX:
+            return 0, f"Sandbox is already on ({path})."
+        if current is not None:
+            return 0, f"{path} already has a sandbox block of yours; the kit left it as it is."
+        settings["sandbox"] = SANDBOX
+        kitlib.write_json_atomic(path, settings)
+        return 0, (f"Sandbox on: wrote the kit's block to {path}. Bash runs inside it without a prompt; "
+                   "git push, fetch and pull run outside it. Check it with /sandbox; add a host under "
+                   "sandbox.network.allowedDomains.")
+    if current is None:
+        return 0, f"Sandbox is not set in {path}; nothing to remove."
+    return 0, (f"Not changed: turning the sandbox off loosens a setting, which is yours to approve. The edit: "
+               f"remove the \"sandbox\" key from {path}, which now holds:\n"
+               + json.dumps({"sandbox": current}, indent=2))
+
+
 STATUSES = ("queued", "working", "review", "needs-you", "landing", "done", "parked", "reported", "verdict")
 
 
@@ -650,6 +710,23 @@ def main(argv=None):
                           f"a narrower rule may be what the owner wants")
                 print(p["diff"])
         return 0
+    if cmd in ("away", "sandbox"):
+        action = rest[0] if rest else "status"
+        if action not in ("on", "off", "status"):
+            print(f"items: {cmd} takes on, off or status, not {action!r}", file=sys.stderr)
+            return 2
+        if cmd == "sandbox":
+            code, message = sandbox(kitlib.project_root({"cwd": str(Path.cwd())}), action)
+        elif action == "status":
+            state, path = kitlib.away_state()
+            code, message = (1 if state == "broken" else 0), {
+                "kit": "Away: on (set by the kit; the next interactive session start turns it off).",
+                "own": f"Away: on (you set it in {path}).", "off": "Away: off.",
+                "broken": f"{path} is not a valid JSON object."}[state]
+        else:
+            code, message = (kitlib.away_on if action == "on" else kitlib.away_off)()
+        print(message)
+        return code
     if cmd == "records":
         if rest[:1] == ["set"]:
             if not rest[1:]:

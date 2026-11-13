@@ -122,15 +122,15 @@ When a thread reports:
 **Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it
 waits as `review`. `agent`: merge it yourself (`gh pr merge --squash --delete-branch`, or the
 method the repo allows) once CI is green, the review has nothing open and the risk is not high; a
-high-risk PR still waits. Not set: `user`, without asking; you open PRs on your own and merge one
-only when the user asks for it (that PR, that time), then tidy up as above.
+high-risk PR still waits. Not set: `user`, without asking; merge only the PR the user asks for, then tidy up.
 
 The user is the author of every commit and PR: threads commit under the repo's configured git
 identity (kit.json `author`), with no AI co-author lines or footers; on a branch a thread created
 for its item it may amend, rebase and force-push with `--force-with-lease`, never on the default
-branch or one it didn't create. Deploys, migrations, deleting data and anything outside the repo
-need the user's go-ahead. Your own docs or diary commits ride with the next merge, at most one an
-hour. Before an unattended run, follow [unattended.md](unattended.md) while the user is still here.
+branch or one it didn't create. Deploys, migrations, deleting data and anything outside the repo need the
+user's go-ahead. Your own docs or diary commits ride with the next merge, at most one an hour.
+When the user is leaving or going to sleep, follow [unattended.md](unattended.md) and run `I away on`
+(the next interactive start undoes it); when they ask for the sandbox, run `I sandbox on`.
 
 ## Replies
 

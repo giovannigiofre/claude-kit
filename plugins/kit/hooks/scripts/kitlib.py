@@ -577,6 +577,98 @@ def personal_mode():
     return "light" if isinstance(mode, str) and mode.strip().lower() == "light" else ""
 
 
+def write_json_atomic(path, value, backup=None):
+    """Write `value` to `path` through a temporary file in the same folder, so a reader never sees half
+    a file; with `backup`, the old file is copied to that name beside it first."""
+    import shutil
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if backup and path.exists():
+        shutil.copy2(path, path.with_name(backup))
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
+        if path.exists():
+            shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+# Away: Claude Code's permissions.denyInsteadOfPrompting (2.1.319) in the account's own settings.json.
+# A tool call that would wait on a permission prompt is denied and the turn goes on, so a run nobody
+# watches does not stall on a prompt. `items.py away on` sets it when the owner leaves; the kit
+# notes that it did (AWAY_MARKER beside settings.json) and takes it away again at the next
+# interactive session start or on `away off`. A value the owner set himself has no marker and is
+# never removed. Until 2026-11 the mod's `/kit-safety unattended` wrote it to the project's
+# settings.local.json instead, where it was easy to forget; session_start removes that one.
+AWAY_KEY = "denyInsteadOfPrompting"
+AWAY_MARKER = "kit-away.json"
+AWAY_BACKUP = "settings.json.kit-away-backup"
+
+
+def user_settings():
+    return config_dir() / "settings.json"
+
+
+def away_state():
+    """(state, path): `kit` (on, set by the kit), `own` (on, set by the owner), `off`, or `broken`
+    (settings.json is not a JSON object, or its permissions are not one)."""
+    path = user_settings()
+    settings, ok = read_json(path)
+    perms = (settings or {}).get("permissions", {})
+    if not ok or not isinstance(perms, dict):
+        return "broken", path
+    if perms.get(AWAY_KEY) is not True:
+        return "off", path
+    return ("kit" if (config_dir() / AWAY_MARKER).exists() else "own"), path
+
+
+def away_on():
+    """Turn away on; returns (exit code, message)."""
+    state, path = away_state()
+    if state == "broken":
+        return 1, f"{path} is not a valid JSON object; nothing was changed. Fix it, then run away on again."
+    if state == "own":
+        return 0, f"Away is already on: you set permissions.{AWAY_KEY} in {path} yourself; the kit leaves it."
+    if state == "kit":
+        return 0, "Away is already on; the next interactive session start turns it off."
+    settings, _ = read_json(path)
+    settings.setdefault("permissions", {})[AWAY_KEY] = True
+    write_json_atomic(path, settings, backup=AWAY_BACKUP)
+    write_json_atomic(config_dir() / AWAY_MARKER, {"settings": str(path), "since": int(time_now())})
+    return 0, (f"Away on: permissions.{AWAY_KEY} is true in {path} (backup {AWAY_BACKUP}). A tool call that "
+               "would wait on a permission prompt is denied instead and the turn goes on. The next "
+               "interactive session start, or `away off`, turns it off.")
+
+
+def away_off():
+    """Turn away off if the kit turned it on; returns (exit code, message)."""
+    state, path = away_state()
+    marker = config_dir() / AWAY_MARKER
+    if state == "broken":
+        return 1, f"{path} is not a valid JSON object; nothing was changed."
+    if state == "own":
+        return 0, (f"Away stays on: you set permissions.{AWAY_KEY} in {path} yourself, so the kit leaves it. "
+                   "To turn it off, remove that key from the file.")
+    if state == "kit":
+        settings, _ = read_json(path)
+        settings["permissions"].pop(AWAY_KEY, None)
+        if not settings["permissions"]:
+            settings.pop("permissions")
+        write_json_atomic(path, settings, backup=AWAY_BACKUP)
+    if marker.exists():
+        marker.unlink()
+    return 0, ("Away off: permission prompts ask again." if state == "kit" else "Away is off.")
+
+
+def time_now():
+    import time
+    return time.time()
+
+
 SECRET = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY"
     r"|\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}"

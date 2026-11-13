@@ -130,6 +130,18 @@ def main():
         out = run({"cwd": str(repo), "source": "startup"}, home=light)
         assert "coordinates" not in out and "kit harness active" in out, "the personal light mode is the off switch"
         assert "coordinates" not in run({"cwd": str(repo), "source": "compact"}, home=light)
+
+        # the old /kit-safety unattended left denyInsteadOfPrompting in settings.local.json: removed, said once
+        local = repo / ".claude" / "settings.local.json"
+        local.write_text(json.dumps({"permissions": {"denyInsteadOfPrompting": True, "allow": ["Bash(make)"]}, "model": "opus"}))
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert "removed permissions.denyInsteadOfPrompting" in out, out
+        assert json.loads(local.read_text()) == {"permissions": {"allow": ["Bash(make)"]}, "model": "opus"}
+        assert "removed permissions" not in run({"cwd": str(repo), "source": "startup"}), "said once"
+        local.write_text(json.dumps({"permissions": {"denyInsteadOfPrompting": False}}))
+        run({"cwd": str(repo), "source": "startup"})
+        assert json.loads(local.read_text()) == {}, "a false is dropped too, and an emptied permissions goes"
+        local.unlink()
         # a typo is named with the closest known key, at the top level and inside a section
         (repo / ".claude" / "kit.json").write_text(json.dumps({"chek": "make lint", "verfy": "make test",
                                                                "lead": {"baord": "docs/b.md", "notes": "n"},

@@ -226,6 +226,37 @@ def offer_machine_setup():
           "AskUserQuestion (a headless run), ignore this.")
 
 
+def away_back(data):
+    """The owner is back: an interactive start (not headless, not a subagent, not a compaction) takes
+    away the denyInsteadOfPrompting the kit set when he left (kitlib.away_on)."""
+    if os.environ.get("KIT_HEADLESS") or data.get("agent_id") or data.get("source") not in ("startup", "resume"):
+        return None
+    try:
+        if kitlib.away_state()[0] != "kit":
+            return None
+        kitlib.away_off()
+    except Exception as exc:
+        return f"kit: away could not be turned off ({exc}); run `items.py away off`."
+    return "kit: away is off again (it was on while the user was away): permission prompts ask again."
+
+
+def old_unattended(root):
+    """The mod's `/kit-safety unattended on` (until 2026-11) left denyInsteadOfPrompting in the
+    project's settings.local.json, where it outlived the evening it was for. Remove it, once."""
+    path = Path(root) / ".claude" / "settings.local.json"
+    settings, ok = kitlib.read_json(path)
+    perms = (settings or {}).get("permissions") if ok else None
+    if not isinstance(perms, dict) or kitlib.AWAY_KEY not in perms:
+        return None
+    perms.pop(kitlib.AWAY_KEY)
+    if not perms:
+        settings.pop("permissions")
+    kitlib.write_json_atomic(path, settings)
+    return (f"kit: removed permissions.{kitlib.AWAY_KEY} from {path}, left there by the old "
+            "/kit-safety unattended. Away is now `items.py away on`, which the next session start undoes. "
+            "Tell the user this once.")
+
+
 def version_key(version):
     """'1.10.0' sorts after '1.9.2'; anything unparsable sorts first."""
     try:
@@ -264,6 +295,9 @@ def main():
         print_board(root, config)
     elif not os.environ.get("KIT_HEADLESS") and os.environ.get("CLAUDE_CODE_REMOTE", "").lower() not in ("1", "true"):
         offer_machine_setup()  # a cloud container's ~/.claude does not outlive the session: nothing to set up
+    back = away_back(data)
+    if back:
+        print(back)
     if err:
         print(err)
         return 0
@@ -279,6 +313,12 @@ def main():
                 print(line)
         except Exception as exc:
             print(f"kit: moving the kit's state to .kit/ skipped: {exc}")
+        try:
+            migrated = old_unattended(root)
+        except Exception as exc:
+            migrated = f"kit: could not tidy settings.local.json: {exc}"
+        if migrated:
+            print(migrated)
     if data.get("source") != "compact":  # after a compaction print_board says it
         warning = board_warning(read_board(root, config)[1])
         if warning:

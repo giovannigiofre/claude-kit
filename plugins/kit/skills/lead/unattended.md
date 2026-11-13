@@ -1,7 +1,7 @@
 # Before an unattended run
 
 A run is unattended when the user says they are leaving (an evening, a night, "act on your
-own"), turns on `/kit-safety unattended on`, or starts an overnight. Until they are back nobody
+own"), or starts an overnight; `I away on` is the switch. Until they are back nobody
 answers a permission prompt, and a thread or you waiting on one waits for hours.
 
 1. **While the user can still answer**, do every pending merge, rebase and push: yours, and

@@ -529,7 +529,7 @@ foreground to edit `~/.claude/settings.json`, gets `ask`. It never answers `allo
 kitlib missing included, answers `ask`. Limits: it reads shell text, so it does not see a name
 built at run time (from variables, a script's own code) or a command that rewrites the whole
 tree (`git checkout -- .`, `git stash`, `git reset --hard`); and `machine_setup.py --apply`
-(autoMode) and `/kit-safety` write settings without a tool call naming the file.
+(autoMode) and `items.py away on` / `sandbox on` write settings without a tool call naming the file.
 
 ## Lessons
 
@@ -702,19 +702,30 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
   (`working` and `landing`; without a board, the engine's `N running`), `queued 3`. It shows two
   ids and then `+n`, re-reads the board every 15 seconds (a Markdown table, a capitalised status, a
   dropped cell or a `;` inside a question read the same), and adds `N waiting on a prompt` for
-  threads stopped on a question or a permission (the engine's agent list). The coordinator sends
+  threads stopped on a question or a permission (the engine's agent list). It starts with `sandbox`
+  and `away` while those are on (the merged settings), then the session's cost. The coordinator sends
   one PushNotification when an item becomes ready or needs you and when an unattended run ends
   (it reaches the phone over Remote Control); the mod sends none of its own for board changes.
-- **Safety**: `/kit-safety host|sandbox`. Sandbox writes the kit's block into
-  `.claude/settings.local.json`; check it with `/sandbox`, add hosts under
-  `sandbox.network.allowedDomains`. Where the sandbox can't start, commands run unsandboxed with
-  a warning rather than all failing. `/kit-safety unattended on|off` (Claude Code 2.1.319) writes
-  `permissions.denyInsteadOfPrompting` into the same file: a tool call that would wait on a
-  permission prompt is denied and the turn goes on, in this session and its threads. For an
-  evening nobody will watch; off by default, since a denied action lowers a thread's chances
-  silently; the status line shows `unattended` while it is on, so a forgotten switch is visible
-  the next morning. `permissions.blockWritesOutsideWorkingDirectories` (2.1.314) is not for a kit
-  project: it refuses a thread's edits in another repo and removes the worktree tools.
+- **Safety**, in plain words to the coordinator, which runs `items.py`:
+  - "I'm going to sleep" (or leaving for the evening): `items.py away on` sets Claude Code's
+    `permissions.denyInsteadOfPrompting` (2.1.319) in the account's own `settings.json` (backup
+    `settings.json.kit-away-backup`, other keys kept, a file that does not parse left alone): a
+    tool call that would wait on a permission prompt is denied and the turn goes on. The kit notes
+    that it set it (`kit-away.json` beside settings.json) and takes it away at the next interactive
+    session start (not a headless run, not a compaction) or on `away off`; a value you set yourself
+    is never removed. The status line shows `away` while it is on. Until 2026-11 the mod's
+    `/kit-safety unattended` wrote it into the project's `settings.local.json`; session start
+    removes it from there once and says so.
+  - "Use the sandbox": `items.py sandbox on` writes the kit's block into
+    `.claude/settings.local.json` (a block of your own is left alone): the registries' and GitHub's
+    hosts, no read of `~/.aws`, `~/.docker`, `~/.kube`, `~/.gnupg`, Bash without a prompt inside it
+    (`autoAllowBashIfSandboxed`), and `git push`, `fetch` and `pull` outside it, so they keep their
+    credentials. Check it with `/sandbox`; add hosts under `sandbox.network.allowedDomains`. Where
+    the sandbox can't start, commands run unsandboxed with a warning rather than all failing. The
+    status line shows `sandbox` while it is on. `sandbox off` changes nothing and prints the edit:
+    loosening a setting is yours to approve.
+  - `permissions.blockWritesOutsideWorkingDirectories` (2.1.314) is not for a kit project: it
+    refuses a thread's edits in another repo and removes the worktree tools.
 
 The mod needs Claude Code with mods (2.1.287+). Without it, the skills, hooks and the routing
 line still work; only the status line, the watchdog and the interim-notice drop are missing.
