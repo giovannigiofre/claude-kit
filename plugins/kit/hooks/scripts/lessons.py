@@ -20,13 +20,15 @@ MAX_TEXT characters.
 
 Delivery (SessionStart for the main session, SubagentStart for kit:implementer and kit:verifier)
 picks active lessons for that agent, recently seen first, then most repeated and newest, within
-the caller's budget.
+the caller's budget. A lesson scores `harmful` when the user marks it wrong (two retire it) and
+`helpful` when a thread it was delivered to ends with a verifier PASS and no repeat of it.
 
   python3 lessons.py list [--all] [DIR]        lessons of the repo at DIR (default cwd)
   python3 lessons.py render AGENT [DIR]        what AGENT (lead|implementer|verifier) would get
   python3 lessons.py add KIND KEY TEXT [DIR]   add a lesson by hand (or count a repeat of KEY)
   python3 lessons.py retire ID [DIR]           retire a lesson (kept for undo and stats)
   python3 lessons.py undo ID [DIR]             undo the last change to lesson ID
+  python3 lessons.py wrong ID [DIR]            mark a lesson wrong (harmful + 1; two retire it)
   python3 lessons.py import [DIR]              import verifier and feedback memories now
   python3 lessons.py stats [DIR]               counts for this repo's ledger and events
   python3 lessons.py news [DIR]                the last changes the kit made to the ledger
@@ -79,6 +81,7 @@ INDEX_LINE = re.compile(r"^- \[[^\]]*\]\(([^)\s]+\.md)\)\s*(?:—|--?|:)\s*(.*)$
 REVIEW_DAYS = 14
 IDLE_DAYS = 90
 RECENT_DAYS = 30  # seen within this many days: ranked above lessons that are only being delivered
+DELIVERIES_CAP = 500
 KIND_BY_PREFIX = {"pitfall": "pitfall", "reference": "recipe", "feedback": "preference", "project": "recipe"}
 
 
@@ -406,6 +409,8 @@ def capture(cwd, src, key, text, kind="pitfall", agents=AGENTS, ref="", once_per
                                 "once": once_per, "ref": clean_text(ref)[:120],
                                 **({"scope": clean_text(scope)[:120]} if scope else {})})
             cap_rows(events, EVENTS_CAP)
+        if src == "verdict-pass" and ref:  # the verifier's agent id: score what its thread was given
+            credit(info["slug"], ref)
         if not text:
             return None
         register(info)
@@ -585,16 +590,26 @@ def render(records, limit, header=HEADER):
     return "\n".join(parts), ids
 
 
-def deliver(cwd, agent, limit):
+def deliver(cwd, agent, limit, thread=""):
     """The text for `agent` from the ledger ("" when this repo has no active lesson for it), and
-    the shown lessons are stamped as delivered (a later repeat of one is a miss)."""
+    the shown lessons are stamped as delivered (a later repeat of one is a miss). With `thread`
+    (the subagent's agent_id) the delivery is also recorded, so the thread's verdict can score
+    the lessons it was given (`credit`)."""
     info = repo(cwd)
     if not info:
         return ""
-    text, shown = render(candidates(info, agent), limit)
+    records = candidates(info, agent)
+    text, shown = render(records, limit)
     if shown:
         mark_delivered(info["slug"], [i for i in shown if not i.startswith("M")])
         mark_delivered(MACHINE, [i for i in shown if i.startswith("M")])
+        if thread:
+            seen = {r["id"]: int(r.get("seen", 1)) for r in records if r["id"] in shown}
+            with contextlib.suppress(Busy), locked(info["slug"] + ".deliveries"):
+                path = file_of(info["slug"], ".deliveries")
+                append_row(path, {"date": today(), "ts": round(time.time(), 3), "thread": str(thread)[:80],
+                                  "agent": agent, "seen": seen})
+                cap_rows(path, DELIVERIES_CAP)
     return text
 
 
@@ -606,6 +621,38 @@ def mark_delivered(slug, ids):
             if r.get("id") in ids:
                 r.setdefault("delivered", today())
                 r["last_delivered"] = today()
+                r["deliveries"] = int(r.get("deliveries", 0)) + 1
+
+
+def credit(slug, thread):
+    """A thread that was given lessons ended with a verifier PASS: each lesson it was given whose
+    key was not seen again since (its `seen` count unchanged, here or anywhere it is counted)
+    scores one `helpful`. Each delivery scores once. A lesson repeated meanwhile scores nothing:
+    the repeat is already a miss. Returns the ids credited."""
+    path = file_of(slug, ".deliveries")
+    if not thread or not path.exists():
+        return []
+    with locked(slug + ".deliveries"):
+        rows = read_rows(path)
+        mine = [d for d in rows if d.get("thread") == thread and not d.get("scored")]
+        for d in mine:
+            d["scored"] = today()
+        if mine:
+            write_rows(path, rows)
+    given = {}
+    for d in mine:
+        given.update(d.get("seen") or {})
+    out = []
+    for ledger in (slug, MACHINE):
+        ids = {i: n for i, n in given.items() if i.startswith("M") == (ledger == MACHINE)}
+        if not ids:
+            continue
+        with change(ledger, log=False) as state:  # a score is not a change the user undoes
+            for r in state["rows"]:
+                if r.get("id") in ids and r.get("status") == "active" and int(r.get("seen", 1)) == int(ids[r["id"]]):
+                    r["helpful"] = int(r.get("helpful", 0)) + 1
+                    out.append(r["id"])
+    return sorted(out)
 
 
 def take_news(cwd, limit=5):
@@ -777,6 +824,17 @@ def live_count(slug):
 
 # ---- commands ------------------------------------------------------------------------------
 
+def wrong(slug, lesson_id):
+    """The user says a lesson is wrong: harmful + 1 (undoable). It drops any keep, so the
+    distiller retires it at two."""
+    with change(slug) as state:
+        hit = next((r for r in state["rows"] if r.get("id") == lesson_id), None)
+        if hit:
+            hit["harmful"] = int(hit.get("harmful", 0)) + 1
+            hit.pop("kept", None)
+    return int(hit["harmful"]) if hit else None
+
+
 def stats(info):
     rows = read_rows(file_of(info["slug"]))
     events = read_rows(file_of(info["slug"], ".events"))
@@ -787,9 +845,15 @@ def stats(info):
     for e in recent:
         by_src[e.get("src")] = by_src.get(e.get("src"), 0) + 1
     misses = sum(int(r.get("misses", 0)) for r in rows)
+    per = []
+    for r in rows + read_rows(file_of(MACHINE)):
+        if r.get("status") in ("active", "candidate"):
+            n, m = int(r.get("deliveries", 0)), int(r.get("misses", 0))
+            per.append({"id": r["id"], "deliveries": n, "misses": m, "miss_rate": round(m / n, 2) if n else None,
+                        "helpful": int(r.get("helpful", 0)), "harmful": int(r.get("harmful", 0))})
     return {"lessons": by_status, "events_30d": by_src, "repeat_after_delivery": misses,
             "fail_rounds_30d": by_src.get("verdict-fail", 0),
-            "pass_rounds_30d": by_src.get("verdict-pass", 0)}
+            "pass_rounds_30d": by_src.get("verdict-pass", 0), "per_lesson": per}
 
 
 def main(argv):
@@ -816,7 +880,8 @@ def main(argv):
     cmd, rest = argv[0], argv[1:]
     show_all = "--all" in rest
     rest = [a for a in rest if a != "--all"]
-    need = {"list": 0, "render": 1, "add": 3, "retire": 1, "undo": 1, "import": 0, "stats": 0, "news": 0}
+    need = {"list": 0, "render": 1, "add": 3, "retire": 1, "undo": 1, "wrong": 1, "import": 0, "stats": 0,
+            "news": 0}
     if cmd not in need or len(rest) < need[cmd]:
         print(__doc__, file=sys.stderr)
         return 2
@@ -858,6 +923,12 @@ def main(argv):
                                                    "text": f"undid the last change to {', '.join(touched)}"})
         print(f"undid the last change to {', '.join(touched)}" if touched else "nothing to undo for " + args[0])
         return 0 if touched else 1
+    elif cmd == "wrong":
+        n = wrong(MACHINE if args[0].startswith("M") else info["slug"], args[0])
+        if n is None:
+            print("no such lesson")
+            return 1
+        print(f"marked {args[0]} wrong ({n} of 2; the distiller retires it at 2) · " + UNDO.format(args[0]))
     elif cmd == "import":
         for slug, lesson_id in harvest(where):
             print(f"imported {lesson_id} into {slug}")

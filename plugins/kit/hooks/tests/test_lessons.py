@@ -486,9 +486,48 @@ def test_upkeep():
         os.environ.pop("KIT_TEMP_ROOTS", None)
 
 
+def test_scores():
+    repo = make_repo("scores", "https://example.com/acme/scores.git")
+    slug = lessons.repo(repo)["slug"]
+    good = lessons.observe(slug, "good", "pitfall", "check the empty state too", "user", agents=("verifier",),
+                           activate_at=1)
+    again = lessons.observe(slug, "again", "pitfall", "check the dark theme too", "user", agents=("verifier",),
+                            activate_at=1)
+    assert "check the empty state" in lessons.deliver(repo, "verifier", 2400, thread="v7")
+    lessons.capture(repo, "verifier-fail", "again", "check the dark theme too", ref="v7")
+
+    def passed(agent, report):
+        path = TMP / f"{agent}-scores.jsonl"
+        path.write_text(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use",
+                        "name": "SubagentHandback", "input": {"message": f"VERDICT: PASS\n\nEVIDENCE:\n- {report}\n"}}]}})
+                        + "\n")
+        hook("subagent_stop.py", {"cwd": str(repo), "agent_type": "kit:verifier", "agent_id": agent,
+                                  "agent_transcript_path": str(path), "last_assistant_message": "done"})
+    passed("v7", "gate ok")
+    by_id = {r["id"]: r for r in rows(repo)}
+    assert by_id[good]["helpful"] == 1 and by_id[again]["helpful"] == 0, \
+        "a PASS scores the lessons its thread was given, not one repeated meanwhile"
+    passed("v7", "gate ok again")
+    assert {r["id"]: r for r in rows(repo)}[good]["helpful"] == 1, "a delivery scores once"
+    per = {p["id"]: p for p in lessons.stats(lessons.repo(repo))["per_lesson"]}
+    assert per[again]["deliveries"] == 1 and per[again]["misses"] == 1 and per[again]["miss_rate"] == 1.0, per
+
+    with lessons.change(slug, log=False) as state:
+        for r in state["rows"]:
+            if r["id"] == good:
+                r["kept"] = lessons.today()  # the user had brought it back once
+    assert lessons.main(["wrong", good, str(repo)]) == 0
+    assert lessons.main(["undo", good, str(repo)]) == 0 and \
+        {r["id"]: r for r in rows(repo)}[good]["harmful"] == 0, "wrong can be undone"
+    for _ in range(2):
+        assert lessons.main(["wrong", good, str(repo)]) == 0
+    distill.distill(repo, False)
+    assert {r["id"]: r for r in rows(repo)}[good]["status"] == "retired", "wrong twice: the distiller retires it"
+
+
 def main():
     for test in (test_ledger, test_import, test_capture, test_delivery, test_fail_then_pass, test_distill,
-                 test_model_pass, test_judge, test_promotion, test_upkeep):
+                 test_model_pass, test_judge, test_promotion, test_upkeep, test_scores):
         test()
     print("lessons: all checks passed")
 

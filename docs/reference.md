@@ -468,6 +468,7 @@ config dir (`~/.claude` unless `CLAUDE_CONFIG_DIR` says otherwise):
 ~/.claude/kit-lessons/<slug>.jsonl        one lesson per line (id, kind, text, status, seen, misses, evidence)
 ~/.claude/kit-lessons/<slug>.events.jsonl raw captured events, capped
 ~/.claude/kit-lessons/<slug>.ops.jsonl    before-images of every change, for undo
+~/.claude/kit-lessons/<slug>.deliveries.jsonl  which thread was given which lessons, for scores
 ~/.claude/kit-lessons/_machine.jsonl      lessons that hold on this machine across repos
 ```
 
@@ -502,6 +503,14 @@ verifier minus its own memory, which it already reads), the main session gets ga
 lessons after the gate lines. Lessons seen in the last 30 days come first, then the most repeated
 and newest (being delivered does not count as being seen); about 600 tokens for a thread, 400 for
 the session. With an empty ledger the thread gets the memory index lines directly.
+
+**Scores**: each lesson counts its deliveries and its misses (seen again after it was delivered).
+`lessons.py wrong <id>` adds one to `harmful` and drops a keep; at 2 the distiller retires it.
+A lesson scores `helpful` when a thread it was delivered to ends with a kit:verifier PASS and the
+lesson was not seen again in between; each delivery scores once. Only a delivery that names its
+thread (`deliver(..., thread=agent_id)`) is matched to the verdict's agent id; the SubagentStart
+hook does not pass that id yet, so until it does `helpful` stays at 0.
+`lessons.py stats` lists deliveries, misses, the miss rate, helpful and harmful per lesson.
 
 **Distiller** (`distill.py`): runs after a kit:verifier PASS that follows a FAIL on the same branch (the FAIL's
 problems become active lessons), at SessionEnd once 5 new events are pending (in the background),
@@ -560,6 +569,7 @@ python3 <kit>/hooks/scripts/lessons.py render implementer|verifier|lead [DIR]
 python3 <kit>/hooks/scripts/lessons.py add pitfall KEY "one line" [DIR]
 python3 <kit>/hooks/scripts/lessons.py retire L4 [DIR]
 python3 <kit>/hooks/scripts/lessons.py undo L4 [DIR]
+python3 <kit>/hooks/scripts/lessons.py wrong L4 [DIR]
 python3 <kit>/hooks/scripts/lessons.py stats [DIR]
 python3 <kit>/hooks/scripts/lessons.py news [DIR]
 python3 <kit>/hooks/scripts/lessons.py distill [--no-model] [DIR]
