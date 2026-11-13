@@ -19,7 +19,8 @@ repo per day. Text that looks like a key or token is refused; a lesson is one li
 MAX_TEXT characters.
 
 Delivery (SessionStart for the main session, SubagentStart for kit:implementer and kit:verifier)
-picks active lessons for that agent, most repeated and newest first, within the caller's budget.
+picks active lessons for that agent, recently seen first, then most repeated and newest, within
+the caller's budget.
 
   python3 lessons.py list [--all] [DIR]        lessons of the repo at DIR (default cwd)
   python3 lessons.py render AGENT [DIR]        what AGENT (lead|implementer|verifier) would get
@@ -77,6 +78,7 @@ INTERACTIVE = ("cli", "claude-vscode", "claude-desktop", "claude-desktop-3p")  #
 INDEX_LINE = re.compile(r"^- \[[^\]]*\]\(([^)\s]+\.md)\)\s*(?:—|--?|:)\s*(.*)$")
 REVIEW_DAYS = 14
 IDLE_DAYS = 90
+RECENT_DAYS = 30  # seen within this many days: ranked above lessons that are only being delivered
 KIND_BY_PREFIX = {"pitfall": "pitfall", "reference": "recipe", "feedback": "preference", "project": "recipe"}
 
 
@@ -527,7 +529,11 @@ def import_one(target, source_id, name, desc, path, body, fallback, src):
 # ---- delivery ------------------------------------------------------------------------------
 
 def rank(record):
-    return (int(record.get("seen", 1)), record.get("last") or "", int(re.sub(r"\D", "", str(record.get("id"))) or 0))
+    """Lessons seen in the last RECENT_DAYS first, then the most repeated, then the newest. Being
+    delivered is not being seen: a lesson shown every session but never met again sinks."""
+    recent = days_between(record.get("last") or record.get("created"), today()) < RECENT_DAYS
+    return (recent, int(record.get("seen", 1)), record.get("last") or "",
+            int(re.sub(r"\D", "", str(record.get("id"))) or 0))
 
 
 def candidates(info, agent):
@@ -671,9 +677,11 @@ def prune(dry_run=True):
 
 
 def idle(slug, dry_run=True):
-    """Retire live lessons neither seen nor delivered for IDLE_DAYS (undo keeps one for good)."""
+    """Retire live lessons not seen for IDLE_DAYS (undo keeps one for good). Being delivered does
+    not count as use: a lesson shown to every session but never met again would otherwise never
+    age out, and its line would crowd out the lessons that are still being learned."""
     def stale(r):
-        used = max(str(r.get(k) or "") for k in ("last", "last_delivered", "created")) or None
+        used = max(str(r.get(k) or "") for k in ("last", "created")) or None
         return r.get("status") in ("active", "candidate") and not r.get("kept") \
             and days_between(used, today()) >= IDLE_DAYS
     hits = [r for r in read_rows(file_of(slug)) if stale(r)]

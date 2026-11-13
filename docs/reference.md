@@ -499,8 +499,9 @@ next thread.
 
 **Delivery**: kit:implementer and kit:verifier get this repo's active lessons at start (the
 verifier minus its own memory, which it already reads), the main session gets gate and guard
-lessons after the gate lines. Most repeated and newest first; about 600 tokens for a thread,
-400 for the session. With an empty ledger the thread gets the memory index lines directly.
+lessons after the gate lines. Lessons seen in the last 30 days come first, then the most repeated
+and newest (being delivered does not count as being seen); about 600 tokens for a thread, 400 for
+the session. With an empty ledger the thread gets the memory index lines directly.
 
 **Distiller** (`distill.py`): runs after a kit:verifier PASS that follows a FAIL on the same branch (the FAIL's
 problems become active lessons), at SessionEnd once 5 new events are pending (in the background),
@@ -548,7 +549,7 @@ and previews the distiller's merges, retires and promotions on a throwaway copy 
 rewords too when the model is allowed: that one call counts for the day and the review applies its
 answer; `--no-model` says rewords are skipped), then, once the user agrees, `lessons.py review`: it
 drops the ledgers of test and scratchpad repos and retires the machine lessons only they held
-(`prune`), retires lessons neither seen nor delivered for 90 days, then runs the distiller. Every
+(`prune`), retires lessons not seen for 90 days (delivered or not; a kept one stays), then runs the distiller. Every
 retire can be undone; a dropped ledger cannot. The dry run writes only metadata to `_repos.json`
 (`model_runs`, and `model_preview`, the answers the review applies), never a lesson; its judge
 verdicts are kept the same way, so the review promotes what it listed.

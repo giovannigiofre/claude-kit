@@ -459,7 +459,15 @@ def test_upkeep():
             for r in state["rows"]:
                 r["last"] = r["created"] = old
                 r["last_delivered"] = lessons.today()
-        assert not lessons.idle(lessons.repo(a)["slug"]), "a lesson still delivered is not idle"
+        idle = lessons.idle(lessons.repo(a)["slug"])
+        assert idle and all(x.startswith("would retire") for x in idle), \
+            "a lesson delivered every day but not seen for IDLE_DAYS is proposed for retiring"
+        with lessons.change(lessons.repo(a)["slug"], log=False) as state:
+            for r in state["rows"]:
+                r["kept"] = lessons.today()
+        assert not lessons.idle(lessons.repo(a)["slug"]), "a lesson the user kept is not idle"
+        assert lessons.rank({"id": "L1", "seen": 9, "last": old, "last_delivered": lessons.today()}) < \
+            lessons.rank({"id": "L2", "seen": 1, "last": lessons.today()}), "seen lately beats only delivered"
         assert lessons.review_due(a) == "", "the first session starts the clock"
         lessons.register(lessons.repo(a), reviewed_ts=time.time() - (lessons.REVIEW_DAYS + 1) * 86400)
         assert "lesson review for this repo is due" in lessons.review_due(a)
