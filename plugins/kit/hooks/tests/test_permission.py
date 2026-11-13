@@ -15,9 +15,11 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 
-def ask(repo, command):
+def ask(repo, command, agent=False):
     payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(repo), "session_id": "s",
                "hook_event_name": "PermissionRequest"}
+    if agent:
+        payload.update(agent_id="a1", agent_type="kit:implementer")
     out = subprocess.run([sys.executable, str(SCRIPTS / "permission.py")], input=json.dumps(payload),
                          capture_output=True, text=True, timeout=30)
     if not out.stdout.strip():
@@ -62,6 +64,20 @@ def main():
             if got != want:
                 failed += 1
                 print(f"FAIL {want} expected, got {got}: {command!r}")
+        # the items.py commands that change the owner's settings: unasked from the main session, never
+        # allowed here from a subagent (the guard denies them first; this holds with the guard off)
+        items = SCRIPTS / "items.py"
+        for args, main_want, thread_want in [
+            ("away on", "allow", "prompt"), ("away off", "allow", "prompt"), ("sandbox on", "allow", "prompt"),
+            ("unattended push=ask", "allow", "prompt"), ("away status", "allow", "allow"),
+            ("sandbox status", "allow", "allow"), ("unattended", "allow", "allow"), ("list", "allow", "allow"),
+        ]:
+            for agent, want in ((False, main_want), (True, thread_want)):
+                got = ask(repo, f"python3 {items} {args}", agent)
+                if got != want:
+                    failed += 1
+                    print(f"FAIL {want} expected from {'a subagent' if agent else 'the main session'}, "
+                          f"got {got}: items.py {args}")
         (repo / ".claude" / "kit.json").unlink()
         if ask(repo, "make lint") != "prompt":
             failed += 1

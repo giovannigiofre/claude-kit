@@ -88,7 +88,17 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
   and `git config core.hooksPath` (or `--unset`) leaving the repository's hooks; its current
   hooks folder and an existing folder in its work tree (`.husky`, `.githooks`) are its own. The
   refusal says to fix what the hook reports, or hand the step back with the hook's output;
-  `allowCommands` can let a specific command through. One rule holds in every repo, with or without `kit.json` and with the guard off:
+  `allowCommands` can let a specific command through. Pushes: a push to a protected branch, a
+  force push to one, deleting one and `--mirror` are refused; a push with `--force`, `-f` or a
+  `+refspec`, or with `--all`, is asked about from any caller, while `--force-with-lease` on a
+  branch that is not protected stays free. From a subagent, a push that deletes a remote branch
+  (`:branch`, `--delete`) is asked about, and merging a PR (`gh pr merge`, a `gh api` call to
+  `…/merge` or the `mergePullRequest` mutation, a GitHub MCP merge tool) is refused: the thread
+  reports `needs merge` and the coordinator merges; from the main session `gh pr merge` is left to
+  the permission system. Also from a subagent, the kit's `items.py` commands that change the
+  owner's settings (`away on|off`, `sandbox on|off`, `unattended` with any choice) are refused,
+  matched by the script's real path; `away status`, `sandbox status` and a bare `unattended` pass.
+  One rule holds in every repo, with or without `kit.json` and with the guard off:
   a `kit:verifier` subagent (that agent type only, not another plugin's verifier) may write a
   memory file (a `MEMORY.md` in any case, anything in an `agent-memory` folder) only inside
   `<main checkout>/.kit/agent-memory/kit-verifier`, so its pitfalls outlive the worktree. The
