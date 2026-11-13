@@ -61,7 +61,7 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
 - `guard`: on by default in a project with `kit.json`; `"off"` turns it off. `protectedBranches`
   defaults to main, master and the remote's default branch. `denyCommands` / `askCommands`: the
   project's own rules, `{"pattern": "<regex over the whole command>", "reason": "..."}` each
-  (a plain string is a pattern); `/kit:learn` writes one when a lesson is "never run X here". `agentsAsk` / `agentsDeny` are an
+  (a plain string is a pattern); `/kit:learn` proposes one when a lesson is "never run X here" and writes it on your yes. `agentsAsk` / `agentsDeny` are an
   optional per-session cap on subagents (ask past one, refuse past the other); the native
   `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` caps how many run at once. `allowCommands`: regexes the
   guard lets through. `attribution` (default `"block"`): blocks AI credits in commit messages, PR,
@@ -672,7 +672,7 @@ a generic rewording, promoted only when that passes the structural check too.
 **Upkeep**: from 14 days after the last review (the first session starts the clock) the session
 start adds one line, "the lesson review is due", at most once per 14 days, and the coordinator
 runs the review itself (`kit:learn` loads on its own; it asks the user only before changing a
-committed instruction file, and a skipped review comes back a period later). It runs `lessons.py review --dry-run`, which changes nothing
+committed instruction file or `.claude/kit.json`, and a skipped review comes back a period later). It runs `lessons.py review --dry-run`, which changes nothing
 and previews the distiller's merges, retires and promotions on a throwaway copy of the ledgers (its
 rewords too when the model is allowed: that one call counts for the day and the review applies its
 answer; `--no-model` says rewords are skipped), then `lessons.py review` (every change has an undo): it

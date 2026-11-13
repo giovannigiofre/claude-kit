@@ -30,7 +30,7 @@ whole interface: the coordinator picks the skill, starts the work and tells you 
 | Merging | nothing, or say so | you merge; say "merge green PRs yourself" and the coordinator saves `lead.merge: agent` in `kit.json` |
 | Finishing by hand | "ship it" | `kit:go`: PR with intent, live evidence (the gate run is recorded on the exact tree), what was fixed, risk; keeps CI green; merges if the project allows it |
 | Evening | "tonight keep doing X until Y" | `kit:overnight` starts at once, detached: a fresh session per small step, a commit only when the gate passes, 40 iterations and USD 25 unless you name other caps, the branch pushed once at the end |
-| Every two weeks or so | nothing, or "what has the kit learned?" | when the review is due the coordinator runs `kit:learn` itself: it tidies the lesson ledger, turns repeated corrections into checks or rules and prunes instructions that no longer help, asking you only before it changes an instruction file (at most 4 changes); capture and distilling run on their own, `sweep` reads transcripts for repeated corrections |
+| Every two weeks or so | nothing, or "what has the kit learned?" | when the review is due the coordinator runs `kit:learn` itself: it tidies the lesson ledger, turns repeated corrections into checks or rules and prunes instructions that no longer help, asking you only before it changes an instruction file or `.claude/kit.json` (at most 4 changes); capture and distilling run on their own, `sweep` reads transcripts for repeated corrections |
 
 Your time goes to the two ends: saying what you want, and judging the PR. The middle is the
 threads' job.
