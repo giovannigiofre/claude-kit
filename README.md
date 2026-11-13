@@ -10,23 +10,27 @@ work and follow instructions literally, so generic rules and mandated process co
 lower quality; tests, gates and hooks don't. Every piece of the kit is an assumption about what
 the model can't do alone, re-checked when a new model lands.
 
+**Quick start:** install once ([Install](#install)), run `/kit:init` once in a project, then say
+what you want, in your own words, from the terminal, a cloud session or your phone. That is the
+whole interface: the coordinator picks the skill, starts the work and tells you when a PR is ready.
+
 ---
 
 ## A day with the kit
 
-| When | Type | What happens |
+| When | You say | What happens |
 |---|---|---|
-| Once per project | `/kit:init` | writes `.claude/kit.json` (check, verify, formatters, protected paths), a `verify` skill that says how to exercise the app, a `loop.md` that tells the native `/loop` how to tend a PR (never merging), and proposes safety and permissions |
+| Once per project | `/kit:init` (the one command to type) | writes `.claude/kit.json` (check, verify, formatters, protected paths), a `verify` skill that says how to exercise the app, a `loop.md` that tells the native `/loop` how to tend a PR (never merging), and proposes permissions and, if you want it, the sandbox |
 | All day | just talk | in a project with `kit.json`, every message goes to the coordinator (`kit:lead`), which answers, starts a thread or steers one, in at most four lines; it works the same in a cloud session and over Remote Control |
 | A messy idea | just write it | the coordinator (or `kit:shape`) asks 2-3 multiple-choice rounds and writes a brief with a checkable DONE WHEN |
-| Thinking it through first | say so | Claude reads and reasons and changes nothing until you ask; `/kit:handoff` turns the conclusion into a brief and sends it to the coordinator, another open session or a new background session |
-| Finding work | `/kit:scout` | read-only explorers write deduplicated proposal cards (A mechanical, B needs judgment, C human-only) into `.kit/lead/proposals/`; `next` takes the A cards |
+| Thinking it through first | "let's think about X first" | the coordinator reads and reasons and changes nothing until you say go, then the conclusion becomes an item; `/kit:handoff` sends it to another open session or a new background session instead |
+| Finding work | "what should we work on?" | `kit:scout`: read-only explorers write deduplicated proposal cards (A mechanical, B needs judgment, C human-only) into `.kit/lead/proposals/`; `next` takes the A cards |
 | Something broke | describe it | `kit:investigate`: evidence (asks you once, with exact export steps), reproduction, hypotheses, a regression-tested fix |
 | UI or LLM work | describe it | the kit asks "Use Kit UI / Kit LLM for this?" and installs that plugin for the project on yes |
 | Merging | nothing, or say so | you merge; say "merge green PRs yourself" and the coordinator saves `lead.merge: agent` in `kit.json` |
-| Finishing by hand | `/kit:go` | PR with intent, live evidence (the gate run is recorded on the exact tree), what was fixed, risk; keeps CI green; merges if the project allows it |
+| Finishing by hand | "ship it" | `kit:go`: PR with intent, live evidence (the gate run is recorded on the exact tree), what was fixed, risk; keeps CI green; merges if the project allows it |
 | Evening | "tonight keep doing X until Y" | `kit:overnight` starts at once, detached: a fresh session per small step, a commit only when the gate passes, 40 iterations and USD 25 unless you name other caps, the branch pushed once at the end |
-| Every two weeks or so | `/kit:learn` | when the session-start line says the review is due: turns repeated corrections into checks or rules, and prunes instructions that no longer help (at most 4 changes, each approved); capture and distilling run on their own, `sweep` reads transcripts for repeated corrections |
+| Every two weeks or so | nothing, or "what has the kit learned?" | when the review is due the coordinator runs `kit:learn` itself: it tidies the lesson ledger, turns repeated corrections into checks or rules and prunes instructions that no longer help, asking you only before it changes an instruction file (at most 4 changes); capture and distilling run on their own, `sweep` reads transcripts for repeated corrections |
 
 Your time goes to the two ends: saying what you want, and judging the PR. The middle is the
 threads' job.
@@ -83,7 +87,7 @@ PushNotification (desktop, or phone with Remote Control). Safety in plain words:
    SessionStart          lists the project's gates; after a compaction, re-injects the board
                          (rows first, warns past 60 lines or 8 KB); says once when a newer kit
                          is installed than the one loaded (restart), and when the lesson review
-                         is due (at most once per 14 days; declining snoozes it)
+                         is due (at most once per 14 days; the coordinator runs it)
    SubagentStart         gives each kit:implementer and kit:verifier this repo's gate command and
                          lessons from the ledger, most repeated and newest first (about 600
                          tokens max); the hook sees only the session's repo, so it names it,
@@ -99,7 +103,8 @@ PushNotification (desktop, or phone with Remote Control). Safety in plain words:
 
 ## What's in it
 
-**Core plugin `kit`** (user scope, every project):
+**Core plugin `kit`** (user scope, every project; a skill listed without a slash loads on its own when
+what you say fits it; one listed with a slash runs only when typed):
 
 | Piece | What it does |
 |---|---|
@@ -109,14 +114,14 @@ PushNotification (desktop, or phone with Remote Control). Safety in plain words:
 | `kit:overnight` | Launches `scripts/overnight.py`: fresh `claude -p` per step, commit on a green gate, reset otherwise, notes as memory, optional caps, resumes early stops |
 | `kit:extras` | Offers `kit-ui` or `kit-llm` when a task needs one the project lacks |
 | `/kit:handoff` | A discussion's conclusion becomes a brief (an item on disk) sent to the coordinator, an open session, a new background session, or kept as a proposal card |
-| `/kit:scout` | Read-only explorers write deduplicated proposal cards; `take <id>` queues one as an item |
-| `/kit:go` | Intent → sync → test like a user → `/code-review` → `/simplify` → risk → PR → CI green |
-| `/kit:init` | Sets up a project (kit.json, verify skill, loop.md, safety, permissions) |
-| `/kit:learn` | Tidies the lesson ledger (merge, retire shipped fixes, proposals to retire or harden, undo); `promote` turns a lesson seen across repos into a kit PR; corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
-| `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
+| `kit:scout` | Read-only explorers write deduplicated proposal cards; `take <id>` queues one as an item |
+| `kit:go` | Intent → sync → test like a user → `/code-review` → `/simplify` → risk → PR → CI green |
+| `/kit:init` | Sets up a project (kit.json, verify skill, loop.md, permissions, the sandbox if wanted); typed, like `/kit:handoff` |
+| `kit:learn` | Tidies the lesson ledger (merge, retire shipped fixes, proposals to retire or harden, undo); `promote` turns a lesson seen across repos into a kit PR; corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
+| `kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
 | `kit:implementer` | A thread: one item from brief to PR in its own worktree (another repo's included); effort set per thread by the coordinator (low for a clear, small brief, medium otherwise, high for ambiguous work) |
 | `kit:verifier` | A fresh-context review against the intent at effort medium, with a per-project memory of pitfalls |
-| Hooks + mod | `protect`, `guard`, `on_edit`, `bash_edits`, `permission`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop` (files each thread's report and each verdict under its item), the lesson ledger `lessons.py`, `gate.py` (runs `check` or `verify` and records the tree it passed on: the evidence a PR body cites), `items.py` and `proposals.py` (the coordinator's items and proposal cards on disk); the mod (`kit.tsx`: modes light / loop / ask, safety, status line with threads waiting for you, a native notification when the board gains work for you) |
+| Hooks + mod | `protect`, `guard`, `on_edit`, `bash_edits`, `permission`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop` (files each thread's report and each verdict under its item), the lesson ledger `lessons.py`, `gate.py` (runs `check` or `verify` and records the tree it passed on: the evidence a PR body cites), `items.py` and `proposals.py` (the coordinator's items and proposal cards on disk); the mod (`kit.tsx`: status line with threads waiting for you, a native notification when the board gains work for you) |
 
 **Domain plugins** (project scope, offered by `kit:extras` when a task needs them):
 
@@ -168,7 +173,7 @@ estimates otherwise pick the cheap, brittle option and test only in units:
 - For a bug fix, first reproduce the bug end to end, as the user meets it, not only in a unit test.
 ```
 
-**Every new project:** `cd project && claude`, then `/kit:init`. Read `.claude/kit.json` and adjust
+**Every new project:** `cd project && claude`, then `/kit:init`, then say what you want. Read `.claude/kit.json` and adjust
 it. It is personal by default: the kit is yours, for your own work on the project, so `/kit:init`
 keeps the file out of Git in the repo's `.git/info/exclude` (not the shared `.gitignore`), and a
 worktree without one reads the main checkout's; commit it only if you choose to share it with the

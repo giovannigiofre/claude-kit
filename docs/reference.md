@@ -685,6 +685,11 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
   `/kit:lead <work>` when you want the coordinator). Until 2026-11 the mod added this line per
   prompt in a "loop" mode and had light and ask modes beside it; they were removed because the
   routing must not depend on the mod loading.
+- **Skills that load on their own**: the coordinator loads `kit:go` (a change is ready to ship, or
+  "finish it"), `kit:learn` (the review is due, or "what has the kit learned?"), `kit:intake`
+  (adopting or trying an outside tool) and `kit:scout` ("what should we work on?") from what you
+  say, so nothing needs a slash command from a phone. `/kit:init` and `/kit:handoff` run only when
+  typed. Until 2026-11 all six were typed only.
 - **Discussion and handoff**: to think a change through first, say so; nothing changes until you
   ask. `/kit:handoff [lead | session <name> | bg | save | card]` writes the brief
   (`kit:shape`'s format plus PLACES and DECISIONS), saves it as an item
