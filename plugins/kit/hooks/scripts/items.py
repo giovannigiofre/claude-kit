@@ -7,6 +7,8 @@
     .claude/lead/items/<id>/REPORT.md    the thread's final report (SubagentStop, kit:implementer)
     .claude/lead/items/<id>/VERDICT.md   the verifier's report (SubagentStop, kit:verifier)
     .claude/lead/items/<id>/LOG.md       one line per event, append-only
+    .claude/lead/items/<id>/out/         files a thread leaves for the coordinator (`put`): a
+                                         scout's outputs, which must outlive its worktree
     .claude/lead/items/done/<id>/        archived when the item is done; its board row moves
                                          to .claude/lead/archive.md (an earlier archive of the
                                          same id is kept: done/<id>-2, -3, ...)
@@ -20,6 +22,7 @@ queued | agent - | - | from <source>`), so a handed-off or taken item is seen. S
     python3 items.py new <slug> [--brief FILE|-] [--from lead|handoff|scout] [--kind ship|scout]
     python3 items.py list [--status queued|working|review|needs-you|done]
     python3 items.py log <id> <status> [note]
+    python3 items.py put <id> <file>...      copy files into the item's out/ folder (their names kept)
     python3 items.py report|verdict <id> [FILE|-]
     python3 items.py show|path <id>
     python3 items.py done <id>
@@ -134,6 +137,32 @@ def log(root, item_id, status, note=""):
     with open(p / "LOG.md", "a", encoding="utf-8") as f:
         f.write(f"- {now()} | {status} | {note.strip()}\n" if note else f"- {now()} | {status}\n")
     return True
+
+
+def put(root, item_id, sources):
+    """Copy files into the item's out/ folder and return where they went, or None without the item.
+    `.claude` is a protected path of Claude Code, so a thread's own `mkdir` or `cp` there asks the
+    owner; this script, run by its real path, does not (permission.py). Only regular files, by
+    their own name, only into out/ itself: a symlink in the way is replaced, never followed."""
+    p = find(root, item_id)
+    if not p:
+        return None
+    out = p / "out"
+    if out.is_symlink():
+        raise ValueError(f"{out} is a symlink")
+    out.mkdir(exist_ok=True)
+    placed = []
+    for src in sources:
+        src = Path(src)
+        if src.is_symlink() or not src.is_file():
+            raise ValueError(f"{src} is not a regular file")
+        dest = out / src.name
+        if dest.is_symlink() or dest.is_dir():
+            raise ValueError(f"{dest} is in the way")
+        shutil.copyfile(src, dest)
+        placed.append(dest)
+    log(root, item_id, "note", "out: " + ", ".join(d.name for d in placed))
+    return placed
 
 
 def status_of(path):
@@ -264,6 +293,9 @@ def main(argv=None):
         print(__doc__.strip())
         return 0
     root = kitlib.project_root({"cwd": str(Path.cwd())})
+    home = kitlib.main_checkout(root)
+    if home and Path(home) != Path(root) and not items_dir(root).is_dir():
+        root = Path(home)  # run from a thread's worktree: the items are the main checkout's
     cmd, rest = argv[0], argv[1:]
 
     def opt(flag, default=None):
@@ -354,6 +386,20 @@ def main(argv=None):
                   "where finished work is recorded besides the code: the tracker (issue status, labels, closing "
                   "comment, a project board), progress or status files, a changelog or diary, a published page. "
                   "Confirm the list with the user once, then save it: items.py records set \"<place>: <what>\" ...")
+        return 0
+    if cmd == "put":
+        if len(rest) < 2:
+            print("items: put needs an item id and at least one file", file=sys.stderr)
+            return 2
+        try:
+            placed = put(root, rest[0], rest[1:])
+        except (ValueError, OSError) as exc:
+            print(f"items: {exc}", file=sys.stderr)
+            return 1
+        if placed is None:
+            print(f"items: no item {rest[0]}", file=sys.stderr)
+            return 1
+        print("\n".join(str(d) for d in placed))
         return 0
     if cmd in ("log", "report", "verdict", "done", "show", "path"):
         if not rest:

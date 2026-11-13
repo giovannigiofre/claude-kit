@@ -199,6 +199,7 @@ resume from; the source of the idea is in CATALOG.md).
 python3 <kit>/hooks/scripts/items.py new "<name>" --brief - --from lead|handoff [--kind scout]  # id and folder printed
 python3 <kit>/hooks/scripts/items.py list [--status queued]
 python3 <kit>/hooks/scripts/items.py log <id> <status> [note]
+python3 <kit>/hooks/scripts/items.py put <id> <file>...   # copy files into the item's out/ folder
 python3 <kit>/hooks/scripts/items.py show <id>
 python3 <kit>/hooks/scripts/items.py done <id>
 python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow]
@@ -410,7 +411,9 @@ writes a broader read-only allowlist to project settings if you want one.
 the owner in `default` and `acceptEdits`, goes to the classifier in `auto`, and no allow rule pre-approves it
 (only `.claude/worktrees/` is exempt). The kit keeps the board and the items under `.claude/lead/`, so its own
 scripts write there (they run unasked, above) and a thread is told at start-up, when the project has items, to
-log with `items.py log` as a command on its own and never to write in the main checkout's `.claude` by hand.
+log with `items.py log` as a command on its own, to leave a file for the coordinator with `items.py put`
+(regular files, by name, into the item's `out/`; a symlink is never followed), and never to write in the main
+checkout's `.claude` by hand. Both commands find the main checkout's items when run from a thread's worktree.
 
 An `ask` rule wins over every allow rule and over auto mode, in a compound command too. So when a rule in any
 settings scope (or the guard's `askCommands`) asks before a push, a rebase or a merge as the kit runs them, the

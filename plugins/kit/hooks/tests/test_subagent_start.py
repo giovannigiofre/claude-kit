@@ -46,7 +46,7 @@ def main():
         (repo / ".claude" / "lead" / "items").mkdir(parents=True)
         both = run(tree, config).splitlines()
         assert len(both) == 2 and both[0] == gate_only and "items.py\" log <id> <status>" in both[1] \
-            and f"any write inside {repo}/.claude" in both[1] and len(both[1]) < 480, both
+            and f"any write inside {repo}/.claude" in both[1] and "put <id> <file>" in both[1] and len(both[1]) < 640, both
         (repo / ".claude" / "lead" / "items").rmdir()
         (repo / ".claude" / "lead").rmdir()
         (repo / ".claude" / "kit.json").write_text('{"check": "true", "verify": "make test"}')

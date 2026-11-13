@@ -37,7 +37,8 @@ not split a `$I` variable into words: `I(){ python3 ${CLAUDE_SKILL_DIR}/../../ho
 and `P` the same for its sibling `proposals.py`; if the variable is not expanded, they are in the
 kit plugin's `hooks/scripts/`): `BRIEF.md` (headed
 `ITEM: <id>`), `REPORT.md` and `VERDICT.md`, which the kit's hooks write when a thread or the
-verifier finishes, and `LOG.md`, one line per event. The board is the index; the folder is what
+verifier finishes, `LOG.md`, one line per event, and `out/`, the files a thread leaves you with
+`I put <id> <file>...` (ask for that in the brief when its outputs must outlive its worktree). The board is the index; the folder is what
 survives a compaction or a restart and what the user reads or edits to steer. `/kit:handoff`
 and `/kit:scout take` queue items this way; for work the user gives you directly, make the item
 first: `I new "<name>" --brief - --from lead` with the brief on stdin (`--kind scout` for finding

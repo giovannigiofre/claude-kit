@@ -144,8 +144,8 @@ def item_line(cwd):
     """How a thread records an event on its item without a prompt. Claude Code asks the owner
     before any write inside a `.claude` folder (a protected path: mkdir, a redirection, Write,
     Edit; no allow rule pre-approves it), and a thread that logged by hand with
-    `mkdir -p <main>/.claude/lead/items/<id>/out; echo "- ..." >> .../LOG.md` stopped on the
-    owner's phone (2026-11-13). The kit's own script by its real path runs unasked (permission.py)."""
+    `mkdir -p <main>/.claude/lead/items/<id>/out; echo "- ..." >> .../LOG.md`, then copied its
+    outputs there with cp, stopped on the owner's phone each time (2026-11-13). The kit's own script by its real path runs unasked (permission.py)."""
     main = enabled(cwd)
     if not main or not (Path(main) / ".claude" / "lead" / "items").is_dir():  # no items, nothing to log
         return ""
@@ -153,7 +153,9 @@ def item_line(cwd):
     return (f"kit: Claude Code asks the owner before any write inside {main}/.claude (mkdir, a redirection, "
             f"Write, Edit) and you wait until they answer: never write there yourself. Log an event on your item "
             f"with `python3 \"{script}\" log <id> <status> \"<note>\"` as a command on its own (no ; && |), "
-            f"which asks nothing. Files you produce go in your worktree or the scratchpad.")
+            f"which asks nothing; leave a file for the coordinator the same way, `... put <id> <file> ...` "
+            f"(plain paths, no $VAR), which copies it to the item's out/. Other files go in your worktree "
+            f"or the scratchpad.")
 
 
 def compose_within(text, budget):
