@@ -134,10 +134,18 @@ def gate_line(cwd):
     if not names:
         return ""
     script = Path(__file__).resolve().parent / "gate.py"
+    # named, not left to the prose: a thread that wrote proof under its worktree's .claude/ stalled
+    # on a write prompt, and the folder moves to .kit/ with the rest of the state (migrate_state.py)
+    evidence = kitlib.state_entry(main, "evidence")
+    kitlib.exclude_state(main, "evidence")
+    # a project not moved yet keeps it under .claude/, where a thread's own write asks the owner
+    where = ("where other proof goes too" if kitlib.LEGACY_STATE_DIR not in evidence.relative_to(main).parts
+             else "which only the gate writes: save other proof in your worktree or the scratchpad")
     # the hook sees the session's repo, not the brief: a thread sent to another repo must know this is not its gate
     return (f"kit: in {main} and its worktrees, run the project's gate with `python3 \"{script}\" {names[0]}` "
             f"(kit.json `{names[0]}`: `{str(config[names[0]])[:120]}`); it records the tree the gate passed on, "
-            f"as evidence for the PR. Work in another repo: these lines do not apply there.")
+            f"as evidence for the PR, in {evidence}/<branch>/, {where}. "
+            f"Work in another repo: these lines do not apply there.")
 
 
 def item_line(cwd):

@@ -1,6 +1,6 @@
 ---
 name: scout
-description: Scans the project for candidate work with read-only explorers and writes deduplicated proposal cards (class A mechanical, B needs judgment, C human-only) into .claude/lead/proposals/; "take <id>" turns a card into a coordinator item. Use with /kit:scout [area | take <id> | list | retire].
+description: Scans the project for candidate work with read-only explorers and writes deduplicated proposal cards (class A mechanical, B needs judgment, C human-only) into .kit/lead/proposals/; "take <id>" turns a card into a coordinator item. Use with /kit:scout [area | take <id> | list | retire].
 disable-model-invocation: true
 argument-hint: "[area or lens | take <id> | list | retire]"
 ---

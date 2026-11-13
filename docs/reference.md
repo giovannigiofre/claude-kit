@@ -31,7 +31,7 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
     "read": ["docs/backlog.md"],
     "backlog": "docs/backlog.md",
     "notes": "one line of project-specific advice for the coordinator (threads never see it)",
-    "board": ".claude/lead/board.md",
+    "board": ".kit/lead/board.md",
     "ship": "pr",
     "merge": "user",
     "parallel": 3,
@@ -91,7 +91,7 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
   `allowCommands` can let a specific command through. One rule holds in every repo, with or without `kit.json` and with the guard off:
   a `kit:verifier` subagent (that agent type only, not another plugin's verifier) may write a
   memory file (a `MEMORY.md` in any case, anything in an `agent-memory` folder) only inside
-  `<main checkout>/.claude/agent-memory/kit-verifier`, so its pitfalls outlive the worktree. The
+  `<main checkout>/.kit/agent-memory/kit-verifier`, so its pitfalls outlive the worktree. The
   rule reads redirections, tee, cp/mv/install/ln/rsync, dd, `sed -i`/`perl -i`/truncate and the
   code given to an interpreter; quoted text and here-document bodies are data, not writes.
 - `watchdog`: the thresholds of the stall watchdog (see [Stalls](#stalls)), in minutes; `0`
@@ -128,9 +128,30 @@ Also per project, committed: `CLAUDE.md` (the project's rules, which win over th
 that name before each commit), `.claude/loop.md` (what a bare `/loop` does for this project's
 PR: fix CI, answer reviews, sync with the base, reschedule itself while the PR is open; it never
 merges), `.claude/review-decisions.md`
-(findings you declined, so reviews don't raise them again). Gitignored: `.claude/evidence/`,
-`.claude/overnight/`, `.claude/lead/`, `.claude/kit.local.json` (the kit adds each to
-`.git/info/exclude` when it writes there and the project does not ignore it).
+(findings you declined, so reviews don't raise them again). Gitignored: `.claude/kit.local.json`
+and the kit's working state (the kit adds each to `.git/info/exclude` when it writes there and the
+project does not ignore it).
+
+### Working state: `.kit/`
+
+The kit's working state lives in `.kit/` at the root of the main checkout: `lead/` (the board,
+items, proposal cards), `evidence/` (gate records and proof), `agent-memory/kit-verifier/`, and
+`overnight/` (in the checkout the run is in). It used to live in `.claude/`, where Claude Code asks
+the owner before every write, so background threads waited on prompts nobody saw. Each entry is
+kept out of git by its own line (`/.kit/lead/`), never a blanket `/.kit/`. `kit.json`,
+`kit.local.json`, settings, skills, agents, `worktrees/`, `loop.md` and `review-decisions.md` stay
+in `.claude/`: the gate commands the kit runs unasked come from `kit.json`, so it stays behind the
+protected path.
+
+An older project moves at a session start when nothing is at work, and the session says so in one
+line (or, when an item is `working` or `landing` or an overnight run is live, why it waits). By
+hand: `python3 <kit>/hooks/scripts/migrate_state.py status|migrate|undo [--dry-run] [--force]`
+(`--force` moves anyway, for a thread that died and left `working`). It renames the entries in one
+step through `.kit.migrating/` (a run that died is finished by the next one), rewrites the exclude
+lines first, leaves `.claude/kit-state-moved.txt`, records `.kit/migration.json` for `undo`, and
+never overwrites an entry that exists in both places. An entry tracked in git is not moved: the
+`git mv` to run is printed. Until it moves, every command keeps working on the old layout.
+
 
 ### Auto mode environment, per repo
 
@@ -199,11 +220,11 @@ coordinator, its threads and the verifier (state in files you can `cat`, edit to
 resume from; the source of the idea is in CATALOG.md).
 
 ```
-.claude/lead/items/<id>/BRIEF.md     headed `ITEM: <id>`; the goal, DONE WHEN, scope; edit it to steer the next round
-.claude/lead/items/<id>/REPORT.md    the thread's final report (written by the SubagentStop hook, kit:implementer)
-.claude/lead/items/<id>/VERDICT.md   the verifier's report (SubagentStop, kit:verifier)
-.claude/lead/items/<id>/LOG.md       one line per event: queued, working, reported, verdict, review, done
-.claude/lead/items/done/<id>/        archived (a second item with the same id lands in done/<id>-2/)
+.kit/lead/items/<id>/BRIEF.md     headed `ITEM: <id>`; the goal, DONE WHEN, scope; edit it to steer the next round
+.kit/lead/items/<id>/REPORT.md    the thread's final report (written by the SubagentStop hook, kit:implementer)
+.kit/lead/items/<id>/VERDICT.md   the verifier's report (SubagentStop, kit:verifier)
+.kit/lead/items/<id>/LOG.md       one line per event: queued, working, reported, verdict, review, done
+.kit/lead/items/done/<id>/        archived (a second item with the same id lands in done/<id>-2/)
 ```
 
 ```bash
@@ -270,14 +291,14 @@ files its report under the item (`reported | done, 2 decision(s), agent <id>` in
 the verifier finishes, its verdict (`verdict | FAIL scope=local:src/x.py, reviewed <sha>, agent
 <id>`; the sha is the branch head the verifier read, so a later push makes the verdict stale).
 The hook finds the item from the main checkout even when the thread stops inside its worktree
-(the default), where `.claude/lead/` does not exist. The report filed is the one the thread
+(the default), where `.kit/lead/` does not exist. The report filed is the one the thread
 handed back with SubagentHandback; its closing line is not the report. The lead reads BRIEF.md
 again before re-briefing (you may have edited it) and VERDICT.md; a `FAIL scope=local:<paths>`
 becomes a scoped fix sent to the thread, not a new brief. `DECISION:` lines in a report are the
 thread's judgment calls, shown to you once so you can veto them. `new` also appends a `queued`
 row to the board when one exists, so the status line and the coordinator see an item that
 `/kit:handoff` or `/kit:scout take` queued from another session; the session-start line says
-how many items wait on disk. `.claude/lead/` is added to `.git/info/exclude` when the project
+how many items wait on disk. `.kit/lead/` is added to `.git/info/exclude` when the project
 does not ignore it.
 
 The same hook writes a token ledger line before the report line: `cost | in=… out=… cache_read=…
@@ -316,7 +337,7 @@ with GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR and GIT_PREFIX clear
 inside a git hook reads this repository.
 
 `hooks/scripts/proposals.py`: candidate work found by read-only explorers (`/kit:scout`), one
-card per finding in `.claude/lead/proposals/<id>.md` (frontmatter: id, fingerprint, origin,
+card per finding in `.kit/lead/proposals/<id>.md` (frontmatter: id, fingerprint, origin,
 class, confidence, created, evidence; body: Suggestion, Rationale). The fingerprint is the
 sha256 of the normalized `origin|summary|rationale`, so a re-run never duplicates a card; a
 summary that is already an item is skipped, and so is anything that looks like a secret.
@@ -370,14 +391,15 @@ python3 <kit>/hooks/scripts/gate.py check
 python3 <kit>/hooks/scripts/gate.py status [verify|check]  # does the last record cover the tree as it is now? (exit 0 / 1)
 ```
 
-The record, `.claude/evidence/<branch>/gate-<name>.json`, holds the command, exit code, duration,
+The record, `.kit/evidence/<branch>/gate-<name>.json`, holds the command, exit code, duration,
 the hash of the tree it ran on (committed and uncommitted content, ignored files left out, so a
 commit of the same content keeps the hash), whether the gate itself changed files (a formatter),
 and the last 25 lines of output: a gate that ran is a claim until something records what it ran
 on, and this is what the PR's Evidence section and the verifier cite. Nothing blocks on it.
 Threads and the verifier are told the exact command at start (SubagentStart) and `/kit:go` runs
 it in step 4. Run from a linked worktree, the record is written under the main checkout's
-`.claude/evidence/`, so it outlives the worktree. `.claude/evidence/` is added to
+`.kit/evidence/`, so it outlives the worktree; the thread's start-up line names that folder for
+its other proof too. `.kit/evidence/` is added to
 `.git/info/exclude` when the project does not ignore it. The Stop hook uses the same hash to know whether anything changed since its last
 passing check.
 
@@ -451,14 +473,14 @@ session that has not loaded it) each one still wakes the coordinator.
 
 `permission.py` (PermissionRequest, matcher Bash) allows, without a prompt, a command that is
 exactly kit.json `check` or `verify`, or the kit's own `gate.py`, `lessons.py`, `items.py`,
-`proposals.py` or `compact_logs.py` by their real path, unless the command changes a settings
+`proposals.py`, `migrate_state.py` or `compact_logs.py` by their real path, unless the command changes a settings
 file (below). Nothing else is touched: the guard has already judged the
 command, and the permission system decides the rest. `/fewer-permission-prompts` (built in)
 writes a broader read-only allowlist to project settings if you want one.
 
 `.claude` is one of Claude Code's protected paths: a write inside it (mkdir, a redirection, Write, Edit) asks
 the owner in `default` and `acceptEdits`, goes to the classifier in `auto`, and no allow rule pre-approves it
-(only `.claude/worktrees/` is exempt). The kit keeps the board and the items under `.claude/lead/`, so its own
+(only `.claude/worktrees/` is exempt). The kit's working state is in `.kit/` for that reason (above); its own
 scripts write there (they run unasked, above) and a thread is told at start-up, when the project has items, to
 log with `items.py log` as a command on its own, to leave a file for the coordinator with `items.py put`
 (regular files, by name, into the item's `out/`; a symlink is never followed), and never to write in the main
@@ -537,7 +559,7 @@ temp dir (`/tmp`, `/var/folders`, `$TMPDIR`; `KIT_TEMP_ROOTS` overrides the list
 tests and scratchpad probes teach nothing. Tests point `CLAUDE_CONFIG_DIR` at a temp dir.
 
 **Import**: at session start the kit imports, once and without touching the files, the
-kit:verifier memory index (`.claude/agent-memory/kit-verifier/MEMORY.md`) and your auto-memory
+kit:verifier memory index (`.kit/agent-memory/kit-verifier/MEMORY.md`) and your auto-memory
 `feedback_*` entries. A verifier pitfall about claude-kit itself (naming the kit's repo and one of its files) goes
 to claude-kit's ledger. Each imported lesson lists its source, so an entry is imported once; nothing is written
 inside the repo. Threads also run the import at start, so a memory written mid-session reaches the
@@ -654,13 +676,13 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
   instruction, not a block: the guard keeps protecting the irreversible things, nothing else is
   refused. `/kit:handoff [lead | session <name> | bg | save | card]` writes the brief
   (`kit:shape`'s format plus PLACES and DECISIONS), saves it as an item
-  (`.claude/lead/items/<id>/BRIEF.md`) and sends it: to this session's coordinator (queued; it
+  (`.kit/lead/items/<id>/BRIEF.md`) and sends it: to this session's coordinator (queued; it
   starts at the next message in loop mode), to another open session on this machine
   (cross-session `SendMessage`; it arrives as a message from a peer and that session confirms with
   you first; the receiving session's `crossSessionInbound` setting must accept), to a new
   background session (`claude --bg --name <id>`, then `claude attach <id>` or `claude agents`),
   or nowhere (`save`); `card` makes a proposal card instead, for an idea with no checkable done.
-- **Board** (`.claude/lead/board.md`):
+- **Board** (`.kit/lead/board.md`):
 
   ```
   SHIP: pr | MERGE: user | PARALLEL: 3 | BUDGET: none
@@ -723,7 +745,7 @@ commits it, or resets. It stops on the stop condition, a cap, a `blocked` report
 iterations in a row (no change counts as a failure). Every iteration's system prompt says nobody
 is there to answer; an iteration that reports progress without a change is resumed in the same
 session up to `--max-continuations` times (default 2). Rate limits are waited out. Run files:
-`.claude/overnight/<run>/` (`objective.md`, `notes.md`, `log.jsonl`, `state.json`,
+`.kit/overnight/<run>/` of the checkout it ran in (`objective.md`, `notes.md`, `log.jsonl`, `state.json`,
 `end-state.json`); `--resume <run dir>` continues a stopped run.
 
 ## Cloud sessions
@@ -736,7 +758,7 @@ offer is skipped where `CLAUDE_CODE_REMOTE=true`). With it, the gates, the guard
 items and the threads work as on your machine. Two things differ. The lesson ledger lives under
 `~/.claude`, which a container starts empty and loses at the end: cloud threads get no lessons
 and leave none (the ledger is per machine; a `/kit:learn promote` from your Mac is what carries a
-lesson across). And `.claude/lead/` is gitignored, so a cloud session and your Mac never see
+lesson across). And `.kit/` is kept out of git, so a cloud session and your Mac never see
 each other's board, items, evidence or proposal cards; two leads on one checkout both rewrite
 the board whole, last writer wins, while LOG appends and `done` are safe. The kit reads
 `CLAUDE_CODE_SESSION_ATTENDED=1` as "someone is at the keyboard" whatever the entrypoint, so an

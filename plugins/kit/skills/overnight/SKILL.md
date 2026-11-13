@@ -100,10 +100,11 @@ sign-in, 2.1.318) and stops before the next iteration once the sign-in ends with
 it with `claude auth login`, or use `claude setup-token` for unattended jobs. A missing or
 unreadable field changes nothing.
 
-Run files in `.claude/overnight/<run id>/` (kept out of git through `.git/info/exclude`):
+Run files in `.kit/overnight/<run id>/` of the checkout the run is in, as the runner prints it
+(kept out of git through `.git/info/exclude`):
 `objective.md`, `notes.md` (memory between iterations; the runner adds one line per outcome),
 `log.jsonl`, `state.json`, `end-state.json`. Continue a stopped run with
-`--resume .claude/overnight/<run id>` (flags given again override the saved ones).
+`--resume <that folder>` (flags given again override the saved ones).
 
 ## 5. The morning after
 

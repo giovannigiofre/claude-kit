@@ -182,11 +182,17 @@ def main():
                   # a reader behind a shell or a wrapper, a loop that only reads, a writer in another part
                   "bash -c 'ls .claude/'", "timeout 10 ls .claude/", "for f in .claude/*; do echo $f; done",
                   "ls .claude/ && npm test", "git status .claude/ && git commit -m x",
-                  "ls \"/Library/Application Support/ClaudeCode\""]
+                  "ls \"/Library/Application Support/ClaudeCode\"",
+                  # the kit's working state moved to .kit/ so a thread's writes there ask nobody
+                  "mkdir -p .kit/lead/items/b1/out", "echo '- x | working | y' >> .kit/lead/items/b1/LOG.md",
+                  f"cp report.txt {repo}/.kit/lead/items/b1/out/", "cp proof.png .kit/evidence/b/"]
         for cwd in (repo, wt):
             for command in passes:
                 decision, reason = hook("Bash", {"command": command}, cwd, env)
                 check(decision == "pass", f"passes in {cwd.name}: {command}: {decision} {reason}")
+        for path in (repo / ".kit" / "lead" / "board.md", repo / ".kit" / "lead" / "items" / "b1" / "BRIEF.md"):
+            decision, reason = hook("Write", {"file_path": str(path), "content": "x"}, wt, env)
+            check(decision == "pass", f"a Write into .kit/lead/ gets no answer: {decision} {reason}")
         decision, reason = hook("Edit", {"file_path": str(wt / ".claude" / "settings.local.json"), **edit}, wt, env)
         check(decision == "ask", f"the worktree's own settings ask, with the main checkout's kit.json: {decision} {reason}")
         decision, _ = hook("Edit", {"file_path": str(wt / ".claude" / "settings.local.json"), **edit}, wt, env,

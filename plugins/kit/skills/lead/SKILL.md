@@ -15,10 +15,10 @@ the board and talk to the user. You see what threads report, not every step they
 
 ## The board
 
-`.claude/lead/board.md` (or `lead.board` in kit.json) is the state that survives compaction and
+`.kit/lead/board.md` (or `lead.board` in kit.json) is the state that survives compaction and
 restarts. Read it when you start or lose track of an item; rewrite it whole on every change. Keep
 it under 60 lines and 8 KB: RULES holds standing rules only, dated decisions go to
-`.claude/lead/DECISIONS.md` (read on demand), `I done` moves a done row to `archive.md`.
+`DECISIONS.md` beside it (read on demand), `I done` moves a done row to `archive.md`.
 
 ```
 SHIP: <local | pr | pr+fix> | MERGE: <user | agent> | PARALLEL: <n> | BUDGET: <none | k of n items>
@@ -32,7 +32,7 @@ Status is one of `queued`, `working`, `review` (a PR or branch is ready for the 
 
 ## Items on disk
 
-Each item is a folder `.claude/lead/items/<id>/` (`I` and `P` are shell functions, since zsh does
+Each item is a folder `.kit/lead/items/<id>/` (`I` and `P` are shell functions, since zsh does
 not split a `$I` variable into words: `I(){ python3 ${CLAUDE_SKILL_DIR}/../../hooks/scripts/items.py "$@"; }`
 and `P` the same for its sibling `proposals.py`; if the variable is not expanded, they are in the
 kit plugin's `hooks/scripts/`): `BRIEF.md` (headed `ITEM: <id>`), `REPORT.md` and `VERDICT.md`,
@@ -42,10 +42,10 @@ outlive its worktree). The board is the index; the folder survives a compaction 
 and `/kit:scout take` queue items this way; for work the user gives you directly, make the item
 first: `I new "<name>" --brief - --from lead` with the brief on stdin (`--kind scout` for finding
 something out). Brief a thread with the `ITEM: <id>` line, the absolute BRIEF.md path (`I path
-<id>`; a worktree has no `.claude/lead/`) and only what the file lacks. Log `working` when it
+<id>`; a worktree has no `.kit/lead/`) and only what the file lacks. Log `working` when it
 starts (`I log <id> working "agent <agentId>, effort <level>"`), `review` or `needs-you` when it
 reports, and `I done <id>` when the PR is merged (more commands: [tools.md](tools.md)). Before re-briefing a thread, read BRIEF.md
-again (the user may have changed it) and VERDICT.md. Proposal cards (`.claude/lead/proposals/`,
+again (the user may have changed it) and VERDICT.md. Proposal cards (`.kit/lead/proposals/`,
 from `/kit:scout`): `next` takes a class A card (`P take <id>`), asks before a B, never starts a C.
 
 Defaults come from kit.json `lead` (`ship`, `merge`, `parallel`, `budget`, `loops`), else ship
