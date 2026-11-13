@@ -41,7 +41,11 @@ the diff, a test or an eval result. Source keys are listed at the end.
 - [ ] Refusal, truncation (max tokens) and other stop reasons are handled explicitly [SO]
 - [ ] Every number or claim shown to the user traces to a tool result or source id; a code post-check (grounding guard) enforces it with a safe fallback [BEA, CTX]
 - [ ] Where exact source quotes matter, provider citations or quote-and-verify in code are used; provider limits are checked (some citation features can't be combined with structured output) [CIT]
-- [ ] RAG: retrieval is scored separately from generation [EVALS, RAGAS]
+- [ ] RAG: retrieval is scored separately from generation, so a drop names its layer [EVALS, RAGAS]
+- [ ] RAG: when the retrieved context does not hold the answer, the reply says so in a defined form instead of guessing, and an eval case with no supporting document checks it [EVALS]
+- [ ] RAG: scores are reported per slice of the dataset (topic, document type, language, question kind), not only as the average, which can hide one slice collapsing [HAMEL]
+- [ ] RAG: the regression allowed per metric is written down before the change is run, so the result is not judged after the fact [EVALS]
+- [ ] RAG: a technique (reranking, hybrid search, query rewriting, a new chunk size) is added only with a measured gain on this suite, not because it is usual [EVALS]
 
 ## E. Guardrails and security
 
@@ -51,6 +55,9 @@ the diff, a test or an eval result. Source keys are listed at the end.
 - [ ] Model output is treated as untrusted: no model-written URLs or images rendered without an allowlist; HTML/markdown escaped; never executed or used as SQL/shell [OWASP]
 - [ ] Scope and safety checks: off-topic and jailbreak handling, output length limits, no system-prompt leakage [OWASP, OAI]
 - [ ] Personal data: minimised in prompts, never in logs (see H), provider data-retention settings chosen [OWASP]
+- [ ] Each consequential tool has a written path: where its input comes from, what parses it, what validates it, what side effect it causes; a test feeds a model output that breaks the rule and asserts no side effect happened [PI, OWASP]
+- [ ] A sentinel secret planted in the test context (a fake key with a unique string) never appears in logs, traces, error messages or replies; a test searches for it [OWASP]
+- [ ] File path checks resolve the path and compare whole components; the test includes a sibling with the same prefix (`/work/application` against the allowed `/work/app`), which a plain string-prefix check lets through [OWASP]
 - [ ] Optional: a local red-team run (e.g. promptfoo's injection presets) before launch [PF]
 
 ## F. Evals-first loop
@@ -67,6 +74,9 @@ the diff, a test or an eval result. Source keys are listed at the end.
 - [ ] One model per role (router, main loop, writer, judge), chosen on the project's own suite; provisional choices are marked (`kit-llm:llm-evals`, model choice) [OAI]
 - [ ] Cost is estimated per completed task or conversation, not per token [CAPI]
 - [ ] Cheap wins first: a stable prompt prefix that can be cached (nothing volatile before the cache point), lean inputs, output limits, batch for offline jobs; model change last [CAPI]
+- [ ] Caching is proven, not assumed: each run records the provider's own cache-read and cache-write token counters; a "stable prefix" whose hits were never measured is a hope [CAPI]
+- [ ] Cost is computed in categories that do not overlap (uncached input, cache writes, cache reads, output), including warm-up calls and cache misses, so the total adds up to the bill [CAPI]
+- [ ] Webhook, queue and worker designs are checked against the five money leaks in [cost-burn.md](cost-burn.md)
 - [ ] Budgets in code: max tokens per call, max calls per conversation, timeout, a hard stop before a call that would exceed the budget [BEA]
 - [ ] Latency target per turn is stated and measured in the eval run [EVALS]
 - [ ] Provider privacy settings match the project's data rules (e.g. OpenRouter data-collection deny / zero-retention routing) [OR]
