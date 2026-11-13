@@ -403,6 +403,24 @@ def tokenize(line):
         return line.split()
 
 
+def shell_body(argv):
+    """The command string a shell runs (`bash -c CMD`, `bash -lc CMD`, `sh -xec CMD`), else None.
+    Like bash, the string follows any short-option cluster that holds `c`."""
+    if not argv or Path(argv[0]).name not in SHELLS:
+        return None
+    i = 1
+    while i < len(argv) - 1:
+        if argv[i] in ("-o", "+o", "-O", "+O"):  # set options take a name
+            i += 2
+            continue
+        if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", argv[i]):
+            return argv[i + 1]
+        if not argv[i].startswith(("-", "+")):
+            return None  # a script file: what follows is its arguments
+        i += 1
+    return None
+
+
 def strip_wrappers(argv):
     argv = list(argv)
     while argv:
@@ -411,6 +429,10 @@ def strip_wrappers(argv):
             argv = argv[1:]
         elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", argv[0]):
             argv = argv[1:]
+        elif name == "env":  # env -i -u NAME -C DIR NAME=value command ...
+            argv = argv[1:]
+            while argv and (argv[0].startswith("-") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", argv[0])):
+                argv = argv[2:] if argv[0] in ("-u", "-C", "--unset", "--chdir") else argv[1:]
         elif name in WRAPPERS:
             argv = argv[1:]
             while argv and argv[0].startswith("-"):
@@ -570,8 +592,9 @@ def segments(command, inner=False):
     nested = []
     for seg in out:
         argv = seg["argv"]
-        if argv and Path(argv[0]).name in SHELLS and "-c" in argv[1:-1]:
-            nested.extend(dict(s, nested=True, plain=False) for s in segments(argv[argv.index("-c") + 1], True))
+        body = shell_body(argv)
+        if body is not None:
+            nested.extend(dict(s, nested=True, plain=False) for s in segments(body, True))
     return out + nested
 
 
@@ -855,30 +878,49 @@ def check_gh(argv, agent):
 
 
 # The owner's commands: they change his settings or the kit's state, and the coordinator runs them
-# at his word, never a thread. A segment is one when it RUNS one of these scripts with these words as
-# its own arguments: directly (`python3 .../items.py away on`, `python3 -m items away on`, the path
-# alone), or through a shell function or a variable bound in the same command to a command that runs
-# it (`I(){ python3 .../items.py "$@"; }; I away on`, `I="python3 .../items.py"; $I away on`).
-# Each simple command is judged on its own, so a commit message, a PR body, a grep pattern or words
-# spread over a pipeline never match. Deliberate evasions (a word in a variable, xargs, a script fed
-# to sh, an interpreter importing kitlib) are left to Claude Code's permission layer.
+# at his word, never a thread. A segment is one when it RUNS one of these scripts with these words
+# among its own arguments, read the way the script reads them (options may come first): directly
+# (`python3 .../items.py away on`, `python3 -m items away on`, the path alone), or through a shell
+# function or a variable bound in the same command to a command that runs it (`I(){ python3
+# .../items.py "$@"; }; I away on`, `"$1" "$2"` in the body, `I="python3 .../items.py"; $I away on`,
+# also after export, readonly or local). Each simple command is judged on its own, so a commit
+# message, a PR body, a grep pattern or words spread over a pipeline never match. Deliberate evasions
+# (a word in a variable, an array, xargs, find -exec python3 {}, uv run, $PYTHON, a script fed to sh,
+# an interpreter importing kitlib) are left to Claude Code's permission layer.
 OWNER_SCRIPTS = ("items", "machine_setup", "migrate_state")
 FUNCTION_DEF = re.compile(r"(?:^|(?<=[\s;&|(){}]))(?:function\s+([A-Za-z_][\w-]*)\s*(?:\(\s*\))?|([A-Za-z_][\w-]*)\s*\(\s*\))\s*\{")
 CALLED = re.compile(r"\$\{?([A-Za-z_]\w*)\}?")
 
 
 def owner_words(script, args):
-    """The owner words of `script` (items, machine_setup, migrate_state) in `args`, or None."""
-    if script == "items" and len(args) >= 2 and args[0] in ("away", "sandbox") and args[1] in ("on", "off"):
-        return args[:2]
-    if script == "items" and args[:1] == ["unattended"] and any(re.fullmatch(r"[A-Za-z_][\w-]*=.*", a) for a in args[1:]):
-        return args
-    if script == "machine_setup" and args[:1] in (["--apply"], ["--decline"]):
-        return args[:1]
-    if script == "migrate_state" and args[:1] == ["undo"]:
-        return args[:1]
-    if script == "migrate_state" and args[:1] == ["migrate"] and {"--again", "--force"} & set(args[1:]):
-        return ["migrate"] + [a for a in args[1:] if a in ("--again", "--force")]
+    """The owner words of `script` (items, machine_setup, migrate_state) in `args`, or None. The
+    words are looked for the way the script reads its arguments: options may come first."""
+    if script == "machine_setup":
+        found = [a for a in args if a in ("--apply", "--decline")]
+        return found[:1] or None
+    if script == "migrate_state":  # argparse: options anywhere, --root takes a value, long names abbreviate
+        flags, positional, i = [], [], 0
+        while i < len(args):
+            a = args[i]
+            if len(a) > 2 and a.startswith("--") and "--root".startswith(a.split("=")[0]):
+                i += 1 if "=" in a else 2
+                continue
+            if len(a) > 2 and a.startswith("--") and ("--again".startswith(a) or "--force".startswith(a)):
+                flags.append(a)
+            elif not a.startswith("-"):
+                positional.append(a)
+            i += 1
+        if positional[:1] == ["undo"]:
+            return ["undo"]
+        if positional[:1] == ["migrate"] and flags:
+            return ["migrate"] + flags
+        return None
+    if script == "items":  # the subcommand is the first word that is not an option
+        words = [a for a in args if not a.startswith("-")]
+        if words[:1] in (["away"], ["sandbox"]) and words[1:2] in (["on"], ["off"]):
+            return words[:2]
+        if words[:1] == ["unattended"] and any(re.fullmatch(r"[A-Za-z_][\w-]*=.*", a) for a in words[1:]):
+            return words
     return None
 
 
@@ -919,6 +961,23 @@ def function_bodies(command):
     return out
 
 
+def called(binding, args):
+    """The argv a call of a bound name with `args` runs. A variable's words come first and the args
+    after; a function's body gets them in place of "$@", "$*", "$1", "${2}" and so on."""
+    if not (isinstance(binding, tuple) and binding[0] == "function"):
+        return list(binding) + list(args)
+    out = []
+    for word in binding[1]:
+        if word in ("$@", "$*", "${@}", "${*}"):
+            out.extend(args)
+        elif m := re.fullmatch(r"\$(\d)|\$\{(\d+)\}", word):
+            n = int(m.group(1) or m.group(2))
+            out.extend(args[n - 1:n] if n else [])
+        else:
+            out.append(word)
+    return out
+
+
 def owner_run(command, cwd=None, bound=None):
     """`items.py away on` (or another owner command) when a simple command of `command` runs it,
     else None. `bound` carries the names bound so far ({name: argv prefix}) into an eval."""
@@ -926,12 +985,14 @@ def owner_run(command, cwd=None, bound=None):
     for name, body in function_bodies(command).items():
         for seg in segments(body):
             if runs_script(seg["argv"]):
-                argv = seg["argv"]
-                cut = next((i for i, a in enumerate(argv) if a in ("$@", "$*", "${@}", "${*}")), len(argv))
-                bound[name] = argv[:cut]
+                bound[name] = ("function", seg["argv"])
                 break
     env = {}
     for seg in segments(command):
+        declared = seg["argv"][:1] in (["export"], ["readonly"], ["local"], ["declare"], ["typeset"])
+        if declared:  # `readonly I=...`, `local I=...`: bindings like a bare assignment
+            seg = dict(seg, assigns=True, env=dict(a.split("=", 1) for a in seg["argv"][1:]
+                                                    if re.match(r"^[A-Za-z_]\w*=", a)))
         if seg.get("assigns"):
             for var, value in (seg.get("env") or {}).items():
                 env[var] = value
@@ -949,7 +1010,7 @@ def owner_run(command, cwd=None, bound=None):
             continue
         call = CALLED.fullmatch(argv[0])
         if argv[0] in bound or (call and call.group(1) in bound):
-            argv = bound[argv[0] if argv[0] in bound else call.group(1)] + argv[1:]
+            argv = called(bound[argv[0] if argv[0] in bound else call.group(1)], argv[1:])
         argv = [with_vars(a, env) for a in argv]
         if argv and " " in argv[0]:  # a command held in a variable: the shell splits it
             argv = argv[0].split() + argv[1:]
@@ -1619,8 +1680,8 @@ def memory_words(command):
         argv = seg.get("argv") or []
         if seg.get("nested") or not argv:
             continue
-        if Path(argv[0]).name in SHELLS and "-c" in argv[1:-1]:
-            more = memory_words(argv[argv.index("-c") + 1])
+        if shell_body(argv) is not None:
+            more = memory_words(shell_body(argv))
             targets, code = targets + more[0], code + more[2]
             env.update(more[1])
         elif INTERPRETER.fullmatch(Path(argv[0]).name):

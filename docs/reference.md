@@ -100,12 +100,14 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
   owner's settings (`away on|off`, `sandbox on|off`, `unattended` with any choice),
   `machine_setup.py --apply|--decline`, and `migrate_state.py undo` or `migrate --again|--force`
   are refused. The guard judges what runs, one simple command at a time: a command that runs
-  the script (by its path, `python3 -m items`, through `env`, `eval`, `bash -c` or `find -exec`)
-  with those words as its own arguments, or a shell function or variable bound in the same command
-  to one that runs it (`I(){ python3 …/items.py "$@"; }; I away on`, `I="python3 …/items.py"; $I
-  away on`). A commit message, a PR body, a grep pattern or an echo that only mentions them passes;
-  deliberate evasions (a word held in a variable, `xargs`, a script fed to `sh`, `python3 -c`) are
-  left to Claude Code's permission layer. `away status`, `sandbox status`, a bare `unattended`,
+  the script (by its path, `python3 -m items`, through `env` and its options, `eval`, `bash -c`
+  or `-lc`, or `find -exec`) with those words among its own arguments, options first or not, or a
+  shell function or variable bound in the same command to one that runs it (`I(){ python3
+  …/items.py "$@"; }; I away on`, the same with `"$1" "$2"`, `I="python3 …/items.py"; $I away on`,
+  also after `export`, `readonly` or `local`). A commit message, a PR body, a grep pattern or an
+  echo that only mentions them passes; deliberate evasions (a word held in a variable, an array
+  such as `"${cmd[@]}"`, `xargs`, `find -exec python3 {}`, `uv run`, `$PYTHON`, a script fed to
+  `sh`, `python3 -c`) are left to Claude Code's permission layer. `away status`, `sandbox status`, a bare `unattended`,
   the board commands, a bare `migrate` and
   `status` pass. permission.py never auto-allows those forms from a subagent.
   One rule holds in every repo, with or without `kit.json` and with the guard off:
@@ -248,8 +250,12 @@ trusted, whatever it commits.
   built-in entries stay current; a list without it is left that way, and a non-list
   `environment` is left alone with a one-line warning.
 - Writes go through the kit's one settings writer, `kitlib.update_settings`. It holds
-  a lock per file written, in the kit's temp state folder (the system temp dir's `claude-kit/`,
-  named by a hash of the file's resolved path), which every kit write to that file shares, so
+  a lock per file written, in the user's own lock folder (the system temp dir's `claude-kit-<uid>/`,
+  made with mode 0700, so a second user on a shared temp dir or a run as root does not block the
+  others; a folder of that name that belongs to another user ends the write in one line naming it,
+  with exit 1), named by a hash of the file's resolved path, which every kit write to that file
+  shares (writers with different `TMPDIR` values do not exclude each other, and the re-read under
+  the lock and the atomic replace still keep each change), so
   nothing is written into the project or the config dir to lock and a symlinked settings file
   leaves nothing in its target's folder (a `kit-settings.lock` an earlier version left beside a
   file is removed at the next write of it), waiting at most 2 seconds (a busy lock skips the sync at session start with one line, and

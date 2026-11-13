@@ -772,8 +772,8 @@ def write_json_atomic(path, value, backup=None):
 # The one writer for Claude Code settings files (settings.json, settings.local.json) and the personal
 # kit.json. Every kit write takes a lock, re-reads the file under it and merges into what is on disk
 # at that moment, so two kit writers never lose each other's change. The lock files live in the
-# kit's temp state folder (the system temp dir's claude-kit/), one per file written, named by a hash
-# of its resolved path: nothing is written into the project or the config dir to lock, so a checkout
+# user's own lock folder (the system temp dir's claude-kit-<uid>/, mode 0700; one that belongs to
+# another user is refused), one per file written, named by a hash of its resolved path: nothing is written into the project or the config dir to lock, so a checkout
 # stays clean and a symlinked settings file leaves nothing in its target's folder. Within one
 # process each lock is reentrant, so a writer may call another (away_on writes the marker under the
 # settings.json lock). Claude Code does not take this lock, so the file's size and mtime are compared again
@@ -792,20 +792,49 @@ class SettingsBusy(OSError):
         self.lock = path
 
 
+class LockFolderForeign(OSError):
+    """The settings lock folder exists and belongs to another user."""
+
+    def __init__(self, path):
+        super().__init__(f"{path} belongs to another user")
+        self.folder = path
+
+
+def settings_lock_folder():
+    """The current user's folder for the settings locks: <temp>/claude-kit-<uid>, so a second user
+    on a shared temp dir (or a run as root) never leaves a folder the others cannot write."""
+    who = os.getuid() if hasattr(os, "getuid") else __import__("getpass").getuser()
+    return Path(tempfile.gettempdir()) / f"claude-kit-{who}"
+
+
+def make_lock_folder(folder):
+    """Create `folder` with mode 0700, or check an existing one is the current user's. Raises
+    LockFolderForeign for one of another user's, OSError when it cannot be made."""
+    try:
+        folder.mkdir(mode=0o700)
+        os.chmod(folder, 0o700)  # mkdir's mode is narrowed by the umask; ours to read and write
+    except FileExistsError:
+        if not folder.is_dir():
+            raise
+    if hasattr(os, "getuid") and (os.lstat(folder).st_uid != os.getuid() or os.stat(folder).st_uid != os.getuid()):
+        raise LockFolderForeign(folder)
+
+
 def settings_lock_file(target=None):
-    """The lock for the file `target` (default: the account's settings.json), in the kit's temp state
-    folder. The target is resolved first, so one file reached by two spellings or through a symlink
-    is one lock (a second flock on it in one process would wait)."""
+    """The lock for the file `target` (default: the account's settings.json), in the current user's
+    lock folder. The target is resolved first, so one file reached by two spellings or through a
+    symlink is one lock (a second flock on it in one process would wait)."""
     import hashlib
     key = str(Path(target or user_settings()).resolve())
     name = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
-    return Path(tempfile.gettempdir()) / "claude-kit" / f"settings-{name}.lock"
+    return settings_lock_folder() / f"settings-{name}.lock"
 
 
 class settings_lock:
     """`with kitlib.settings_lock(file):` holds the lock for `file` (default: the account's
     settings.json); nested uses of one lock in one process share it. Raises SettingsBusy after
-    SETTINGS_LOCK_WAIT, or OSError when the temp state folder cannot be created."""
+    SETTINGS_LOCK_WAIT, LockFolderForeign when the lock folder is another user's, or OSError when
+    it cannot be created."""
 
     def __init__(self, target=None):
         self.path = settings_lock_file(target)
@@ -815,7 +844,7 @@ class settings_lock:
         if held is None:
             import fcntl  # here, so a platform without it cannot break importing this module
             import time
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+            make_lock_folder(self.path.parent)
             fh = open(self.path, "w")
             deadline = time.monotonic() + SETTINGS_LOCK_WAIT
             while True:
@@ -842,10 +871,14 @@ class settings_lock:
 
 def write_failed(exc, what):
     """One line for an owner command whose settings write failed: what was not changed and what to
-    do. `exc` is SettingsBusy (try again) or another OSError (the path that cannot be written)."""
+    do. `exc` is SettingsBusy (try again), LockFolderForeign (another user's lock folder) or another
+    OSError (the path that cannot be written)."""
     if isinstance(exc, SettingsBusy):
         return (f"{what} was not changed: another kit process held {exc.lock} for more than "
                 f"{SETTINGS_LOCK_WAIT:g} s. Try again in a moment.")
+    if isinstance(exc, LockFolderForeign):
+        return (f"{what} was not changed: the lock folder {exc.folder} belongs to another user. "
+                f"Remove it, or set TMPDIR to a folder of your own, then try again.")
     where = exc.filename or "the settings folder"
     return f"{what} was not changed: {where} cannot be written ({exc.strerror or exc}). Make it writable, then try again."
 
