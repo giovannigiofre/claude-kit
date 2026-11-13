@@ -334,7 +334,10 @@ function named(label: string, ids: string[]): string {
 // still has it in `.claude/` (Claude Code protects that folder, so threads stalled on prompts
 // writing there). Both are read, `.kit` first, as kitlib.state_entry does.
 const STATE_DIRS = ['.kit', '.claude']
-const LEGACY_BOARD = '.claude/lead/board.md' // the default /kit:init wrote into kit.json
+// A kit.json `lead.board` inside the old lead folder (the default /kit:init wrote,
+// `.claude/lead/board.md`, or a name of the owner's own there) moves with that folder: reading
+// it only from `.claude/lead` showed no board once the folder had moved.
+const LEGACY_LEAD = '.claude/lead/'
 
 // The board from kit.json `lead.board` or the default path: null when there is no board,
 // undefined when it (or kit.json) exists but could not be read this time.
@@ -342,10 +345,12 @@ async function readBoard($: $, root: string): Promise<Board | null | undefined> 
   const kitJson = await readJsonForWrite($, await kitJsonPath($, root))
   if (kitJson.isBroken) return undefined
   const lead = kitJson.value.lead
-  const custom = typeof (lead && lead.board) === 'string' ? lead.board.trim().replace(/^\.\//, '') : ''
-  const paths = custom && custom !== LEGACY_BOARD
-    ? [custom.startsWith('/') ? custom : `${root}/${custom}`]
-    : STATE_DIRS.map(dir => `${root}/${dir}/lead/board.md`)
+  let custom = typeof (lead && lead.board) === 'string' ? lead.board.trim().replace(/^\.\//, '') : ''
+  if (custom.startsWith(`${root}/${LEGACY_LEAD}`)) custom = custom.slice(root.length + 1)
+  const inLead = custom.startsWith(LEGACY_LEAD) ? custom.slice(LEGACY_LEAD.length) : custom ? '' : 'board.md'
+  const paths = inLead
+    ? STATE_DIRS.map(dir => `${root}/${dir}/lead/${inLead}`)
+    : [custom.startsWith('/') ? custom : `${root}/${custom}`]
   for (const path of paths) {
     try {
       return readBoardText(await $.fs.read(path))

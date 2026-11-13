@@ -474,7 +474,7 @@ LEGACY_STATE_DIR = ".claude"
 # What moves, an allowlist: a name missing here stays where it is (other agents' agent-memory too).
 STATE_NAMES = ("lead", "evidence", "overnight", "agent-memory/kit-verifier")
 PER_CHECKOUT_STATE = ("overnight",)  # in the checkout the run is in, a linked worktree included
-LEGACY_BOARD = ".claude/lead/board.md"  # the default /kit:init wrote into kit.json `lead.board`
+LEGACY_LEAD = ".claude/lead/"  # a kit.json `lead.board` under it moves with the folder (board_file)
 
 
 def has_legacy_state(base):
@@ -519,14 +519,22 @@ def state_entry(root, name, per_checkout=None):
 
 
 def board_file(root, config=None):
-    """The board: kit.json `lead.board` (relative to `root`), else `<state>/lead/board.md`. The old
-    default /kit:init wrote there, `.claude/lead/board.md`, counts as the default, so it follows
-    the move."""
+    """The board: kit.json `lead.board` (relative to `root`), else `<state>/lead/board.md`. A path
+    inside the old lead folder (`.claude/lead/board.md`, the default /kit:init wrote, or a name of
+    the owner's own such as `.claude/lead/BOARD.md`) follows the move: read only from `.claude/lead`,
+    it showed "none open" once the folder had moved. A path anywhere else is the owner's."""
     lead = config.get("lead") if isinstance(config, dict) else None
-    board = lead.get("board") if isinstance(lead, dict) and isinstance(lead.get("board"), str) else ""
-    if not board.strip() or Path(board.strip()).as_posix() == LEGACY_BOARD:
-        return state_entry(root, "lead") / "board.md"
-    return Path(board) if Path(board).is_absolute() else Path(root) / board
+    board = lead.get("board").strip() if isinstance(lead, dict) and isinstance(lead.get("board"), str) else ""
+    if not board:
+        return state_entry(root, "lead", per_checkout=False) / "board.md"
+    path = Path(board) if Path(board).is_absolute() else Path(root) / board
+    for base in dict.fromkeys(_state_bases(root, False)[:2]):
+        try:
+            inside = path.relative_to(base / LEGACY_LEAD)
+        except ValueError:
+            continue
+        return state_entry(root, "lead", per_checkout=False) / inside
+    return path
 
 
 def exclude_state(root, name):

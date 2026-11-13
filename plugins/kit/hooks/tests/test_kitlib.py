@@ -161,6 +161,13 @@ def main():
         legacy = {"lead": {"board": ".claude/lead/board.md"}}
         check(kitlib.board_file(repo, legacy) == repo / ".kit" / "lead" / "board.md", "the old default follows the move")
         check(kitlib.board_file(repo, {"lead": {"board": "docs/board.md"}}) == repo / "docs" / "board.md", "a custom board stays")
+        # a name of the owner's own inside the old lead folder follows the folder too
+        own = {"lead": {"board": ".claude/lead/BOARD.md"}}
+        check(kitlib.board_file(tree, own) == repo / ".kit" / "lead" / "BOARD.md", kitlib.board_file(tree, own))
+        absolute = {"lead": {"board": str(repo / ".claude" / "lead" / "sub" / "b.md")}}
+        check(kitlib.board_file(repo, absolute) == repo / ".kit" / "lead" / "sub" / "b.md", "an absolute path inside it")
+        check(kitlib.board_file(repo, {"lead": {"board": ".claude/boards/b.md"}}) == repo / ".claude" / "boards" / "b.md",
+              "a path elsewhere in .claude stays as written")
         (repo / ".claude" / "evidence").mkdir()
         check(kitlib.state_dir_name(repo) == ".claude", "legacy state keeps the project in .claude")
         check(kitlib.state_entry(tree, "lead") == repo / ".claude" / "lead", "a new entry joins the old layout")
