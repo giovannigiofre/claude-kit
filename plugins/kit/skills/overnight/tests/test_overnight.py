@@ -423,6 +423,31 @@ def test_fresh_project_runs_under_kit_and_excludes_them_first():
     assert clean(d)
 
 
+def test_exclude_lines_are_appended_under_the_kits_lock():
+    # the same rule as kitlib.add_exclude_lines, and the same lock file, so the two never race
+    import fcntl
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("overnight_under_test", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    d = Path(tempfile.mkdtemp())
+    info = d / "info" / "exclude"
+    info.parent.mkdir()
+    info.write_text("/owner-secret.env\n/notes-private/")  # no final newline
+    info.chmod(0o640)
+    mod.add_lines(info, ["/.kit/overnight/", "/owner-secret.env", "/.kit/evidence/"])
+    assert info.read_text() == "/owner-secret.env\n/notes-private/\n/.kit/overnight/\n/.kit/evidence/\n", info.read_text()
+    assert info.stat().st_mode & 0o777 == 0o640
+    with open(info.parent / "exclude.kit-lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        try:
+            mod.add_lines(info, ["/late/"], wait=0.2)
+            assert False, "a held lock must stop it"
+        except RuntimeError:
+            pass
+    assert "/late/" not in info.read_text()
+
+
 def test_project_with_legacy_state_keeps_its_runs_in_claude():
     d, fake = repo(["change", "done"])
     (d / ".claude" / "lead").mkdir(parents=True)  # state from before the move to .kit
