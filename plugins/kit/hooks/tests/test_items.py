@@ -393,9 +393,9 @@ def hold_lock(lock, seconds=10):
 
 
 def lock_of(target, tmp):
-    """The settings lock items.py takes for `target` with TMPDIR=tmp: the kit's temp state folder."""
+    """The settings lock items.py takes for `target` with TMPDIR=tmp: the user's lock folder."""
     import kitlib
-    return tmp / "claude-kit" / kitlib.settings_lock_file(target).name
+    return tmp / f"claude-kit-{os.getuid()}" / kitlib.settings_lock_file(target).name
 
 
 def lock_checks(tmp, check):
@@ -459,13 +459,40 @@ def lock_checks(tmp, check):
     check(one_line(code, out, err, f"{lock} cannot be written") and not local.exists(),
           f"sandbox on, lock cannot be opened: {code} {out} {err}")
     lock.rmdir()
-    # a temp state folder that cannot be made (a file in its place): the same one line
+    # the lock folder the kit makes is the user's own: named by the uid, mode 0700
+    fresh = tmp / "freshtmp"
+    fresh.mkdir()
+    code, out, err = run(repo, "sandbox", "on", env=dict(env, TMPDIR=str(fresh)))
+    folder = fresh / f"claude-kit-{os.getuid()}"
+    check(code == 0 and folder.is_dir() and folder.stat().st_mode & 0o777 == 0o700,
+          f"lock folder {folder}: {oct(folder.stat().st_mode) if folder.exists() else 'missing'} {out} {err}")
+    local.unlink()
+    # a lock folder that cannot be made (a file in its place): the same one line
     odd = tmp / "oddtmp"
     odd.mkdir()
-    (odd / "claude-kit").write_text("")
+    (odd / f"claude-kit-{os.getuid()}").write_text("")
     code, out, err = run(repo, "sandbox", "on", env=dict(env, TMPDIR=str(odd)))
-    check(one_line(code, out, err, "claude-kit cannot be written") and not local.exists(),
-          f"sandbox on, temp state folder cannot be made: {code} {out} {err}")
+    check(one_line(code, out, err, f"claude-kit-{os.getuid()} cannot be written") and not local.exists(),
+          f"sandbox on, lock folder cannot be made: {code} {out} {err}")
+    # a lock folder of that name owned by another user (its owner faked): one line naming it, exit 1,
+    # nothing written there or in the settings
+    other = tmp / "othertmp"
+    (other / f"claude-kit-{os.getuid()}").mkdir(parents=True)
+    fake = (f"import os, sys; sys.path.insert(0, {str(SCRIPTS)!r}); real = (os.stat, os.lstat)\n"
+            f"def owned(f):\n"
+            f"    def call(path, *a, **k):\n"
+            f"        st = f(path, *a, **k)\n"
+            f"        if os.path.basename(os.fspath(path)) == 'claude-kit-{os.getuid()}':\n"
+            f"            st = os.stat_result(st[:4] + (os.getuid() + 1,) + st[5:])\n"
+            f"        return st\n"
+            f"    return call\n"
+            f"os.stat, os.lstat = owned(real[0]), owned(real[1])\n"
+            f"import items; sys.exit(items.main(['sandbox', 'on']))\n")
+    got = subprocess.run([sys.executable, "-c", fake], cwd=str(repo), capture_output=True, text=True, timeout=60,
+                         env=dict(env, TMPDIR=str(other)))
+    check(one_line(got.returncode, got.stdout, got.stderr, f"lock folder {other / f'claude-kit-{os.getuid()}'} belongs to another user")
+          and not local.exists() and not list((other / f"claude-kit-{os.getuid()}").iterdir()),
+          f"sandbox on, another user's lock folder: {got.returncode} {got.stdout} {got.stderr}")
     # nothing is written beside the files for locking: not in the project, not in the config dir
     check(not list(cfg.glob("*.lock")) and not list((repo / ".claude").glob("*.lock")), "no lock beside the settings")
 

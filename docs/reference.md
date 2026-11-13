@@ -250,8 +250,12 @@ trusted, whatever it commits.
   built-in entries stay current; a list without it is left that way, and a non-list
   `environment` is left alone with a one-line warning.
 - Writes go through the kit's one settings writer, `kitlib.update_settings`. It holds
-  a lock per file written, in the kit's temp state folder (the system temp dir's `claude-kit/`,
-  named by a hash of the file's resolved path), which every kit write to that file shares, so
+  a lock per file written, in the user's own lock folder (the system temp dir's `claude-kit-<uid>/`,
+  made with mode 0700, so a second user on a shared temp dir or a run as root does not block the
+  others; a folder of that name that belongs to another user ends the write in one line naming it,
+  with exit 1), named by a hash of the file's resolved path, which every kit write to that file
+  shares (writers with different `TMPDIR` values do not exclude each other, and the re-read under
+  the lock and the atomic replace still keep each change), so
   nothing is written into the project or the config dir to lock and a symlinked settings file
   leaves nothing in its target's folder (a `kit-settings.lock` an earlier version left beside a
   file is removed at the next write of it), waiting at most 2 seconds (a busy lock skips the sync at session start with one line, and
