@@ -125,11 +125,15 @@ def main_checkout(cwd):
 
 # The owner's unattended git preferences for one repository, in its main checkout's gitignored
 # `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "ask", "rebase": "ask", "merge": "ask"}}}`):
-# local to this machine and this repo, never global, never committed. `ask` (the default, and
-# whatever is missing, misspelt or unreadable) means nobody answers a permission prompt during an
-# unattended run, so a thread hands that step back; `allow` means it proceeds as when attended,
-# once the permission rules let it run without a prompt (unattended_effective).
+# local to this machine and this repo, never global, never committed. `ask` means nobody answers a
+# permission prompt during an unattended run, so a thread hands that step back; `allow` means it
+# proceeds as when attended, once the permission rules let it run without a prompt
+# (unattended_effective). A step the file does not set, or sets to anything else, takes
+# UNATTENDED_DEFAULTS: until 2026-11 every unset step was `ask` and the coordinator asked the owner
+# before each first run, a question he answered the same way each time (push and rebase on the
+# thread's own branch, merge his), so now that answer is the default and nobody is asked.
 UNATTENDED_STEPS = ("push", "rebase", "merge")
+UNATTENDED_DEFAULTS = {"push": "allow", "rebase": "allow", "merge": "ask"}
 LOCAL_CONFIG = ".claude/kit.local.json"
 # What `allow` needs so the step runs without a prompt: the owner adds these to the repo's
 # .claude/settings.local.json `permissions.allow`, by hand or by approving the coordinator's Edit
@@ -139,14 +143,18 @@ UNATTENDED_RULES = {"push": ["Bash(git push:*)"], "rebase": ["Bash(git rebase:*)
 
 
 def unattended_prefs(cwd):
-    """(prefs, is_set, path): every step `ask` or `allow`; is_set when the repo's file names any step."""
+    """(prefs, is_set, path): every step `ask` or `allow`, an unset or misspelt one taking its
+    default; is_set when the repo's file names any step."""
     root = main_checkout(cwd) or Path(cwd)
     path = Path(root) / LOCAL_CONFIG
     value, _ = read_json(path)
     lead = (value or {}).get("lead")
     own = lead.get("unattended") if isinstance(lead, dict) else None
     own = own if isinstance(own, dict) else {}
-    prefs = {k: ("allow" if str(own.get(k, "")).strip().lower() == "allow" else "ask") for k in UNATTENDED_STEPS}
+    prefs = {}
+    for k in UNATTENDED_STEPS:
+        value = str(own.get(k, "")).strip().lower()
+        prefs[k] = value if value in ("ask", "allow") else UNATTENDED_DEFAULTS[k]
     return prefs, any(k in own for k in UNATTENDED_STEPS), path
 
 
@@ -364,19 +372,21 @@ def unattended_effective(cwd):
     any scope matches its commands, and an allow rule covers every one of them; otherwise `ask`,
     with a note per allow-step saying what keeps it at ask and which file and rule to change."""
     files, unreadable, steps = _unattended_steps(cwd)
+    _, is_set, _ = unattended_prefs(cwd)
+    said = "allow saved" if is_set else "allow by default"
     effective, notes = {k: "ask" for k in UNATTENDED_STEPS}, {}
     for step, (blocked, covered, refused) in steps.items():
         if unreadable:
-            notes[step] = (f"{step}: allow saved, but it stays ask: {', '.join(map(str, unreadable))} does not parse, "
+            notes[step] = (f"{step}: {said}, but it stays ask: {', '.join(map(str, unreadable))} does not parse, "
                            f"so its rules are unknown; fix it first.")
         elif blocked:
             which = "; ".join(f'{b} rule "{r}" in {f}' for b, r, f in blocked)
-            notes[step] = (f"{step}: allow saved, but it stays ask: {which} matches, and deny and ask answers come "
+            notes[step] = (f"{step}: {said}, but it stays ask: {which} matches, and deny and ask answers come "
                            f"before allow ones (Claude Code's rules in every scope, and the kit guard's), so an allow "
                            f"rule in settings.local.json cannot override it. The owner changes that rule, or {step} "
                            f"waits for them.")
         elif not covered:
-            notes[step] = (f"{step}: allow saved, but it stays ask until the owner adds "
+            notes[step] = (f"{step}: {said}, but it stays ask until the owner adds "
                            + ", ".join(f'"{r}"' for r in UNATTENDED_RULES[step])
                            + f" to {files[-1]} permissions.allow.")
         else:
@@ -599,6 +609,112 @@ def state_key(data):
 def config_dir():
     """Claude Code's config dir: CLAUDE_CONFIG_DIR, else ~/.claude."""
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
+def personal_config():
+    """The person's own kit.json, ~/.claude/kit.json: one per machine user, shared by every Claude
+    Code account on it (a second account's CLAUDE_CONFIG_DIR does not move it). `"mode": "light"`
+    there turns the coordinator line off; machine_setup.py records its answer there."""
+    return Path.home() / ".claude" / "kit.json"
+
+
+def personal_mode():
+    """`light` when the personal kit.json says so, else `` (the coordinator, in a kit project)."""
+    value, _ = read_json(personal_config())
+    mode = (value or {}).get("mode")
+    return "light" if isinstance(mode, str) and mode.strip().lower() == "light" else ""
+
+
+def write_json_atomic(path, value, backup=None):
+    """Write `value` to `path` through a temporary file in the same folder, so a reader never sees half
+    a file; with `backup`, the old file is copied to that name beside it first."""
+    import shutil
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if backup and path.exists():
+        shutil.copy2(path, path.with_name(backup))
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
+        if path.exists():
+            shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+# Away: Claude Code's permissions.denyInsteadOfPrompting (2.1.319) in the account's own settings.json.
+# A tool call that would wait on a permission prompt is denied and the turn goes on, so a run nobody
+# watches does not stall on a prompt. `items.py away on` sets it when the owner leaves; the kit
+# notes that it did (AWAY_MARKER beside settings.json) and takes it away again at the next
+# interactive session start or on `away off`. A value the owner set himself has no marker and is
+# never removed. Until 2026-11 the mod's `/kit-safety unattended` wrote it to the project's
+# settings.local.json instead, where it was easy to forget; session_start removes that one.
+AWAY_KEY = "denyInsteadOfPrompting"
+AWAY_MARKER = "kit-away.json"
+AWAY_BACKUP = "settings.json.kit-away-backup"
+
+
+def user_settings():
+    return config_dir() / "settings.json"
+
+
+def away_state():
+    """(state, path): `kit` (on, set by the kit), `own` (on, set by the owner), `off`, or `broken`
+    (settings.json is not a JSON object, or its permissions are not one)."""
+    path = user_settings()
+    settings, ok = read_json(path)
+    perms = (settings or {}).get("permissions", {})
+    if not ok or not isinstance(perms, dict):
+        return "broken", path
+    if perms.get(AWAY_KEY) is not True:
+        return "off", path
+    return ("kit" if (config_dir() / AWAY_MARKER).exists() else "own"), path
+
+
+def away_on():
+    """Turn away on; returns (exit code, message)."""
+    state, path = away_state()
+    if state == "broken":
+        return 1, f"{path} is not a valid JSON object; nothing was changed. Fix it, then run away on again."
+    if state == "own":
+        return 0, f"Away is already on: you set permissions.{AWAY_KEY} in {path} yourself; the kit leaves it."
+    if state == "kit":
+        return 0, "Away is already on; the next interactive session start turns it off."
+    settings, _ = read_json(path)
+    settings.setdefault("permissions", {})[AWAY_KEY] = True
+    write_json_atomic(path, settings, backup=AWAY_BACKUP)
+    write_json_atomic(config_dir() / AWAY_MARKER, {"settings": str(path), "since": int(time_now())})
+    return 0, (f"Away on: permissions.{AWAY_KEY} is true in {path} (backup {AWAY_BACKUP}). A tool call that "
+               "would wait on a permission prompt is denied instead and the turn goes on. The next "
+               "interactive session start, or `away off`, turns it off.")
+
+
+def away_off():
+    """Turn away off if the kit turned it on; returns (exit code, message)."""
+    state, path = away_state()
+    marker = config_dir() / AWAY_MARKER
+    if state == "broken":
+        return 1, f"{path} is not a valid JSON object; nothing was changed."
+    if state == "own":
+        return 0, (f"Away stays on: you set permissions.{AWAY_KEY} in {path} yourself, so the kit leaves it. "
+                   "To turn it off, remove that key from the file.")
+    if state == "kit":
+        settings, _ = read_json(path)
+        settings["permissions"].pop(AWAY_KEY, None)
+        if not settings["permissions"]:
+            settings.pop("permissions")
+        write_json_atomic(path, settings, backup=AWAY_BACKUP)
+    if marker.exists():
+        marker.unlink()
+    return 0, ("Away off: permission prompts ask again." if state == "kit" else "Away is off.")
+
+
+def time_now():
+    import time
+    return time.time()
 
 
 SECRET = re.compile(

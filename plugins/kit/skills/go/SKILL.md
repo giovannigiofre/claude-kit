@@ -1,7 +1,6 @@
 ---
 name: go
-description: Finishes work end to end - intent, sync with the base, test it the way a user would, review, simplify, risk rating, PR, then keeps CI green. Use when the user appends "/go" or says the work is ready to ship; "/kit:go babysit [PR]" only watches open PRs.
-disable-model-invocation: true
+description: Use when the user says a branch or change is ready to ship, or asks to finish it ("ship it", "open the PR", "/go"). Finishes the work end to end - intent, sync with the base, test it the way a user would, review, simplify, risk rating, PR, CI kept green, then merge per the project's policy (the user merges unless kit.json says otherwise); "babysit [PR]" only watches open PRs.
 argument-hint: "[optional: what was built, PR title hint, 'no-pr', 'no-babysit', 'babysit [PR]']"
 ---
 
@@ -61,8 +60,8 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
 8. **Merge per the project's policy** (`.claude/kit.json` `lead.merge`): `agent` merges once CI
    is green, nothing from the review is open and the risk is not high (`gh pr merge --squash
    --delete-branch`, or the method the repo allows); `user`, or a high risk, leaves the PR for
-   the user. Not set: ask "In this project, do I merge PRs once they're green, or do you always
-   review them first?" and save the answer there.
+   the user. Not set means `user`: leave the PR for the user without asking; when they say
+   otherwise, save their answer there.
 9. **Report** in a few lines: branch, PR, evidence verdict, risk, CI state, merged or waiting,
    what the user still has to decide.
 

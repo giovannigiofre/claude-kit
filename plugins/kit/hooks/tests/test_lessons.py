@@ -470,7 +470,8 @@ def test_upkeep():
             lessons.rank({"id": "L2", "seen": 1, "last": lessons.today()}), "seen lately beats only delivered"
         assert lessons.review_due(a) == "", "the first session starts the clock"
         lessons.register(lessons.repo(a), reviewed_ts=time.time() - (lessons.REVIEW_DAYS + 1) * 86400)
-        assert "lesson review for this repo is due" in lessons.review_due(a)
+        due = lessons.review_due(a)
+        assert "lesson review for this repo is due" in due and "review yourself" in due and "suggest" not in due, due
         assert lessons.review_due(a) == "", "the due line shows once per period; a declined review snoozes"
         slug = lessons.repo(a)["slug"]
         for key, text in (("t1", "run the integration tests with a fresh database before pushing"),

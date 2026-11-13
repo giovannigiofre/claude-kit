@@ -1,7 +1,6 @@
 ---
 name: scout
-description: Scans the project for candidate work with read-only explorers and writes deduplicated proposal cards (class A mechanical, B needs judgment, C human-only) into .kit/lead/proposals/; "take <id>" turns a card into a coordinator item. Use with /kit:scout [area | take <id> | list | retire].
-disable-model-invocation: true
+description: Use when the user asks to look for improvements or what to do next ("what should we work on", "find things to fix"). Scans the project with read-only explorers and writes deduplicated proposal cards (class A mechanical, B needs judgment, C human-only) into .kit/lead/proposals/; "take <id>" turns a card into a coordinator item.
 argument-hint: "[area or lens | take <id> | list | retire]"
 ---
 
@@ -14,7 +13,7 @@ orchestrator never reads the scanned files, cards are fingerprinted and immutabl
 
 - **`list`**: `P list` (or `--class A`); show it and stop.
 - **`take <id>`**: `P take <id>` makes a queued item from the card; say the item id and that
-  the coordinator picks it up with `/kit-mode loop` or `kit:lead <id>`.
+  the coordinator picks it up at the next message (or `kit:lead <id>`).
 - **`retire`**: `P retire` archives cards older than 30 days or whose origin is gone.
 - **Otherwise, a scan** of the area or lens given (empty: the whole project):
 

@@ -1,6 +1,6 @@
 ---
 name: init
-description: Sets up the kit in the current project - writes .claude/kit.json (fast check, full verify, per-file onEdit commands, protected paths, coordinator settings) from what the repo actually uses, a project verify skill that says how to exercise the app, and proposes permissions and a safety profile. Use when starting to use the kit in a project or when the SessionStart notice says kit.json is missing.
+description: Sets up the kit in the current project - writes .claude/kit.json (fast check, full verify, per-file onEdit commands, protected paths, coordinator settings) from what the repo actually uses, a project verify skill that says how to exercise the app, and proposes permissions. Use when the user asks to set the kit up in a project, or wants a gate, checks or a coordinator where .claude/kit.json does not exist yet.
 disable-model-invocation: true
 ---
 
@@ -73,7 +73,7 @@ and its CI actually run, not guesses.
    repo, pushes to main, discarding uncommitted work, `sudo`, `curl | sh`, reading credentials;
    best effort, it reads shell text; `guard.denyCommands` / `askCommands` hold the project's own
    rules). Then ask which profile the project uses: **Host** (no OS sandbox) or **Sandbox**
-   (`/kit-safety sandbox`).
+   (`python3 ${CLAUDE_SKILL_DIR}/../../hooks/scripts/items.py sandbox on`).
 11. **Permissions and authorship**: propose (never write silently) allow rules in
     `.claude/settings.json` for the read-only, check and verify commands; suggest the built-in
     `/fewer-permission-prompts`. The user is the only author of commits and PRs: in the same file

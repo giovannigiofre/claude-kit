@@ -1,6 +1,6 @@
 ---
 name: lead
-description: Makes this session the project's coordinator, a Claude Project in the terminal - the user talks to it, it starts a background thread per piece of work (own worktree, a PR with evidence when the work calls for one), keeps a board and reports only what changed. Use when the user hands over work to drive to done, runs the backlog, or wants to keep adding work while it runs; kit loop mode sends every message here.
+description: Makes this session the project's coordinator, a Claude Project in the terminal - the user talks to it, it starts a background thread per piece of work (own worktree, a PR with evidence when the work calls for one), keeps a board and reports only what changed. Use when the user hands over work to drive to done, runs the backlog, or wants to keep adding work while it runs; a kit project sends every message here.
 argument-hint: "[work to start | an item id | next | empty = resume from the board]"
 ---
 
@@ -70,8 +70,8 @@ that reaches you anyway needs no reply: end the turn without a word.
   (SendMessage to its agent ID; it arrives even while a command runs). Say which thread got what.
   - Finding something out without changing code is a **scout** thread: a `kit:implementer` on a
     `--kind scout` item, briefed read-only; its report lands in the item's REPORT.md.
-  - Hours of grinding toward one measurable objective is **overnight**: with the user's OK,
-    launch `kit:overnight`'s runner in the background with `--worktree`.
+  - Hours of grinding toward one measurable objective is **overnight**: without asking, run
+    `I away on` and start `kit:overnight`'s runner with `--worktree --push --detach`.
 - **Unclear work:** when readings lead to different work or there is no checkable done, ask a
   few multiple-choice questions as `kit:shape` does, or put it under NEEDS YOU and start the rest.
 - **Steering** ("also X", "drop Y", "Z first"): SendMessage to the thread when it fits its brief;
@@ -122,22 +122,22 @@ When a thread reports:
 **Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it
 waits as `review`. `agent`: merge it yourself (`gh pr merge --squash --delete-branch`, or the
 method the repo allows) once CI is green, the review has nothing open and the risk is not high; a
-high-risk PR still waits. Not set: `user`, without asking; you open PRs on your own and merge one
-only when the user asks for it (that PR, that time), then tidy up as above.
+high-risk PR still waits. Not set: `user`, without asking; merge only the PR the user asks for, then tidy up.
 
 The user is the author of every commit and PR: threads commit under the repo's configured git
 identity (kit.json `author`), with no AI co-author lines or footers; on a branch a thread created
 for its item it may amend, rebase and force-push with `--force-with-lease`, never on the default
-branch or one it didn't create. Deploys, migrations, deleting data and anything outside the repo
-need the user's go-ahead. Your own docs or diary commits ride with the next merge, at most one an
-hour. Before an unattended run, follow [unattended.md](unattended.md) while the user is still here.
+branch or one it didn't create. Deploys, migrations, deleting data and anything outside the repo need the
+user's go-ahead. Your own docs or diary commits ride with the next merge, at most one an hour.
+When the user is leaving or going to sleep, follow [unattended.md](unattended.md) and run `I away on`
+(the next interactive start undoes it); when they ask for the sandbox, run `I sandbox on`.
 
 ## Replies
 
 - Lead with the outcome, in at most four lines: what started, what is ready for review (with
   the PR or branch), and NEEDS YOU, ordered by what unblocks the most.
 - When nothing changed, say so in a line or not at all. When a wake-up the user didn't cause
-  leaves something for them, send one PushNotification, unless the kit mod says it notifies.
+  leaves something for them, send one PushNotification.
 - Run a command the user would type yourself, with Bash: its Allow/Deny prompt reaches the phone
   (a `!` sent over Remote Control does not run). Only a password, payment or secret waits for them.
 

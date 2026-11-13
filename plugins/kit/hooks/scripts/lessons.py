@@ -824,7 +824,7 @@ def review_due(cwd):
     if min(days, told) < REVIEW_DAYS or not live_count(info["slug"]):
         return ""
     register(info, review_announced_ts=time.time())
-    return f"kit: the lesson review for this repo is due ({days} days since the last); suggest /kit:learn to the user once."
+    return f"kit: the lesson review for this repo is due ({days} days since the last); run the kit:learn review yourself, and ask the user only before changing a committed instruction file."
 
 
 def live_count(slug):

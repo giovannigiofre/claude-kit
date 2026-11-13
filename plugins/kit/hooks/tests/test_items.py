@@ -239,6 +239,92 @@ def fresh_project_checks(tmp, check):
     check(status == "", f"git status clean of kit state: {status!r}")
 
 
+def away_checks(tmp, check):
+    """`away on|off|status` against a temporary config dir, and the session start that clears it."""
+    home = tmp / "home"
+    cfg = home / ".claude"
+    cfg.mkdir(parents=True)
+    env = dict(os.environ, HOME=str(home), CLAUDE_CONFIG_DIR=str(cfg), TMPDIR=str(tmp))
+    env.pop("KIT_HEADLESS", None)
+    repo = tmp / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    settings = cfg / "settings.json"
+    settings.write_text(json.dumps({"model": "opus", "permissions": {"allow": ["Bash(npm test)"]}}))
+
+    def start(source="startup", **extra):
+        payload = {"cwd": str(repo), "source": source, "session_id": "s1"}
+        out = subprocess.run([sys.executable, str(SCRIPTS / "session_start.py")], input=json.dumps(payload),
+                             capture_output=True, text=True, timeout=60, env=dict(env, **extra))
+        return out.stdout
+
+    code, out, _ = run(repo, "away", "status", env=env)
+    check(code == 0 and out == "Away: off.", f"away status off: {out}")
+    code, out, _ = run(repo, "away", "on", env=env)
+    saved = json.loads(settings.read_text())
+    check(code == 0 and out.startswith("Away on") and saved["permissions"]["denyInsteadOfPrompting"] is True
+          and saved["permissions"]["allow"] == ["Bash(npm test)"] and saved["model"] == "opus",
+          f"away on sets the key beside the others: {out} {saved}")
+    check((cfg / "settings.json.kit-away-backup").exists() and (cfg / "kit-away.json").exists(), "backup and marker")
+    check("set by the kit" in run(repo, "away", "status", env=env)[1], "away status says the kit set it")
+
+    # a compaction, a headless run and a subagent are not the owner coming back
+    for source, extra in (("compact", {}), ("startup", {"KIT_HEADLESS": "1"})):
+        out = start(source, **extra)
+        check("away is off again" not in out and json.loads(settings.read_text())["permissions"].get("denyInsteadOfPrompting"),
+              f"away stays on at {source} {extra}: {out}")
+    out = start("startup")
+    saved = json.loads(settings.read_text())
+    check("away is off again" in out and "denyInsteadOfPrompting" not in saved["permissions"]
+          and saved["permissions"]["allow"] == ["Bash(npm test)"] and not (cfg / "kit-away.json").exists(),
+          f"the next interactive start clears it: {out} {saved}")
+
+    # away off after the kit set it; then the owner's own true is never removed
+    run(repo, "away", "on", env=env)
+    code, out, _ = run(repo, "away", "off", env=env)
+    saved = json.loads(settings.read_text())
+    check(code == 0 and out.startswith("Away off") and "denyInsteadOfPrompting" not in saved["permissions"], f"away off: {out}")
+    settings.write_text(json.dumps({"permissions": {"denyInsteadOfPrompting": True}}))
+    code, out, _ = run(repo, "away", "on", env=env)
+    check("set permissions.denyInsteadOfPrompting" in out and not (cfg / "kit-away.json").exists(), f"own true: {out}")
+    code, out, _ = run(repo, "away", "off", env=env)
+    start("startup")
+    check("stays on" in out and json.loads(settings.read_text()) == {"permissions": {"denyInsteadOfPrompting": True}},
+          f"the owner's own value is kept by off and by session start: {out}")
+    check("you set it" in run(repo, "away", "status", env=env)[1], "away status names the owner's value")
+
+    # a settings.json that does not parse is left alone
+    settings.write_text('{ "permissions": ')
+    code, out, _ = run(repo, "away", "on", env=env)
+    check(code == 1 and "nothing was changed" in out and settings.read_text() == '{ "permissions": ', f"broken: {out}")
+    check(run(repo, "away", "bogus", env=env)[0] == 2, "away takes on, off or status")
+
+    # sandbox on writes the kit's block beside other keys; a block of the owner's stays; off only says the edit
+    local = repo / ".claude" / "settings.local.json"
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text(json.dumps({"permissions": {"allow": ["Bash(make)"]}}))
+    code, out, _ = run(repo, "sandbox", "on", env=env)
+    block = json.loads(local.read_text())
+    sb = block.get("sandbox", {})
+    check(code == 0 and out.startswith("Sandbox on") and block["permissions"] == {"allow": ["Bash(make)"]}
+          and sb.get("enabled") is True and sb.get("autoAllowBashIfSandboxed") is True
+          and sb.get("excludedCommands") == ["git push *", "git fetch *", "git pull *"], f"sandbox on: {out} {block}")
+    deny = sb.get("filesystem", {}).get("denyRead", [])
+    check(not {"~/.ssh", "~/.config/gh", "~/.netrc"} & set(deny) and "~/.aws" in deny, f"denyRead: {deny}")
+    check("already on" in run(repo, "sandbox", "on", env=env)[1], "sandbox on twice")
+    check("the kit's block" in run(repo, "sandbox", "status", env=env)[1], "sandbox status")
+    before = local.read_text()
+    code, out, _ = run(repo, "sandbox", "off", env=env)
+    check(code == 0 and local.read_text() == before and 'remove the "sandbox" key' in out and str(local) in out,
+          f"sandbox off changes nothing and prints the edit: {out}")
+    local.write_text(json.dumps({"sandbox": {"enabled": True, "network": {"allowedDomains": ["example.com"]}}}))
+    before = local.read_text()
+    code, out, _ = run(repo, "sandbox", "on", env=env)
+    check("left it as it is" in out and local.read_text() == before, f"an own sandbox block stays: {out}")
+    local.write_text("{ broken")
+    check(run(repo, "sandbox", "on", env=env)[0] == 1 and local.read_text() == "{ broken", "broken local file left alone")
+
+
 def main():
     failed = 0
 
@@ -401,19 +487,28 @@ def main():
         # unattended git preferences: per repo, in the main checkout's gitignored kit.local.json.
         # Every run gets the test HOME, so the user's real ~/.claude/settings.json never counts.
         local = repo / ".claude" / "kit.local.json"
+        check(items.kitlib.unattended_prefs(repo)[:2] == ({"push": "allow", "rebase": "allow", "merge": "ask"}, False),
+              "unset, push and rebase default to allow and merge to ask")
         code, out, _ = run(repo, "unattended", env=env)
         check(code == 0 and out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "not set" in out
-              and not local.exists(), f"unattended defaults to ask, unset, and writes nothing: {out}")
+              and "the defaults" in out and "push: allow by default, but it stays ask until" in out
+              and "PROPOSAL" not in out and "ask the user" not in out and not local.exists(),
+              f"unset, the defaults print (effective: no allow rule yet), nothing is asked or proposed, nothing written: {out}")
+        code, out, _ = run(repo, "unattended", "--proposal", env=env)
+        check(code == 0 and "PROPOSAL, not applied" in out and '+      "Bash(git push:*)"' in out
+              and "gh pr merge:*" not in out and not local.exists(),
+              f"--proposal prints the change for the default allow steps only, and writes nothing: {out}")
         local.write_text("{ broken")
         code, out, _ = run(repo, "unattended", env=env)
-        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "not set" in out, f"a broken file reads as ask: {out}")
+        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "not set" in out, f"a broken file reads as unset: {out}")
         code, _, err = run(repo, "unattended", "push=allow", env=env)
         check(code == 1 and local.read_text() == "{ broken", f"a broken file is never rewritten: {err}")
         local.write_text(json.dumps({"other": 1, "lead": {"unattended": {"push": "ALLOW", "merge": "sometimes"}}}))
         prefs, is_set, _ = items.kitlib.unattended_prefs(repo)
-        check(prefs == {"push": "allow", "rebase": "ask", "merge": "ask"} and is_set, f"a misspelt value is ask: {prefs}")
+        check(prefs == {"push": "allow", "rebase": "allow", "merge": "ask"} and is_set,
+              f"a misspelt or missing value takes its default: {prefs}")
         local.unlink()
-        code, out, err = run(repo, "unattended", "push=allow", "merge=ask", env=env)
+        code, out, err = run(repo, "unattended", "rebase=ask", "merge=ask", env=env)
         saved = json.loads(local.read_text())
         check(code == 0 and saved["lead"]["unattended"] == {"push": "allow", "rebase": "ask", "merge": "ask"}, f"saved: {saved} {err}")
         settings = repo / ".claude" / "settings.local.json"
@@ -513,6 +608,8 @@ def main():
                         "commit", "-qm", "settings"], check=True)
         before = committed.read_bytes()
         code, out, err = run(repo2, "unattended", "push=allow", "rebase=allow", "merge=allow", env=env)
+        check(code == 0 and "PROPOSAL" not in out, f"without --proposal nothing is proposed: {out}")
+        code, out, err = run(repo2, "unattended", "--proposal", env=env)
         r2 = str(committed.resolve())
         r2local = str(committed.resolve().parent / "settings.local.json")
         check(code == 0 and out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "PROPOSAL, not applied" in out,
@@ -574,6 +671,9 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmp:
         snapshot_checks(Path(tmp), check)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        away_checks(Path(os.path.realpath(tmp)), check)
 
     with tempfile.TemporaryDirectory() as tmp:
         fresh_project_checks(Path(os.path.realpath(tmp)), check)

@@ -11,8 +11,14 @@ session_start.py calls `pending()` and, until the user answers, asks Claude to o
 Claude explains, asks, then runs one of:
 
   python3 machine_setup.py --check     what is missing (exit 0 = nothing)
-  python3 machine_setup.py --apply     merge the settings in (backup first, other keys kept)
+  python3 machine_setup.py --apply     merge the settings in (backup first, other keys kept) and
+                                       remember "yes" in ~/.claude/kit.json
   python3 machine_setup.py --decline   remember "no" in ~/.claude/kit.json, never ask again
+
+The answer is for the machine: ~/.claude/kit.json stays in the home folder whatever
+CLAUDE_CONFIG_DIR says, while the settings are per account. So once the user said yes, a second
+account on the same machine (another CLAUDE_CONFIG_DIR) gets them at its next session start
+without being asked (`auto_apply`), and session_start.py says so in one line.
 
 A settings file that is not valid JSON is never rewritten. Standard library only.
 """
@@ -51,29 +57,47 @@ def missing(settings):
     return out
 
 
+def answer():
+    """The user's answer on this machine: "applied", "declined", or None."""
+    kit, _ = read_json(kit_path())
+    value = kit.get("machineSetup") if isinstance(kit, dict) else None
+    return value if value in ("applied", "declined") else None
+
+
+def remember(value):
+    """Write machineSetup into ~/.claude/kit.json beside its other keys; False when it does not parse."""
+    path = kit_path()
+    kit, ok = read_json(path)
+    if not ok:
+        return False
+    kit["machineSetup"] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(kit, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return True
+
+
 def pending():
     """What to offer on this machine, or [] when it is set up, declined, or the file is unreadable."""
-    kit, _ = read_json(kit_path())
-    if isinstance(kit, dict) and kit.get("machineSetup") == "declined":
+    if answer() == "declined":
         return []
     settings, ok = read_json(settings_path())
     return missing(settings) if ok else []
 
 
-def apply():
+def merge():
+    """(code, lines): merge the settings into this account's settings.json, backup first."""
     path = settings_path()
     settings, ok = read_json(path)
     if not ok:
-        print(f"{path} is not a valid JSON object; nothing was changed. Fix it, then run --apply again.")
-        return 1
+        return 1, [f"{path} is not a valid JSON object; nothing was changed. Fix it, then run --apply again."]
     todo = missing(settings)
     if not todo:
-        print("Nothing to do: this machine already has the kit's settings.")
-        return 0
+        return 0, ["Nothing to do: this machine already has the kit's settings."]
+    lines = []
     if path.exists():
         backup = path.with_name("settings.json.kit-backup")
         shutil.copy2(path, backup)
-        print(f"Backup: {backup}")
+        lines.append(f"Backup: {backup}")
     if settings.get("attribution") not in (ATTRIBUTION, False):
         settings["attribution"] = dict(ATTRIBUTION)
     auto = settings.get("autoMode")
@@ -87,22 +111,43 @@ def apply():
     settings["autoMode"] = auto
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"Updated {path}:")
-    for line in todo:
-        print(f"- {line}")
-    print("New sessions pick it up; in a running one, settings reload on their own.")
-    return 0
+    return 0, lines + [f"Updated {path}:"] + [f"- {line}" for line in todo]
+
+
+def apply():
+    code, lines = merge()
+    print("\n".join(lines))
+    if code == 0:
+        if remember("applied"):
+            print(f"Noted in {kit_path()}: another account on this machine gets these settings without being asked.")
+        print("New sessions pick it up; in a running one, settings reload on their own.")
+    return code
+
+
+def auto_apply():
+    """At session start: when the user said yes on this machine and this account's settings still
+    lack the kit's, merge them in. One line for the user, or None when there was nothing to do.
+    An account that set an attribution of its own is asked instead: the yes was given for another
+    account, and a value the user wrote himself is not replaced without asking."""
+    if answer() != "applied" or not pending():
+        return None
+    settings, ok = read_json(settings_path())
+    if not ok or settings.get("attribution", ATTRIBUTION) not in (ATTRIBUTION, False):
+        return None
+    existed = settings_path().exists()
+    code, _ = merge()
+    if code != 0:
+        return None
+    backup = "; a backup is beside it" if existed else ""
+    return (f"kit: applied the kit's machine settings to {settings_path()} (no AI co-author, agents may "
+            f"force-push only their own branches), as you chose on this machine before{backup}.")
 
 
 def decline():
     path = kit_path()
-    kit, ok = read_json(path)
-    if not ok:
+    if not remember("declined"):
         print(f"{path} is not a valid JSON object; nothing was changed.")
         return 1
-    kit["machineSetup"] = "declined"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(kit, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"Noted in {path}: the kit will not offer these settings again on this machine.")
     return 0
 

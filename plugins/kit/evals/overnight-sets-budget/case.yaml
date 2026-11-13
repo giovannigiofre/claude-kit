@@ -1,6 +1,6 @@
 schema_version: "1.1"
 name: overnight-sets-budget
-description: A request to keep improving something overnight reaches kit:overnight, which states the gate, the stop condition and the budget choice instead of starting an open-ended /goal or /loop.
+description: A request to keep improving something overnight reaches kit:overnight, which states the gate, the stop condition and the caps (40 iterations and USD 25 unless the user named others) instead of starting an open-ended /goal or /loop.
 tags: [overnight]
 context:
   scaffold_script: fixture.sh

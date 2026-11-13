@@ -10,23 +10,27 @@ work and follow instructions literally, so generic rules and mandated process co
 lower quality; tests, gates and hooks don't. Every piece of the kit is an assumption about what
 the model can't do alone, re-checked when a new model lands.
 
+**Quick start:** install once ([Install](#install)), run `/kit:init` once in a project, then say
+what you want, in your own words, from the terminal, a cloud session or your phone. That is the
+whole interface: the coordinator picks the skill, starts the work and tells you when a PR is ready.
+
 ---
 
 ## A day with the kit
 
-| When | Type | What happens |
+| When | You say | What happens |
 |---|---|---|
-| Once per project | `/kit:init` | writes `.claude/kit.json` (check, verify, formatters, protected paths), a `verify` skill that says how to exercise the app, a `loop.md` that tells the native `/loop` how to tend a PR (never merging), and proposes safety and permissions |
-| All day | just talk | in a project with `kit.json`, loop mode is on by default: every message goes to the coordinator (`kit:lead`), which answers, starts a thread or steers one, in at most four lines |
+| Once per project | `/kit:init` (the one command to type) | writes `.claude/kit.json` (check, verify, formatters, protected paths), a `verify` skill that says how to exercise the app, a `loop.md` that tells the native `/loop` how to tend a PR (never merging), and proposes permissions and, if you want it, the sandbox |
+| All day | just talk | in a project with `kit.json`, every message goes to the coordinator (`kit:lead`), which answers, starts a thread or steers one, in at most four lines; it works the same in a cloud session and over Remote Control |
 | A messy idea | just write it | the coordinator (or `kit:shape`) asks 2-3 multiple-choice rounds and writes a brief with a checkable DONE WHEN |
-| Thinking it through first | `/kit-mode ask` | a discussion about the repo: Claude reads and reasons, changes no code (docs may be edited); `/kit:handoff` turns the conclusion into a brief and sends it to the coordinator, another open session or a new background session |
-| Finding work | `/kit:scout` | read-only explorers write deduplicated proposal cards (A mechanical, B needs judgment, C human-only) into `.kit/lead/proposals/`; `next` takes the A cards |
+| Thinking it through first | "let's think about X first" | the coordinator reads and reasons and changes nothing until you say go, then the conclusion becomes an item; `/kit:handoff` sends it to another open session or a new background session instead |
+| Finding work | "what should we work on?" | `kit:scout`: read-only explorers write deduplicated proposal cards (A mechanical, B needs judgment, C human-only) into `.kit/lead/proposals/`; `next` takes the A cards |
 | Something broke | describe it | `kit:investigate`: evidence (asks you once, with exact export steps), reproduction, hypotheses, a regression-tested fix |
 | UI or LLM work | describe it | the kit asks "Use Kit UI / Kit LLM for this?" and installs that plugin for the project on yes |
-| First PR in a project | answer once | "Do I merge PRs once they're green, or do you always review them first?"; the answer is saved in `kit.json` (`lead.merge`) |
-| Finishing by hand | `/kit:go` | PR with intent, live evidence (the gate run is recorded on the exact tree), what was fixed, risk; keeps CI green; merges if the project allows it |
-| Evening | "tonight keep doing X until Y" | `kit:overnight`: a fresh session per small step, a commit only when the gate passes, caps or none |
-| Every two weeks or so | `/kit:learn` | when the session-start line says the review is due: turns repeated corrections into checks or rules, and prunes instructions that no longer help (at most 4 changes, each approved); capture and distilling run on their own, `sweep` reads transcripts for repeated corrections |
+| Merging | nothing, or say so | you merge; say "merge green PRs yourself" and the coordinator saves `lead.merge: agent` in `kit.json` |
+| Finishing by hand | "ship it" | `kit:go`: PR with intent, live evidence (the gate run is recorded on the exact tree), what was fixed, risk; keeps CI green; merges if the project allows it |
+| Evening | "tonight keep doing X until Y" | `kit:overnight` starts at once, detached: a fresh session per small step, a commit only when the gate passes, 40 iterations and USD 25 unless you name other caps, the branch pushed once at the end |
+| Every two weeks or so | nothing, or "what has the kit learned?" | when the review is due the coordinator runs `kit:learn` itself: it tidies the lesson ledger, turns repeated corrections into checks or rules and prunes instructions that no longer help, asking you only before it changes an instruction file (at most 4 changes); capture and distilling run on their own, `sweep` reads transcripts for repeated corrections |
 
 Your time goes to the two ends: saying what you want, and judging the PR. The middle is the
 threads' job.
@@ -48,22 +52,19 @@ reviewed, not-high-risk PRs. Medium- or high-risk work gets a review by
 `kit:verifier` in a fresh context before it reaches you. When a thread finishes while you're away,
 the kit sends one notification (desktop, or phone with Remote Control).
 
-**The status line.** `loop · host · $1.20 · needs you 1: a2-region · ready 1: login-page ·
+**The status line.** `$1.20 · needs you 1: a2-region · ready 1: login-page ·
 working 2: chart, cleanup · 1 waiting on a prompt · queued 2`, read again every 15 seconds (it names the
-board's items; `waiting on a prompt`: a thread stopped on a question or a permission; `unattended` appears after the safety profile while that is on). When the board gains a ready item or a question, the kit sends one native
-notification where Claude Code offers one, unless you were just typing in that terminal. Mode
-per project (`/kit-mode`): **Light** (a normal session), **Loop** (every typed message goes to
-the coordinator; the default in a project with `kit.json`) or **Ask** (a discussion: read and
-reason, no code changes, docs may be edited). Safety per project (`/kit-safety`): **Host** or
-**Sandbox**, plus `unattended on` for an evening nobody watches (a permission prompt becomes a
-denial and the thread goes on).
+board's items; `waiting on a prompt`: a thread stopped on a question or a permission; `sandbox` and `away` lead the line while they are on). When the board gains a ready item or a question, the coordinator sends one
+PushNotification (desktop, or phone with Remote Control). Safety in plain words: "I'm off to bed" and the coordinator runs `away on`
+(a permission prompt becomes a denial and the thread goes on, until your next session start);
+"use the sandbox" and it writes the kit's sandbox block for the project.
 
 ---
 
 ## How it works
 
 ```
- you ── message ──► COORDINATOR (kit:lead, loop mode)
+ you ── message ──► COORDINATOR (kit:lead, routed at session start)
                      │ answers in place, or
                      │ starts / steers a thread ──► kit:implementer (background, own worktree)
                      │                                 change → `verify` gate → exercise it →
@@ -86,7 +87,7 @@ denial and the thread goes on).
    SessionStart          lists the project's gates; after a compaction, re-injects the board
                          (rows first, warns past 60 lines or 8 KB); says once when a newer kit
                          is installed than the one loaded (restart), and when the lesson review
-                         is due (at most once per 14 days; declining snoozes it)
+                         is due (at most once per 14 days; the coordinator runs it)
    SubagentStart         gives each kit:implementer and kit:verifier this repo's gate command and
                          lessons from the ledger, most repeated and newest first (about 600
                          tokens max); the hook sees only the session's repo, so it names it,
@@ -102,7 +103,8 @@ denial and the thread goes on).
 
 ## What's in it
 
-**Core plugin `kit`** (user scope, every project):
+**Core plugin `kit`** (user scope, every project; a skill listed without a slash loads on its own when
+what you say fits it; one listed with a slash runs only when typed):
 
 | Piece | What it does |
 |---|---|
@@ -112,14 +114,14 @@ denial and the thread goes on).
 | `kit:overnight` | Launches `scripts/overnight.py`: fresh `claude -p` per step, commit on a green gate, reset otherwise, notes as memory, optional caps, resumes early stops |
 | `kit:extras` | Offers `kit-ui` or `kit-llm` when a task needs one the project lacks |
 | `/kit:handoff` | A discussion's conclusion becomes a brief (an item on disk) sent to the coordinator, an open session, a new background session, or kept as a proposal card |
-| `/kit:scout` | Read-only explorers write deduplicated proposal cards; `take <id>` queues one as an item |
-| `/kit:go` | Intent → sync → test like a user → `/code-review` → `/simplify` → risk → PR → CI green |
-| `/kit:init` | Sets up a project (kit.json, verify skill, loop.md, safety, permissions) |
-| `/kit:learn` | Tidies the lesson ledger (merge, retire shipped fixes, proposals to retire or harden, undo); `promote` turns a lesson seen across repos into a kit PR; corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
-| `/kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
+| `kit:scout` | Read-only explorers write deduplicated proposal cards; `take <id>` queues one as an item |
+| `kit:go` | Intent → sync → test like a user → `/code-review` → `/simplify` → risk → PR → CI green |
+| `/kit:init` | Sets up a project (kit.json, verify skill, loop.md, permissions, the sandbox if wanted); typed, like `/kit:handoff` |
+| `kit:learn` | Tidies the lesson ledger (merge, retire shipped fixes, proposals to retire or harden, undo); `promote` turns a lesson seen across repos into a kit PR; corrections into checks, hooks, skills or CLAUDE.md lines; prunes too |
+| `kit:intake` | Evaluates an outside tool before adoption (see [CATALOG.md](CATALOG.md)) |
 | `kit:implementer` | A thread: one item from brief to PR in its own worktree (another repo's included); effort set per thread by the coordinator (low for a clear, small brief, medium otherwise, high for ambiguous work) |
 | `kit:verifier` | A fresh-context review against the intent at effort medium, with a per-project memory of pitfalls |
-| Hooks + mod | `protect`, `guard`, `on_edit`, `bash_edits`, `permission`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop` (files each thread's report and each verdict under its item), the lesson ledger `lessons.py`, `gate.py` (runs `check` or `verify` and records the tree it passed on: the evidence a PR body cites), `items.py` and `proposals.py` (the coordinator's items and proposal cards on disk); the mod (`kit.tsx`: modes light / loop / ask, safety, status line with threads waiting for you, a native notification when the board gains work for you) |
+| Hooks + mod | `protect`, `guard`, `on_edit`, `bash_edits`, `permission`, `stop_check`, `session_start`, `subagent_start`, `subagent_stop` (files each thread's report and each verdict under its item), the lesson ledger `lessons.py`, `gate.py` (runs `check` or `verify` and records the tree it passed on: the evidence a PR body cites), `items.py` and `proposals.py` (the coordinator's items and proposal cards on disk); the mod (`kit.tsx`: status line with threads waiting for you, a native notification when the board gains work for you) |
 
 **Domain plugins** (project scope, offered by `kit:extras` when a task needs them):
 
@@ -151,15 +153,16 @@ file can set: `"attribution": {"commit": "", "pr": "", "sessionUrl": false}` (no
 footer or session link: you are the only author) and an `autoMode.allow` rule that lets agents
 rewrite and force-push, with lease, the branches they created. On yes it merges them in (with a
 backup, other keys kept); on no it never asks again on that machine
-(`hooks/scripts/machine_setup.py --apply | --decline | --check`).
+(`hooks/scripts/machine_setup.py --apply | --decline | --check`). A second account on the same
+machine (`CLAUDE_CONFIG_DIR`) is then set up without the question, and Claude tells you in one line.
 Each repo's own auto mode environment (org, cloud, secrets, protected branches) is approved once
 in `/kit:init`, kept in your Claude config, and added to that list scoped to the repo; nothing in
 a repo can add to it ([reference](docs/reference.md#auto-mode-environment-per-repo)).
 
 Also worth having in `~/.claude/settings.json` (auto mode is already the default on Pro and Max):
 system notifications on; `"env": {"CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "4"}` if you want a
-hard cap on parallel threads. To change the mode default everywhere, put `{"mode": "light"}`
-(or `"loop"`) in `~/.claude/kit.json`; `/kit-mode` sets it per project.
+hard cap on parallel threads. To turn the coordinator off everywhere, put `{"mode": "light"}`
+in `~/.claude/kit.json`.
 
 Two lines worth having in your personal `~/.claude/CLAUDE.md`, because models trained on human
 estimates otherwise pick the cheap, brittle option and test only in units:
@@ -170,7 +173,7 @@ estimates otherwise pick the cheap, brittle option and test only in units:
 - For a bug fix, first reproduce the bug end to end, as the user meets it, not only in a unit test.
 ```
 
-**Every new project:** `cd project && claude`, then `/kit:init`. Read `.claude/kit.json` and adjust
+**Every new project:** `cd project && claude`, then `/kit:init`, then say what you want. Read `.claude/kit.json` and adjust
 it. It is personal by default: the kit is yours, for your own work on the project, so `/kit:init`
 keeps the file out of Git in the repo's `.git/info/exclude` (not the shared `.gitignore`), and a
 worktree without one reads the main checkout's; commit it only if you choose to share it with the
@@ -209,13 +212,13 @@ project.
   write or the GitHub MCP tools, and a commit made under an AI git identity. A project can add
   its own rules (`guard.denyCommands` / `askCommands`: a regex over the command and the reason);
   it has no deploy rule of its own. It reads shell text, so it is best effort.
-  `/kit-safety unattended on` adds Claude Code's `permissions.denyInsteadOfPrompting` for an
-  evening: a permission prompt becomes a denial and the work goes on; `off` removes it. Whether
-  threads may push, rebase and merge while you are away is a per-repo choice the coordinator asks
-  once, at the first unattended run, and keeps in the repo's gitignored `.claude/kit.local.json`
-  (`ask` until you say otherwise). For `allow`, the kit names the permission rule to add, and
+  Saying you are leaving makes the coordinator add Claude Code's `permissions.denyInsteadOfPrompting`
+  (`items.py away on`): a permission prompt becomes a denial and the work goes on, until your next session start. While you are
+  away, threads push and rebase their own branches and leave merging to you, unless you tell the
+  coordinator otherwise for a repo (it keeps that in the repo's gitignored `.claude/kit.local.json`).
+  For an allowed step, the kit names the permission rule to add, and
   any ask or deny rule elsewhere, such as a committed `Bash(git push*)` ask, that keeps the step
-  at `ask` because an allow rule cannot override one. It shows the change as a diff; you edit the
+  at `ask` because an allow rule cannot override one. If you ask, it shows the change as a diff; you edit the
   file, or ask the coordinator to, and approve its edit with two buttons. Any change to a Claude
   Code settings file asks you in Claude Code's own prompt, headed «Sovrascrittura dei settings di
   Claude Code:», in every mode, and a background thread's is refused.

@@ -3,7 +3,7 @@
 
 The repo has no CI (no Actions minutes), so this is the gate: run it on the branch you are about
 to push, and put its last lines in the PR. It runs each standard-library test file and then the
-mod's tests (`claude plugin test plugins/kit`: modes, safety, status line, watchdog) when the
+mod's tests (`claude plugin test plugins/kit`: status line, watchdog, interim notices) when the
 `claude` command is there; without it that step is reported as skipped, not as passed.
 
 Run: python3 tests/run_all.py        (exit 0 = all good)

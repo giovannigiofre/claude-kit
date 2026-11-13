@@ -1,7 +1,6 @@
 ---
 name: intake
-description: Evaluates a third-party skill, plugin or tool before it joins the setup - licence, what it runs as the user, context cost, overlap with the kit - then writes the CATALOG.md entry and proposes a pinned marketplace entry and a trial. Use when the user mentions adopting, installing or trying an outside skill/plugin/tool ("should we use X", "add Y to the kit", "install Z").
-disable-model-invocation: true
+description: Use when the user mentions adopting, installing or trying an outside tool, skill or plugin ("should we use X", "add Y to the kit", "install Z"). Evaluates it before it joins the setup - licence, what it runs as the user, context cost, overlap with the kit - then writes the CATALOG.md entry and proposes a pinned marketplace entry and a trial.
 argument-hint: <github owner/repo, URL or name>
 ---
 

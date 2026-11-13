@@ -117,7 +117,10 @@ they created for their own items, never on the default branch or someone else's.
 blocks history rewrites by default, and `autoMode` is read from user settings only, so the kit
 offers this rule (with `attribution` off) once per machine at session start and merges it into
 the account's `settings.json` on yes (`~/.claude`, or `CLAUDE_CONFIG_DIR` for a second account on the same
-machine, each checked and set up on its own; `hooks/scripts/machine_setup.py`; `--decline` stops the offer):
+machine; `hooks/scripts/machine_setup.py`; `--decline` stops the offer). The answer is kept for the
+machine in `~/.claude/kit.json` (`machineSetup`), so after a yes a second account is set up at its
+next session start without the question, and Claude says so in one line; an account whose own
+`settings.json` sets a different `attribution` is asked instead:
 
 ```json
 {"autoMode": {"allow": ["$defaults", "On a branch an agent created for its own task (not the default branch, not one someone else pushed to), rewriting its commits (amend, rebase, setting the user's authorship) and pushing it with --force-with-lease"]}}
@@ -247,16 +250,19 @@ python3 <kit>/hooks/scripts/items.py done <id> [--force]   # refuses an open or 
 python3 <kit>/hooks/scripts/items.py status [--json]        # one read-only snapshot of the open items
 python3 <kit>/hooks/scripts/items.py conflicts [<id> ...]   # exit 0 clean, 1 conflict, 2 unknown
 python3 <kit>/hooks/scripts/worktrees.py [--json]           # classify linked worktrees, print a plan
-python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow]
+python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow] [--proposal]
 ```
 
 `unattended`: the owner's git preferences for unattended runs in this repo, in the main
-checkout's `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "ask", "rebase": "ask",
+checkout's `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "allow", "rebase": "allow",
 "merge": "ask"}}}`), which the command adds to `.git/info/exclude`: local to this machine and
 repo, never global, never committed. Without arguments it prints the brief line `UNATTENDED:
-push=ask rebase=ask merge=ask` and whether it is set; a missing, broken or misspelt value is
-`ask`. The coordinator asks only when an unattended run starts and nothing is set, saves the
-answer and briefs every thread of the run with that line ([unattended.md](../plugins/kit/skills/lead/unattended.md)).
+push=.. rebase=.. merge=..` and whether it is set; a missing, broken or misspelt value takes the
+default, push and rebase `allow` and merge `ask` (`kitlib.UNATTENDED_DEFAULTS`). The coordinator
+does not ask: it saves a choice only when the owner states one, and briefs every thread of the run
+with that line ([unattended.md](../plugins/kit/skills/lead/unattended.md)). Until 2026-11 an unset
+step was `ask` and the coordinator asked before the first run; the owner gave the same answer
+each time, which is now the default.
 A thread does not run a step set to `ask` and hands back `needs push` (rebase, merge); `allow`
 runs it. The line carries the effective value, so a saved `allow` prints as `ask` with a note
 naming what to change. Claude Code checks deny, then ask, then allow rules, and the first match
@@ -272,7 +278,7 @@ the rules to add to `.claude/settings.local.json` (`Bash(git push:*)`, `Bash(git
 `Bash(gh pr merge:*)` and `Bash(git merge:*)`). A settings file that does not parse also keeps
 the step at `ask`. A deny rule refuses without a prompt, so one that refuses only some forms (a
 project that forbids force pushes) is named in the note and the step stays `allow`; one that
-refuses every form keeps it at `ask`. The command then prints a PROPOSAL, never applied by it: per
+refuses every form keeps it at `ask`. With `--proposal` the command also prints a PROPOSAL, never applied by it: per
 settings file, the ask rules to remove (never a deny rule) and the rules to add (to `settings.local.json`),
 a warning when a rule also matches other commands, whether the file is committed, and a diff. The
 coordinator applies it only when the owner asks, after an AskUserQuestion with the diff as a
@@ -506,7 +512,7 @@ An `ask` rule wins over every allow rule and over auto mode, in a compound comma
 settings scope (or the guard's `askCommands`) asks before a push, a rebase or a merge as the kit runs them, the
 start-up lines name the rules and their file (`kitlib.asking_rules`), tell Claude to run each such step once
 and never repeat one left waiting, and to tell the owner the cause at the first such prompt and ask once
-whether to change the rules, through `items.py unattended` and its PROPOSAL. The kit never changes them itself.
+whether to change the rules, through `items.py unattended --proposal`. The kit never changes them itself.
 
 `settings_guard.py` (PreToolUse: Write, Edit, MultiEdit, NotebookEdit, Bash, Monitor) answers
 `ask` in every permission mode for a change to a Claude Code settings file: `settings*.json` in
@@ -540,7 +546,7 @@ foreground to edit `~/.claude/settings.json`, gets `ask`. It never answers `allo
 kitlib missing included, answers `ask`. Limits: it reads shell text, so it does not see a name
 built at run time (from variables, a script's own code) or a command that rewrites the whole
 tree (`git checkout -- .`, `git stash`, `git reset --hard`); and `machine_setup.py --apply`
-(autoMode) and `/kit-safety` write settings without a tool call naming the file.
+(autoMode) and `items.py away on` / `sandbox on` write settings without a tool call naming the file.
 
 ## Lessons
 
@@ -648,11 +654,12 @@ timeout or an unclear answer the lesson stays local and is asked about on a late
 a generic rewording, promoted only when that passes the structural check too.
 
 **Upkeep**: from 14 days after the last review (the first session starts the clock) the session
-start adds one line, "the lesson review is due", at most once per 14 days (a declined review comes
-back a period later), and `/kit:learn` runs `lessons.py review --dry-run`, which changes nothing
+start adds one line, "the lesson review is due", at most once per 14 days, and the coordinator
+runs the review itself (`kit:learn` loads on its own; it asks the user only before changing a
+committed instruction file, and a skipped review comes back a period later). It runs `lessons.py review --dry-run`, which changes nothing
 and previews the distiller's merges, retires and promotions on a throwaway copy of the ledgers (its
 rewords too when the model is allowed: that one call counts for the day and the review applies its
-answer; `--no-model` says rewords are skipped), then, once the user agrees, `lessons.py review`: it
+answer; `--no-model` says rewords are skipped), then `lessons.py review` (every change has an undo): it
 drops the ledgers of test and scratchpad repos and retires the machine lessons only they held
 (`prune`), retires lessons not seen for 90 days (delivered or not; a kept one stays), then runs the distiller. Every
 retire can be undone; a dropped ledger cannot. The dry run writes only metadata to `_repos.json`
@@ -678,22 +685,27 @@ python3 <kit>/hooks/scripts/lessons.py promoted ID VERSION PR_URL [DIR]
 git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
 ```
 
-## Modes and the status line
+## Routing and the status line
 
-- **Light**: a normal session. `/kit:lead <work>` starts the coordinator when you want it.
-- **Loop**: every message you type (terminal or Remote Control) gets one line of context sending
-  it to the coordinator; headless runs, scheduled prompts and notifications never do. `/kit-mode
-  loop|light|ask`. Without a choice for the project, the personal default in
-  `~/.claude/kit.json` (`{"mode": "light"}` or `"loop"`) applies, else loop in a project with
-  `.claude/kit.json` and light elsewhere.
-- **Ask**: a discussion about the repository. Every typed message gets one line of context:
-  explore, explain, reason and propose; change no code; documentation (Markdown, `docs/`) may be
-  edited when you ask; offer `/kit:handoff` when something worth doing emerges. It is an
-  instruction, not a block: the guard keeps protecting the irreversible things, nothing else is
-  refused. `/kit:handoff [lead | session <name> | bg | save | card]` writes the brief
+- **One mode**: in a project with `.claude/kit.json`, session start (and the start after a
+  compaction) prints one line that makes the session the coordinator: every message is handled with
+  `kit:lead`, which answers a question in place, makes a small change itself and starts background
+  threads for the rest. It is a hook, not the mod, so it works in a cloud session and over Remote
+  Control as well. Not printed in a headless run (`KIT_HEADLESS`), in a subagent, or when
+  `~/.claude/kit.json` says `{"mode": "light"}` (the personal off switch: a normal session, with
+  `/kit:lead <work>` when you want the coordinator). Until 2026-11 the mod added this line per
+  prompt in a "loop" mode and had light and ask modes beside it; they were removed because the
+  routing must not depend on the mod loading.
+- **Skills that load on their own**: the coordinator loads `kit:go` (a change is ready to ship, or
+  "finish it"), `kit:learn` (the review is due, or "what has the kit learned?"), `kit:intake`
+  (adopting or trying an outside tool) and `kit:scout` ("what should we work on?") from what you
+  say, so nothing needs a slash command from a phone. `/kit:init` and `/kit:handoff` run only when
+  typed. Until 2026-11 all six were typed only.
+- **Discussion and handoff**: to think a change through first, say so; nothing changes until you
+  ask. `/kit:handoff [lead | session <name> | bg | save | card]` writes the brief
   (`kit:shape`'s format plus PLACES and DECISIONS), saves it as an item
-  (`.kit/lead/items/<id>/BRIEF.md`) and sends it: to this session's coordinator (queued; it
-  starts at the next message in loop mode), to another open session on this machine
+  (`.kit/lead/items/<id>/BRIEF.md`) and sends it: to this session's coordinator (queued and
+  started), to another open session on this machine
   (cross-session `SendMessage`; it arrives as a message from a peer and that session confirms with
   you first; the receiving session's `crossSessionInbound` setting must accept), to a new
   background session (`claude --bg --name <id>`, then `claude attach <id>` or `claude agents`),
@@ -713,33 +725,51 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
   (`working` and `landing`; without a board, the engine's `N running`), `queued 3`. It shows two
   ids and then `+n`, re-reads the board every 15 seconds (a Markdown table, a capitalised status, a
   dropped cell or a `;` inside a question read the same), and adds `N waiting on a prompt` for
-  threads stopped on a question or a permission (the engine's agent list). When a tick finds an id
-  newly ready or newly needing you, the mod sends one native notification naming it, with its
-  question (`$.ui.notify`, Claude Code 2.1.295+; silently skipped where the engine lacks it), unless you
-  were active in the terminal within the last minute; in loop mode the coordinator is told the
-  mod notifies, so you get one notice per event, not two. A prompt that arrives over Remote Control
-  says the opposite for as long as you are remote: on a phone neither the line nor that notification
-  shows, so the coordinator sends one PushNotification itself when an item becomes ready or needs you.
-- **Safety**: `/kit-safety host|sandbox`. Sandbox writes the kit's block into
-  `.claude/settings.local.json`; check it with `/sandbox`, add hosts under
-  `sandbox.network.allowedDomains`. Where the sandbox can't start, commands run unsandboxed with
-  a warning rather than all failing. `/kit-safety unattended on|off` (Claude Code 2.1.319) writes
-  `permissions.denyInsteadOfPrompting` into the same file: a tool call that would wait on a
-  permission prompt is denied and the turn goes on, in this session and its threads. For an
-  evening nobody will watch; off by default, since a denied action lowers a thread's chances
-  silently; the status line shows `unattended` while it is on, so a forgotten switch is visible
-  the next morning. `permissions.blockWritesOutsideWorkingDirectories` (2.1.314) is not for a kit
-  project: it refuses a thread's edits in another repo and removes the worktree tools.
+  threads stopped on a question or a permission (the engine's agent list). It starts with `sandbox`
+  and `away` while those are on (the merged settings), then the session's cost. The coordinator sends
+  one PushNotification when an item becomes ready or needs you and when an unattended run ends
+  (it reaches the phone over Remote Control); the mod sends none of its own for board changes.
+- **Safety**, in plain words to the coordinator, which runs `items.py`:
+  - "I'm going to sleep" (or leaving for the evening): `items.py away on` sets Claude Code's
+    `permissions.denyInsteadOfPrompting` (2.1.319) in the account's own `settings.json` (backup
+    `settings.json.kit-away-backup`, other keys kept, a file that does not parse left alone): a
+    tool call that would wait on a permission prompt is denied and the turn goes on. The kit notes
+    that it set it (`kit-away.json` beside settings.json) and takes it away at the next interactive
+    session start (not a headless run, not a compaction) or on `away off`; a value you set yourself
+    is never removed. The status line shows `away` while it is on. Until 2026-11 the mod's
+    `/kit-safety unattended` wrote it into the project's `settings.local.json`; session start
+    removes it from there once and says so.
+  - "Use the sandbox": `items.py sandbox on` writes the kit's block into
+    `.claude/settings.local.json` (a block of your own is left alone): the registries' and GitHub's
+    hosts, no read of `~/.aws`, `~/.docker`, `~/.kube`, `~/.gnupg`, Bash without a prompt inside it
+    (`autoAllowBashIfSandboxed`), and `git push`, `fetch` and `pull` outside it, so they keep their
+    credentials. Check it with `/sandbox`; add hosts under `sandbox.network.allowedDomains`. Where
+    the sandbox can't start, commands run unsandboxed with a warning rather than all failing. The
+    status line shows `sandbox` while it is on. `sandbox off` changes nothing and prints the edit:
+    loosening a setting is yours to approve.
+  - `permissions.blockWritesOutsideWorkingDirectories` (2.1.314) is not for a kit project: it
+    refuses a thread's edits in another repo and removes the worktree tools.
 
-The mod needs Claude Code with mods (2.1.287+). Without it, the skills and hooks still work; use
-`/kit:lead` directly instead of loop mode.
+The mod needs Claude Code with mods (2.1.287+). Without it, the skills, hooks and the routing
+line still work; only the status line, the watchdog and the interim-notice drop are missing.
 
 ## Overnight runner
 
 ```
 python3 <kit>/skills/overnight/scripts/overnight.py "<objective>" --stop-when "<condition>" \
-  --worktree ../app-overnight --max-iterations 40 --max-usd 25 --effort medium [--fallback-model sonnet] [--max-turns 60]
+  --worktree ../app-overnight --max-iterations 40 --max-usd 25 --effort medium [--fallback-model sonnet] [--max-turns 60] \
+  [--push] [--detach]
 ```
+
+The coordinator starts a night itself, without an OK round or a budget question: `items.py away
+on`, then the runner with 40 iterations and USD 25 unless the owner named other caps (or none),
+stated in its reply. `--detach` starts the runner again in its own process session (setsid),
+with its output in `.kit/overnight/launch/<time>-<pid>.log`, and returns within about 5 seconds
+with the pid and the log path; a run that stops in that time (a dirty tree, a bad flag) prints its
+log and exit code instead. It is not a Bash `run_in_background` command, which ends with the
+session, and the guard's wait rule does not apply to it. `--push`: when the run ends with commits,
+the runner pushes its branch to `origin` once (`git push -u`), so the morning result can be read
+from a phone; `end-state.json` `pushed` says what happened, and a failed push never fails the run.
 
 Each iteration runs `claude -p` in permission mode `auto` unless `--permission-mode` says
 otherwise, with `--permission-prompts none` (a headless session cannot answer a prompt: anything
@@ -838,7 +868,7 @@ same model.
 | kit | `lead-verifies-before-done` | a small goal ends with a checkable done and evidence from running it |
 | kit | `verifier-catches-bug` | a claimed-done change with a planted bug is rejected |
 | kit | `go-reports-risk-and-evidence` | `/kit:go` reports intent, evidence from running the CLI, a risk rating |
-| kit | `overnight-sets-budget` | an overnight request reaches `kit:overnight` with a gate, a stop condition and a budget choice |
+| kit | `overnight-sets-budget` | an overnight request reaches `kit:overnight` with a gate, a stop condition and stated caps |
 | kit | `investigate-asks-for-evidence` | console-only production logs: one batched request for failing and working exports |
 | kit | `investigate-logs-root-cause` | the fix lands where the bad data enters, with a regression test |
 | kit | `offers-domain-plugin` | a UI request in a project without kit-ui reaches `kit:extras` |

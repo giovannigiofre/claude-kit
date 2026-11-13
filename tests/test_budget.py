@@ -12,7 +12,8 @@ Checks, over every plugin in plugins/:
     step"): the current models decline those (reasoning_extraction) and the kit never needed them;
   - the core plugin has no hook that runs on every prompt or every tool call;
   - the lessons the SubagentStart hook hands a thread stay within SUBAGENT_LESSONS chars, and the
-    ones SessionStart adds (with the kit's news lines) within SESSION_LESSONS;
+    ones SessionStart adds (with the kit's news lines and its coordinator line, itself within
+    COORDINATOR_MAX) within SESSION_LESSONS;
   - every `kit:x`, `kit-ui:x`, `kit-llm:x` reference names a skill or agent that exists;
   - packaging: every script a hooks.json command names under ${CLAUDE_PLUGIN_ROOT} exists; no file
     under plugins/ holds a personal absolute path; no SKILL.md, agent or reference file holds
@@ -36,10 +37,15 @@ PLUGINS = ROOT / "plugins"
 # characters of always-on description text per plugin (about 4 characters per token)
 # kit-ui 1200 -> 1300 on 2026-11-12 for kit-ui:direction: kit-ui loads only in UI projects,
 # so its 276 chars cost nothing elsewhere.
-ALWAYS_ON_BUDGET = {"kit": 2600, "kit-ui": 1300, "kit-llm": 1200}
+# kit 2600 -> 4200 on 2026-11-13: go, learn, intake and scout load on their own now (the owner talks
+# from a phone and does not type slash commands), so their descriptions are always on, about 1500 chars.
+ALWAYS_ON_BUDGET = {"kit": 4200, "kit-ui": 1300, "kit-llm": 1200}
 MAX_DESCRIPTION = 1024
 SUBAGENT_LESSONS = 2400  # about 600 tokens, injected into every kit:implementer and kit:verifier
 SESSION_LESSONS = 1600  # about 400 tokens, added to the session start text
+# the coordinator line session_start.py prints in a kit project (start and compaction); its length
+# comes out of SESSION_LESSONS, so this cap keeps most of that room for the lessons
+COORDINATOR_MAX = 450
 MAX_SKILL_LINES = 150
 MAX_AGENT_LINES = 80
 MAX_REFERENCE_LINES = 200
@@ -199,6 +205,11 @@ def main():
                         .read_text(encoding="utf-8"), re.M)
     if not session or int(session.group(1)) > SESSION_LESSONS:
         problems.append(f"plugins/kit/hooks/scripts/session_start.py: SESSION_LESSONS over {SESSION_LESSONS}")
+    sys.path.insert(0, str(PLUGINS / "kit" / "hooks" / "scripts"))
+    import session_start  # noqa: E402 (standard library only, nothing runs on import)
+    if len(session_start.COORDINATOR) > COORDINATOR_MAX:
+        problems.append(f"plugins/kit/hooks/scripts/session_start.py: COORDINATOR is {len(session_start.COORDINATOR)} "
+                        f"chars (max {COORDINATOR_MAX})")
 
     docs = [p for p in PLUGINS.rglob("*.md") if "evals" not in p.parts]
     docs += [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md"))

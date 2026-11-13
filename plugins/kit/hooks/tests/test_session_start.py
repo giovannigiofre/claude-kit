@@ -33,7 +33,7 @@ def main():
         (repo / ".claude" / "lead").mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
 
-        assert run({"cwd": str(repo), "source": "startup"}) == "", "no kit.json, no board: silent"
+        assert run({"cwd": str(repo), "source": "startup"}) == "", "no kit.json, no board: silent, no coordinator"
 
         board = "SHIP: pr | PARALLEL: 3 | BUDGET: none\nA1 | ship | login | DONE WHEN e2e | working | agent A1 | feat/login | -\n"
         (repo / ".claude" / "lead" / "board.md").write_text(board)
@@ -109,14 +109,45 @@ def main():
         subprocess.run([sys.executable, str(script), "--apply"], env={**os.environ, "HOME": str(fresh)},
                        capture_output=True, check=True)
         assert "Kit setup" not in run({"cwd": str(repo), "source": "startup"}, home=fresh, **local), "applied: silent"
+        second = Path(tmp) / "second-account"  # another CLAUDE_CONFIG_DIR on the machine that said yes
+        out = run({"cwd": str(repo), "source": "startup"}, home=fresh, CLAUDE_CONFIG_DIR=str(second), **local)
+        assert "kit: applied the kit's machine settings" in out and "Kit setup" not in out, out
+        assert json.loads((second / "settings.json").read_text())["attribution"]["commit"] == "", "written"
+        assert "applied the kit" not in run({"cwd": str(repo), "source": "startup"}, home=fresh,
+                                            CLAUDE_CONFIG_DIR=str(second), **local), "said once"
 
         # a kit.json that exists is the opt-in, even `{}`: the header line always prints
         (repo / ".claude" / "kit.json").write_text("{}")
         out = run({"cwd": str(repo), "source": "startup"})
         # this project's legacy board still has A1 working, so its state waits in .claude/, saying why
-        *waiting, header = out.strip().splitlines()
+        coordinator, *waiting, header = out.strip().splitlines()
         assert header == "kit harness active for this project (.claude/kit.json):", out
         assert len(waiting) == 1 and "waits to move from .claude/ to .kit/ (board row A1 is working" in waiting[0], out
+        # the coordinator line: on every interactive start and after a compaction, routed without the mod
+        assert coordinator.startswith("kit: this session coordinates this project") and "kit:lead" in coordinator, out
+        assert "PushNotification" in coordinator and "none for progress" in coordinator, coordinator
+        assert coordinator in run({"cwd": str(repo), "source": "compact"}).splitlines(), "back after a compaction"
+        assert coordinator in run({"cwd": str(repo), "source": "resume"}).splitlines()
+        assert "coordinates" not in run({"cwd": str(repo), "source": "startup"}, KIT_HEADLESS="1"), "not headless"
+        assert "coordinates" not in run({"cwd": str(repo), "source": "startup", "agent_id": "a1"}), "not a subagent"
+        light = Path(tmp) / "light-home"
+        (light / ".claude").mkdir(parents=True)
+        (light / ".claude" / "kit.json").write_text(json.dumps({"machineSetup": "declined", "mode": "Light"}))
+        out = run({"cwd": str(repo), "source": "startup"}, home=light)
+        assert "coordinates" not in out and "kit harness active" in out, "the personal light mode is the off switch"
+        assert "coordinates" not in run({"cwd": str(repo), "source": "compact"}, home=light)
+
+        # the old /kit-safety unattended left denyInsteadOfPrompting in settings.local.json: removed, said once
+        local = repo / ".claude" / "settings.local.json"
+        local.write_text(json.dumps({"permissions": {"denyInsteadOfPrompting": True, "allow": ["Bash(make)"]}, "model": "opus"}))
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert "removed permissions.denyInsteadOfPrompting" in out, out
+        assert json.loads(local.read_text()) == {"permissions": {"allow": ["Bash(make)"]}, "model": "opus"}
+        assert "removed permissions" not in run({"cwd": str(repo), "source": "startup"}), "said once"
+        local.write_text(json.dumps({"permissions": {"denyInsteadOfPrompting": False}}))
+        run({"cwd": str(repo), "source": "startup"})
+        assert json.loads(local.read_text()) == {}, "a false is dropped too, and an emptied permissions goes"
+        local.unlink()
         # a typo is named with the closest known key, at the top level and inside a section
         (repo / ".claude" / "kit.json").write_text(json.dumps({"chek": "make lint", "verfy": "make test",
                                                                "lead": {"baord": "docs/b.md", "notes": "n"},

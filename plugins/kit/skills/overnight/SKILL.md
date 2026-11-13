@@ -35,15 +35,12 @@ benchmark score up, no failing e2e scenario) or ones where the user trusts Claud
 
 If the objective is vague, use `kit:shape` first.
 
-## 2. Budget: ask
+## 2. Budget: defaults
 
-Ask with AskUserQuestion (header "Budget"); if nobody can answer (a non-interactive run), pick
-caps, write them in the command and say they are your assumption:
-
-1. **Caps (Recommended):** max iterations and/or USD, e.g. `--max-iterations 40 --max-usd 25`.
-2. **Iterations only:** e.g. `--max-iterations 40`.
-3. **No budget:** the run ends only on the stop condition, 3 failed iterations in a row, or
-   Ctrl-C. Fine on a subscription the user is happy to spend; say plainly that nothing caps it.
+Do not ask. Unless the user named caps, use `--max-iterations 40 --max-usd 25`, and say so in
+your reply in one line, with how to change them. When the user says no budget, leave the caps
+out: the run then ends only on the stop condition, 3 failed iterations in a row, or Ctrl-C, and
+the reply says plainly that nothing caps it.
 
 Other knobs: `--max-tokens` (input + cache-write + output), `--iteration-usd` (cap per
 iteration), `--max-turns` (per iteration), `--max-failures` (default 3), `--effort` (`medium` is a
@@ -61,7 +58,7 @@ runs from the system prompt, to measure whether the model still needs it.
 - The gate passes on the starting commit: run it once. A red gate at the start fails every
   iteration.
 - No production credentials in the environment the agent will see.
-- Safety: with the project on **Sandbox** (`/kit-safety sandbox`) the runner
+- Safety: with the project on **Sandbox** (`items.py sandbox on`) the runner
   passes the Bash sandbox to every iteration, worktrees included (`--no-sandbox` to skip); on
   **Host** the kit guard still blocks irreversible actions. For `--permission-mode
   bypassPermissions`, only inside a microVM or devcontainer, never on the bare machine.
@@ -71,13 +68,19 @@ runs from the system prompt, to measure whether the model still needs it.
 
 ## 4. Launch
 
-It runs for hours, so start it where it survives the session: give the user the line to run in
-a terminal or a tmux window, or, if they ask you to start it, launch it with Bash
-`run_in_background`. Example:
+It runs for hours, so start it yourself where it survives the session. First run
+`python3 ${CLAUDE_SKILL_DIR}/../../hooks/scripts/items.py away on` (a permission prompt becomes a
+denial until the user's next session start). Then launch with `--detach`: the runner starts again
+in its own process session, output in a log under the runs folder, and the Bash call returns
+within about 5 seconds with the pid and the log path, or with the error and exit code of a run
+that stopped at once. Add `--push` unless the user said not to push in this repo: when the run
+ends with commits it pushes the branch once, so the result can be read from a phone. Do not use
+Bash `run_in_background` for it: that run ends with the session. A user who wants it in their own
+terminal or tmux window gets the same line without `--detach`. Example:
 
 ```
 python3 <kit>/skills/overnight/scripts/overnight.py "Pretend you are a 7-year-old, use the app end to end, fix the first usability problem you meet" \
-  --worktree ../app-overnight --max-iterations 40 --max-usd 25 --permission-mode auto
+  --worktree ../app-overnight --max-iterations 40 --max-usd 25 --push --detach
 ```
 
 What each iteration does: one small step, the gate, then commit (`overnight #N: <summary>`)
@@ -113,4 +116,5 @@ Run files in `.kit/overnight/<run id>/` of the checkout the run is in, as the ru
    interactive rebase or cherry-pick the good ones onto a fresh branch.
 3. Have `kit:verifier` review the branch against the objective, then `/kit:go` to open the PR
    with evidence and a risk rating. The overnight commits are first-pass work, not reviewed work.
-4. If a failure repeated in the notes, suggest `/kit:learn` so the next run avoids it.
+4. If a failure repeated in the notes, run the `kit:learn` review yourself so the next run avoids
+   it; ask the user only before it changes a committed instruction file.

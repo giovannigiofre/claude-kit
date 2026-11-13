@@ -44,6 +44,8 @@ def main():
     assert after["autoMode"]["allow"] == ["Trust our staging bucket", machine_setup.OWN_BRANCHES], \
         "a custom allow list is extended, not given $defaults it did not have"
     assert (home / ".claude" / "settings.json.kit-backup").is_file()
+    assert json.loads((home / ".claude" / "kit.json").read_text()) == {"machineSetup": "applied"}, \
+        "the yes is remembered for the machine"
     assert run(home, "--check")[0] == 0
     code, out = run(home, "--apply")
     assert code == 0 and "Nothing to do" in out and json.loads(settings.read_text()) == after, "idempotent"
@@ -79,6 +81,29 @@ def main():
     assert json.loads((two / ".claude" / "settings.json").read_text()) == {"permissions": {"allow": ["Bash(ls)"]}}, \
         "the other account's settings are untouched"
     assert run(two, "--check", config=work)[0] == 0 and run(two, "--check")[0] == 1, "each account is checked on its own"
+
+    # after that yes, a third account on this machine is set up at its session start without the question
+    def auto(home, config):
+        saved = {k: os.environ.get(k) for k in ("HOME", "CLAUDE_CONFIG_DIR")}
+        os.environ.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(config))
+        try:
+            return machine_setup.auto_apply()
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+    third = two / "third-account"
+    line = auto(two, third)
+    assert line and "applied the kit's machine settings" in line and "backup" not in line, line
+    assert machine_setup.missing(json.loads((third / "settings.json").read_text())) == [], "set up in full"
+    assert auto(two, third) is None, "once: a set-up account is silent"
+    custom = two / "custom-account"
+    custom.mkdir()
+    (custom / "settings.json").write_text(json.dumps({"attribution": {"commit": "Signed by me"}}))
+    assert auto(two, custom) is None and "Signed by me" in (custom / "settings.json").read_text(), \
+        "an attribution the user wrote in that account is not replaced without asking"
+    assert auto(declined, declined / "other") is None and not (declined / "other").exists(), "declined: nothing"
+    nobody = Path(tempfile.mkdtemp())
+    assert auto(nobody, nobody / "acct") is None, "never answered: asked, not applied"
     print("machine_setup: all checks passed")
 
 
