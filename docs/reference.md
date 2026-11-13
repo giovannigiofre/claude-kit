@@ -237,16 +237,19 @@ python3 <kit>/hooks/scripts/items.py done <id> [--force]   # refuses an open or 
 python3 <kit>/hooks/scripts/items.py status [--json]        # one read-only snapshot of the open items
 python3 <kit>/hooks/scripts/items.py conflicts [<id> ...]   # exit 0 clean, 1 conflict, 2 unknown
 python3 <kit>/hooks/scripts/worktrees.py [--json]           # classify linked worktrees, print a plan
-python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow]
+python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow] [--proposal]
 ```
 
 `unattended`: the owner's git preferences for unattended runs in this repo, in the main
-checkout's `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "ask", "rebase": "ask",
+checkout's `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "allow", "rebase": "allow",
 "merge": "ask"}}}`), which the command adds to `.git/info/exclude`: local to this machine and
 repo, never global, never committed. Without arguments it prints the brief line `UNATTENDED:
-push=ask rebase=ask merge=ask` and whether it is set; a missing, broken or misspelt value is
-`ask`. The coordinator asks only when an unattended run starts and nothing is set, saves the
-answer and briefs every thread of the run with that line ([unattended.md](../plugins/kit/skills/lead/unattended.md)).
+push=.. rebase=.. merge=..` and whether it is set; a missing, broken or misspelt value takes the
+default, push and rebase `allow` and merge `ask` (`kitlib.UNATTENDED_DEFAULTS`). The coordinator
+does not ask: it saves a choice only when the owner states one, and briefs every thread of the run
+with that line ([unattended.md](../plugins/kit/skills/lead/unattended.md)). Until 2026-11 an unset
+step was `ask` and the coordinator asked before the first run; the owner gave the same answer
+each time, which is now the default.
 A thread does not run a step set to `ask` and hands back `needs push` (rebase, merge); `allow`
 runs it. The line carries the effective value, so a saved `allow` prints as `ask` with a note
 naming what to change. Claude Code checks deny, then ask, then allow rules, and the first match
@@ -262,7 +265,7 @@ the rules to add to `.claude/settings.local.json` (`Bash(git push:*)`, `Bash(git
 `Bash(gh pr merge:*)` and `Bash(git merge:*)`). A settings file that does not parse also keeps
 the step at `ask`. A deny rule refuses without a prompt, so one that refuses only some forms (a
 project that forbids force pushes) is named in the note and the step stays `allow`; one that
-refuses every form keeps it at `ask`. The command then prints a PROPOSAL, never applied by it: per
+refuses every form keeps it at `ask`. With `--proposal` the command also prints a PROPOSAL, never applied by it: per
 settings file, the ask rules to remove (never a deny rule) and the rules to add (to `settings.local.json`),
 a warning when a rule also matches other commands, whether the file is committed, and a diff. The
 coordinator applies it only when the owner asks, after an AskUserQuestion with the diff as a
@@ -495,7 +498,7 @@ An `ask` rule wins over every allow rule and over auto mode, in a compound comma
 settings scope (or the guard's `askCommands`) asks before a push, a rebase or a merge as the kit runs them, the
 start-up lines name the rules and their file (`kitlib.asking_rules`), tell Claude to run each such step once
 and never repeat one left waiting, and to tell the owner the cause at the first such prompt and ask once
-whether to change the rules, through `items.py unattended` and its PROPOSAL. The kit never changes them itself.
+whether to change the rules, through `items.py unattended --proposal`. The kit never changes them itself.
 
 `settings_guard.py` (PreToolUse: Write, Edit, MultiEdit, NotebookEdit, Bash, Monitor) answers
 `ask` in every permission mode for a change to a Claude Code settings file: `settings*.json` in

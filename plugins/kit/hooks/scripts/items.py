@@ -31,7 +31,7 @@ queued | agent - | - | from <source>`), so a handed-off or taken item is seen. S
     python3 items.py done <id> [--force]
     python3 items.py status [--json]
     python3 items.py conflicts [<id> ...]
-    python3 items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow]
+    python3 items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow] [--proposal]
     python3 items.py records [set "<place>: <what to update>" ...]
     python3 items.py away on|off|status
     python3 items.py sandbox on|off|status
@@ -56,12 +56,13 @@ checkout's gitignored .claude/kit.local.json `lead.records` (kitlib.records); no
 to find them. `done` prints them as the item's checklist.
 
 `unattended` prints this repo's unattended git preferences as the brief line `UNATTENDED: push=..
-rebase=.. merge=..`, saying when they are not set yet; with arguments it saves them in the main
-checkout's gitignored .claude/kit.local.json (kitlib.unattended_prefs). The line carries the
-effective value: a saved `allow` prints as `ask`, with the file and rule to change, while a deny or
-ask rule in any settings scope matches the step or no allow rule covers it (kitlib.unattended_effective).
-It then prints a PROPOSAL, the settings change per file as a JSON diff, which it never applies
-(kitlib.unattended_proposal).
+rebase=.. merge=..`; not set, they are the defaults push=allow rebase=allow merge=ask
+(kitlib.UNATTENDED_DEFAULTS). With arguments it saves them in the main checkout's gitignored
+.claude/kit.local.json (kitlib.unattended_prefs). The line carries the effective value: an `allow`
+prints as `ask`, with the file and rule to change, while a deny or ask rule in any settings scope
+matches the step or no allow rule covers it (kitlib.unattended_effective). With `--proposal`, for an
+owner who asks how to change that, it also prints a PROPOSAL, the settings change per file as a JSON
+diff, which it never applies (kitlib.unattended_proposal).
 
 `away on` sets permissions.denyInsteadOfPrompting in the account's settings.json (backup first, other
 keys kept, a file that does not parse left alone), so a permission prompt becomes a denial while
@@ -675,8 +676,8 @@ def main(argv=None):
         print("\n".join(lines))
         return code
     if cmd == "unattended":
-        changes = {}
-        for arg in rest:
+        changes, want_proposal = {}, "--proposal" in rest
+        for arg in [a for a in rest if a != "--proposal"]:
             step, _, value = arg.partition("=")
             if step not in kitlib.UNATTENDED_STEPS or value not in ("ask", "allow"):
                 print(f"items: unattended takes push=, rebase=, merge= each ask or allow, not {arg!r}", file=sys.stderr)
@@ -691,11 +692,13 @@ def main(argv=None):
         _, is_set, path = kitlib.unattended_prefs(root)
         effective, notes = kitlib.unattended_effective(root)
         line = "UNATTENDED: " + " ".join(f"{k}={effective[k]}" for k in kitlib.UNATTENDED_STEPS)
-        print(line + (f"  (from {path})" if is_set else "  (not set for this repo: ask the user, then save the answer)"))
+        print(line + (f"  (from {path})" if is_set else "  (not set for this repo: the defaults, push and rebase allowed, merge asked)"))
         for k in kitlib.UNATTENDED_STEPS:
             if k in notes:
                 print(notes[k])
-        proposal = kitlib.unattended_proposal(root)
+        proposal = kitlib.unattended_proposal(root) if want_proposal else []
+        if want_proposal and not proposal:
+            print("PROPOSAL: none (no rule to change, or a settings file above does not parse).")
         if proposal:
             print("PROPOSAL, not applied: this command never writes settings. Only when the owner asks, the "
                   "coordinator shows this diff and makes it with one Edit per file, which Claude Code asks the owner "

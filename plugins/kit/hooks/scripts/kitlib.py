@@ -125,11 +125,15 @@ def main_checkout(cwd):
 
 # The owner's unattended git preferences for one repository, in its main checkout's gitignored
 # `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "ask", "rebase": "ask", "merge": "ask"}}}`):
-# local to this machine and this repo, never global, never committed. `ask` (the default, and
-# whatever is missing, misspelt or unreadable) means nobody answers a permission prompt during an
-# unattended run, so a thread hands that step back; `allow` means it proceeds as when attended,
-# once the permission rules let it run without a prompt (unattended_effective).
+# local to this machine and this repo, never global, never committed. `ask` means nobody answers a
+# permission prompt during an unattended run, so a thread hands that step back; `allow` means it
+# proceeds as when attended, once the permission rules let it run without a prompt
+# (unattended_effective). A step the file does not set, or sets to anything else, takes
+# UNATTENDED_DEFAULTS: until 2026-11 every unset step was `ask` and the coordinator asked the owner
+# before each first run, a question he answered the same way each time (push and rebase on the
+# thread's own branch, merge his), so now that answer is the default and nobody is asked.
 UNATTENDED_STEPS = ("push", "rebase", "merge")
+UNATTENDED_DEFAULTS = {"push": "allow", "rebase": "allow", "merge": "ask"}
 LOCAL_CONFIG = ".claude/kit.local.json"
 # What `allow` needs so the step runs without a prompt: the owner adds these to the repo's
 # .claude/settings.local.json `permissions.allow`, by hand or by approving the coordinator's Edit
@@ -139,14 +143,18 @@ UNATTENDED_RULES = {"push": ["Bash(git push:*)"], "rebase": ["Bash(git rebase:*)
 
 
 def unattended_prefs(cwd):
-    """(prefs, is_set, path): every step `ask` or `allow`; is_set when the repo's file names any step."""
+    """(prefs, is_set, path): every step `ask` or `allow`, an unset or misspelt one taking its
+    default; is_set when the repo's file names any step."""
     root = main_checkout(cwd) or Path(cwd)
     path = Path(root) / LOCAL_CONFIG
     value, _ = read_json(path)
     lead = (value or {}).get("lead")
     own = lead.get("unattended") if isinstance(lead, dict) else None
     own = own if isinstance(own, dict) else {}
-    prefs = {k: ("allow" if str(own.get(k, "")).strip().lower() == "allow" else "ask") for k in UNATTENDED_STEPS}
+    prefs = {}
+    for k in UNATTENDED_STEPS:
+        value = str(own.get(k, "")).strip().lower()
+        prefs[k] = value if value in ("ask", "allow") else UNATTENDED_DEFAULTS[k]
     return prefs, any(k in own for k in UNATTENDED_STEPS), path
 
 
@@ -337,19 +345,21 @@ def unattended_effective(cwd):
     any scope matches its commands, and an allow rule covers every one of them; otherwise `ask`,
     with a note per allow-step saying what keeps it at ask and which file and rule to change."""
     files, unreadable, steps = _unattended_steps(cwd)
+    _, is_set, _ = unattended_prefs(cwd)
+    said = "allow saved" if is_set else "allow by default"
     effective, notes = {k: "ask" for k in UNATTENDED_STEPS}, {}
     for step, (blocked, covered, refused) in steps.items():
         if unreadable:
-            notes[step] = (f"{step}: allow saved, but it stays ask: {', '.join(map(str, unreadable))} does not parse, "
+            notes[step] = (f"{step}: {said}, but it stays ask: {', '.join(map(str, unreadable))} does not parse, "
                            f"so its rules are unknown; fix it first.")
         elif blocked:
             which = "; ".join(f'{b} rule "{r}" in {f}' for b, r, f in blocked)
-            notes[step] = (f"{step}: allow saved, but it stays ask: {which} matches, and deny and ask answers come "
+            notes[step] = (f"{step}: {said}, but it stays ask: {which} matches, and deny and ask answers come "
                            f"before allow ones (Claude Code's rules in every scope, and the kit guard's), so an allow "
                            f"rule in settings.local.json cannot override it. The owner changes that rule, or {step} "
                            f"waits for them.")
         elif not covered:
-            notes[step] = (f"{step}: allow saved, but it stays ask until the owner adds "
+            notes[step] = (f"{step}: {said}, but it stays ask until the owner adds "
                            + ", ".join(f'"{r}"' for r in UNATTENDED_RULES[step])
                            + f" to {files[-1]} permissions.allow.")
         else:

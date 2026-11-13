@@ -207,12 +207,12 @@ project.
   its own rules (`guard.denyCommands` / `askCommands`: a regex over the command and the reason);
   it has no deploy rule of its own. It reads shell text, so it is best effort.
   Saying you are leaving makes the coordinator add Claude Code's `permissions.denyInsteadOfPrompting`
-  (`items.py away on`): a permission prompt becomes a denial and the work goes on, until your next session start. Whether
-  threads may push, rebase and merge while you are away is a per-repo choice the coordinator asks
-  once, at the first unattended run, and keeps in the repo's gitignored `.claude/kit.local.json`
-  (`ask` until you say otherwise). For `allow`, the kit names the permission rule to add, and
+  (`items.py away on`): a permission prompt becomes a denial and the work goes on, until your next session start. While you are
+  away, threads push and rebase their own branches and leave merging to you, unless you tell the
+  coordinator otherwise for a repo (it keeps that in the repo's gitignored `.claude/kit.local.json`).
+  For an allowed step, the kit names the permission rule to add, and
   any ask or deny rule elsewhere, such as a committed `Bash(git push*)` ask, that keeps the step
-  at `ask` because an allow rule cannot override one. It shows the change as a diff; you edit the
+  at `ask` because an allow rule cannot override one. If you ask, it shows the change as a diff; you edit the
   file, or ask the coordinator to, and approve its edit with two buttons. Any change to a Claude
   Code settings file asks you in Claude Code's own prompt, headed «Sovrascrittura dei settings di
   Claude Code:», in every mode, and a background thread's is refused.

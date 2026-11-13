@@ -487,19 +487,28 @@ def main():
         # unattended git preferences: per repo, in the main checkout's gitignored kit.local.json.
         # Every run gets the test HOME, so the user's real ~/.claude/settings.json never counts.
         local = repo / ".claude" / "kit.local.json"
+        check(items.kitlib.unattended_prefs(repo)[:2] == ({"push": "allow", "rebase": "allow", "merge": "ask"}, False),
+              "unset, push and rebase default to allow and merge to ask")
         code, out, _ = run(repo, "unattended", env=env)
         check(code == 0 and out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "not set" in out
-              and not local.exists(), f"unattended defaults to ask, unset, and writes nothing: {out}")
+              and "the defaults" in out and "push: allow by default, but it stays ask until" in out
+              and "PROPOSAL" not in out and "ask the user" not in out and not local.exists(),
+              f"unset, the defaults print (effective: no allow rule yet), nothing is asked or proposed, nothing written: {out}")
+        code, out, _ = run(repo, "unattended", "--proposal", env=env)
+        check(code == 0 and "PROPOSAL, not applied" in out and '+      "Bash(git push:*)"' in out
+              and "gh pr merge:*" not in out and not local.exists(),
+              f"--proposal prints the change for the default allow steps only, and writes nothing: {out}")
         local.write_text("{ broken")
         code, out, _ = run(repo, "unattended", env=env)
-        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "not set" in out, f"a broken file reads as ask: {out}")
+        check(out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "not set" in out, f"a broken file reads as unset: {out}")
         code, _, err = run(repo, "unattended", "push=allow", env=env)
         check(code == 1 and local.read_text() == "{ broken", f"a broken file is never rewritten: {err}")
         local.write_text(json.dumps({"other": 1, "lead": {"unattended": {"push": "ALLOW", "merge": "sometimes"}}}))
         prefs, is_set, _ = items.kitlib.unattended_prefs(repo)
-        check(prefs == {"push": "allow", "rebase": "ask", "merge": "ask"} and is_set, f"a misspelt value is ask: {prefs}")
+        check(prefs == {"push": "allow", "rebase": "allow", "merge": "ask"} and is_set,
+              f"a misspelt or missing value takes its default: {prefs}")
         local.unlink()
-        code, out, err = run(repo, "unattended", "push=allow", "merge=ask", env=env)
+        code, out, err = run(repo, "unattended", "rebase=ask", "merge=ask", env=env)
         saved = json.loads(local.read_text())
         check(code == 0 and saved["lead"]["unattended"] == {"push": "allow", "rebase": "ask", "merge": "ask"}, f"saved: {saved} {err}")
         settings = repo / ".claude" / "settings.local.json"
@@ -599,6 +608,8 @@ def main():
                         "commit", "-qm", "settings"], check=True)
         before = committed.read_bytes()
         code, out, err = run(repo2, "unattended", "push=allow", "rebase=allow", "merge=allow", env=env)
+        check(code == 0 and "PROPOSAL" not in out, f"without --proposal nothing is proposed: {out}")
+        code, out, err = run(repo2, "unattended", "--proposal", env=env)
         r2 = str(committed.resolve())
         r2local = str(committed.resolve().parent / "settings.local.json")
         check(code == 0 and out.startswith("UNATTENDED: push=ask rebase=ask merge=ask") and "PROPOSAL, not applied" in out,

@@ -108,7 +108,7 @@ def asking_line(root):
             "such step once, in one command with its clean-up; never repeat one that is waiting on a prompt or was "
             "not answered (hand it back as `needs push`). The first time one of these prompts comes up in this "
             "session, tell the owner in one line that these rules are why, and ask once whether to change them "
-            "(lead/unattended.md steps 2-3: `items.py unattended` prints the PROPOSAL and its diff)."]
+            "(lead/unattended.md step 3: `items.py unattended --proposal` prints the diff)."]
 
 
 def queued_line(root):
