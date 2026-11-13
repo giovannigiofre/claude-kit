@@ -648,3 +648,68 @@ def load_state(session_id, name):
 
 def save_state(session_id, name, value):
     state_path(session_id, name).write_text(json.dumps(value))
+
+
+# Variables that point git at another repository. A hook or a script started from inside a git
+# command (a pre-push hook, a rebase's exec step) inherits them, and a `git -C <other repo>` run
+# then reads the wrong repository; the branch and worktree checks clear them first.
+GIT_REPO_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX")
+
+
+def hermetic_env():
+    """os.environ without the variables that point git at another repository."""
+    return {k: v for k, v in os.environ.items() if k not in GIT_REPO_VARS}
+
+
+def git_run(cwd, *args, timeout=30):
+    """(returncode, stdout, stderr) of a git command in a hermetic environment; (None, "", reason)
+    when git cannot be run at all or times out."""
+    try:
+        out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True,
+                             timeout=timeout, env=hermetic_env())
+        return out.returncode, out.stdout, out.stderr
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, "", str(exc)
+
+
+def git_base(root):
+    """default_branch, with git run hermetically."""
+    code, out, _ = git_run(root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+    if code == 0 and out.strip().startswith("origin/"):
+        return out.strip()
+    for name in ("origin/main", "origin/master", "main", "master"):
+        if git_run(root, "rev-parse", "--verify", "--quiet", name + "^{commit}")[0] == 0:
+            return name
+    return None
+
+
+def merge_tree_support(root):
+    """None when the installed git can test a merge without touching a checkout (`git merge-tree
+    --write-tree`, git 2.38+), else the reason it cannot."""
+    code, out, err = git_run(root, "version")
+    m = re.search(r"(\d+)\.(\d+)", out or "")
+    if code != 0 or not m:
+        return f"git version unknown ({(err or out).strip() or 'no output'})"
+    if (int(m.group(1)), int(m.group(2))) < (2, 38):
+        return f"git {m.group(1)}.{m.group(2)} has no `merge-tree --write-tree` (2.38+)"
+    return None
+
+
+def merge_tree(root, a, b, timeout=60):
+    """("clean" | "conflict" | "unknown", [files in conflict], reason) for merging b into a, from
+    `git merge-tree --write-tree --name-only`, which writes objects only, never a checkout or a
+    ref. Exit 0 is clean and 1 a conflict; anything else (an unknown branch, an old git) is
+    unknown with git's own words, never a guess."""
+    reason = merge_tree_support(root)
+    if reason:
+        return "unknown", [], reason
+    for ref in (a, b):  # merge-tree exits 1 for a name it cannot resolve too, as for a conflict
+        if git_run(root, "rev-parse", "--verify", "--quiet", ref + "^{commit}")[0] != 0:
+            return "unknown", [], f"no commit named {ref}"
+    code, out, err = git_run(root, "merge-tree", "--write-tree", "--name-only", "--no-messages", a, b, timeout=timeout)
+    if code == 0:
+        return "clean", [], ""
+    lines = out.splitlines()
+    if code == 1 and lines and re.fullmatch(r"[0-9a-f]{40,64}", lines[0].strip()):  # the tree written, then the files
+        return "conflict", [ln for ln in lines[1:] if ln.strip()], ""
+    return "unknown", [], (err or out).strip().splitlines()[0] if (err or out).strip() else f"git exited {code}"

@@ -25,9 +25,25 @@ queued | agent - | - | from <source>`), so a handed-off or taken item is seen. S
     python3 items.py put <id> <file>...      copy files into the item's out/ folder (their names kept)
     python3 items.py report|verdict <id> [FILE|-]
     python3 items.py show|path <id>
-    python3 items.py done <id>
+    python3 items.py done <id> [--force]
+    python3 items.py status [--json]
+    python3 items.py conflicts [<id> ...]
     python3 items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow]
     python3 items.py records [set "<place>: <what to update>" ...]
+
+`status` is one snapshot of the open items read from their folders: id, kind, status, last event
+and its age, note, the agent, branch and PR the LOG or REPORT.md names, the summed `cost` lines
+(subagent_stop.py writes one per finished thread), `blocked-by` dependencies, counts per status,
+and the board's NEEDS YOU questions. `--json` for a script or a phone. Read-only.
+
+`conflicts` tests, with `git merge-tree` (no checkout touched), whether each branch the open items
+name merges cleanly into the default branch and into each other; it prints the files in conflict
+and exits 0 clean, 1 on a conflict, 2 when it could not tell (an old git, a branch not here).
+
+A brief's `DEPENDS: <id>[, <id>]` marks the item `blocked-by <id>` in `list` and `status` while
+that item is not done. `done` on an item that names a PR asks `gh pr view` first and refuses an
+open or closed-unmerged PR (`--force` archives anyway); without gh, or when the call fails, it
+says the merge state is unknown and archives as before.
 
 `records` prints where this project records finished work besides the code (the tracker's labels
 and closing comment, progress or status files, a diary, a published page), saved once in the main
@@ -166,9 +182,10 @@ def put(root, item_id, sources):
 
 
 def status_of(path):
-    """(last status, last note) from LOG.md."""
+    """(last status, last note) from LOG.md; a `cost` line is a measure, not an event."""
     try:
-        lines = [ln for ln in (path / "LOG.md").read_text(encoding="utf-8").splitlines() if ln.startswith("- ")]
+        lines = [ln for ln in (path / "LOG.md").read_text(encoding="utf-8").splitlines()
+                 if ln.startswith("- ") and not re.match(r"^- [^|]*\|\s*cost\s*(\||$)", ln)]
     except OSError:
         return "", ""
     if not lines:
@@ -279,12 +296,279 @@ def list_items(root, status=None, archived=False):
         head = ""
         try:
             lines = [ln for ln in (p / "BRIEF.md").read_text(encoding="utf-8").splitlines()
-                     if ln.strip() and not ln.startswith(("ITEM:", "KIND:"))]
+                     if ln.strip() and not ln.startswith(("ITEM:", "KIND:", "DEPENDS:"))]
             head = lines[0][:100] if lines else ""
         except OSError:
             pass
-        rows.append({"id": p.name, "status": st, "note": note, "brief": head, "path": str(p)})
+        rows.append({"id": p.name, "status": st, "note": note, "brief": head, "path": str(p),
+                     "blocked_by": [] if archived else blocked_by(root, p)})
     return rows
+
+
+DEPENDS_LINE = re.compile(r"^\s*(?:[-*]\s*)?DEPENDS:\s*(.+?)\s*$", re.M | re.I)
+
+
+def depends(path):
+    """The ids a brief's `DEPENDS: <id>[, <id>]` lines name."""
+    try:
+        text = (path / "BRIEF.md").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    found = []
+    for m in DEPENDS_LINE.finditer(text):
+        for dep in re.split(r"[,\s]+", m.group(1)):
+            dep = dep.strip("`").lower()
+            if re.fullmatch(r"[a-z0-9][a-z0-9._-]*", dep) and dep not in found and dep not in ("none", "-"):
+                found.append(dep)
+    return found
+
+
+def blocked_by(root, path):
+    """The dependencies of an item that are not done yet: archived under done/, or an open item
+    whose last event is `done`. One that does not exist anywhere blocks too, since nothing says it
+    is done."""
+    waiting = []
+    for dep in depends(path):
+        if item_path(root, dep, done=True).is_dir():
+            continue
+        open_dep = item_path(root, dep)
+        if open_dep.is_dir() and status_of(open_dep)[0] == "done":
+            continue
+        waiting.append(dep)
+    return waiting
+
+
+LOG_LINE = re.compile(r"^- (\S+) \| ([^|]+?)\s*(?:\| (.*))?$")
+AGENT = re.compile(r"\bagent[ =]([A-Za-z0-9][\w-]*)")
+PR_REF = re.compile(r"(https://\S+/pull/\d+)|\bPR\s*#(\d+)|/pull/(\d+)")
+BRANCH_NOTE = re.compile(r"\bbranch:?\s+`?([A-Za-z0-9][\w./-]*[\w-])`?", re.I)
+BRANCH_FIELD = re.compile(r"^\W*BRANCH(?:\s*/\s*PR)?:\s*`?([A-Za-z0-9][\w./-]*[\w-])`?", re.M | re.I)
+COST_KEYS = ("in", "out", "cache_read", "cache_write", "tools", "minutes")
+NOT_A_BRANCH = {"none", "n/a", "na", "pr", "local", "worktree", "branch", "unknown", "main", "master"}
+
+
+def log_lines(path):
+    """[(timestamp, status, note)] of an item's LOG.md, oldest first."""
+    try:
+        text = (path / "LOG.md").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return [(m.group(1), m.group(2).strip(), (m.group(3) or "").strip())
+            for m in map(LOG_LINE.match, text.splitlines()) if m]
+
+
+def age_minutes(stamp, at=None):
+    import calendar
+    try:
+        then = calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
+    except (ValueError, TypeError):
+        return None
+    return max(0, int(((at if at is not None else time.time()) - then) // 60))
+
+
+def costs(lines):
+    """The summed `cost` lines. Each line is a thread's total so far (a resumed thread's transcript
+    grows), so only the latest line per agent counts; lines that name no agent each count."""
+    latest, total = {}, dict.fromkeys(COST_KEYS, 0)
+    for n, (_, st, note) in enumerate(lines):
+        if st != "cost":
+            continue
+        fields = dict(re.findall(r"(\w+)=(\S+)", note))
+        latest[fields.get("agent") or f"#{n}"] = fields
+    if not latest:
+        return None
+    for fields in latest.values():
+        for k in COST_KEYS:
+            try:
+                total[k] += float(fields.get(k, 0)) if k == "minutes" else int(fields.get(k, 0))
+            except ValueError:
+                pass
+    total["minutes"] = round(total["minutes"], 1)
+    total["threads"] = len(latest)
+    return total
+
+
+def refs(path, lines):
+    """(agent id, branch, PR) an item's LOG or REPORT.md names, the latest first; "" when none."""
+    notes = [note for _, st, note in reversed(lines) if st != "cost"]
+    try:
+        report = (path / "REPORT.md").read_text(encoding="utf-8")
+    except OSError:
+        report = ""
+    agent = next((m.group(1) for m in map(AGENT.search, notes) if m and m.group(1) != "-"), "")
+    branch = ""
+    for m in [BRANCH_NOTE.search(n) for n in notes] + [BRANCH_FIELD.search(report)]:
+        if m and m.group(1).lower() not in NOT_A_BRANCH:
+            branch = m.group(1)
+            break
+    pr = ""
+    for text in notes + [report]:
+        m = PR_REF.search(text)
+        if m:
+            pr = m.group(1) or "#" + (m.group(2) or m.group(3))
+            break
+    return agent, branch, pr
+
+
+def needs_you(root, known=()):
+    """[{"id", "question"}] from the board's NEEDS YOU line, or None without a board. An entry starts
+    where `<id>:` follows a `;`, for an id the items or the board rows know (any id-like word
+    when none are known), so a `;` inside a question stays in it."""
+    try:
+        text = board_file(root).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    line = next((ln.strip() for ln in text.splitlines() if re.match(r"^\s*NEEDS YOU:", ln, re.I)), "")
+    rest = re.sub(r"^NEEDS YOU:\s*", "", line, flags=re.I).strip()
+    if not rest or rest.lower() in ("none", "-", "nothing"):
+        return []
+    ids = set(known) | {ln.split("|")[0].strip().lower() for ln in text.splitlines()
+                        if "|" in ln and not re.match(r"^\s*(SHIP|RULES|NEEDS YOU):", ln, re.I)}
+    ids.discard("")
+    start = ("(?:" + "|".join(re.escape(i) for i in sorted(ids, key=len, reverse=True)) + ")") if ids else r"[A-Za-z0-9][\w.-]*"
+    entries = re.split(r";\s*(?=(?i:" + start + r")\s*:)", rest)
+    out = []
+    for entry in (e.strip() for e in entries):
+        m = re.match(r"^([A-Za-z0-9][\w.-]*)\s*:\s*(.*)$", entry, re.S)
+        if m:
+            out.append({"id": m.group(1), "question": m.group(2).strip()})
+        elif entry:
+            out.append({"id": "", "question": entry})
+    return out
+
+
+def snapshot(root, at=None):
+    """One snapshot of the open items, built from their folders (not from board.md)."""
+    rows = []
+    for item in list_items(root):
+        p = Path(item["path"])
+        lines = log_lines(p)
+        events = [ln for ln in lines if ln[1] != "cost"]
+        last = events[-1] if events else ("", "", "")
+        agent, branch, pr = refs(p, lines)
+        kind = ""
+        try:
+            m = re.search(r"^KIND:\s*(\S+)", (p / "BRIEF.md").read_text(encoding="utf-8"), re.M)
+            kind = m.group(1) if m else ""
+        except OSError:
+            pass
+        rows.append({"id": item["id"], "kind": kind, "status": item["status"], "last_event": last[1],
+                     "last_at": last[0], "age_minutes": age_minutes(last[0], at), "note": item["note"],
+                     "agent": agent, "branch": branch, "pr": pr, "cost": costs(lines),
+                     "blocked_by": item["blocked_by"], "brief": item["brief"]})
+    counts = {}
+    for r in rows:
+        counts[r["status"] or "?"] = counts.get(r["status"] or "?", 0) + 1
+    return {"at": now(), "items": rows, "counts": counts, "questions": needs_you(root, [r["id"] for r in rows])}
+
+
+def print_status(snap):
+    rows = snap["items"]
+    if not rows:
+        print("items: none open")
+    for r in rows:
+        cost = r["cost"]
+        spent = (f"out={cost['out']} in={cost['in'] + cost['cache_read'] + cost['cache_write']} {cost['minutes']}m"
+                 if cost else "-")
+        age = f"{r['age_minutes']}m ago" if r["age_minutes"] is not None else "?"
+        where = " ".join(x for x in (r["branch"], r["pr"]) if x) or "-"
+        state = (r["status"] or "?") + (f" blocked-by {', '.join(r['blocked_by'])}" if r["blocked_by"] else "")
+        print(f"{r['id']} | {r['kind'] or '-'} | {state} | {age} | {where} | agent {r['agent'] or '-'} | {spent} | {r['note']}")
+    print("counts: " + (", ".join(f"{k} {v}" for k, v in sorted(snap["counts"].items())) or "none"))
+    if snap["questions"]:
+        print("NEEDS YOU:")
+        for q in snap["questions"]:
+            print(f"- {q['id'] + ': ' if q['id'] else ''}{q['question']}")
+
+
+def branch_ref(root, name):
+    """The commit-ish for a branch an item names: the local branch, else origin's; None when neither."""
+    for ref in (name, f"origin/{name}"):
+        if kitlib.git_run(root, "rev-parse", "--verify", "--quiet", ref + "^{commit}")[0] == 0:
+            return ref
+    return None
+
+
+def conflicts(root, ids=None):
+    """Which open items' branches conflict with the default branch and with each other, from
+    `git merge-tree` (kitlib.merge_tree). Returns (exit code, lines): 0 all clean, 1 a conflict,
+    2 a merge that could not be tested and none that conflicts."""
+    open_items = {r["id"]: Path(r["path"]) for r in list_items(root)}
+    lines, unknown, found = [], False, False
+    if ids:
+        missing = [i for i in ids if i not in open_items]
+        if missing:
+            return 2, [f"items: no open item {', '.join(missing)}"]
+        open_items = {i: open_items[i] for i in ids}
+    branches = {}
+    for item_id, p in open_items.items():
+        _, branch, _ = refs(p, log_lines(p))
+        if branch:
+            branches[item_id] = branch
+        elif ids:
+            lines.append(f"{item_id}: names no branch in its LOG or REPORT.md")
+            unknown = True
+    if not branches:
+        return (2 if unknown else 0), lines + ["conflicts: no open item names a branch"]
+    base = kitlib.git_base(root)
+    resolved = {}
+    for item_id, branch in branches.items():
+        ref = branch_ref(root, branch)
+        if ref:
+            resolved[item_id] = ref
+        else:
+            lines.append(f"unknown  {item_id} ({branch}): no such branch here")
+            unknown = True
+
+    def report(label, state, files, reason):
+        nonlocal unknown, found
+        if state == "conflict":
+            found = True
+            lines.append(f"conflict {label}: {', '.join(files) or '(no file named)'}")
+        elif state == "unknown":
+            unknown = True
+            lines.append(f"unknown  {label}: {reason}")
+        else:
+            lines.append(f"clean    {label}")
+
+    if base:
+        for item_id, ref in resolved.items():
+            report(f"{item_id} ({ref}) with {base}", *kitlib.merge_tree(root, base, ref))
+    else:
+        unknown = True
+        lines.append("unknown  default branch: no origin/HEAD, main or master here")
+    ordered = list(resolved.items())
+    for i, (a, ra) in enumerate(ordered):
+        for b, rb in ordered[i + 1:]:
+            report(f"{a} ({ra}) with {b} ({rb})", *kitlib.merge_tree(root, ra, rb))
+    return (1 if found else 2 if unknown else 0), lines
+
+
+def merge_state(root, pr):
+    """("merged" | "open" | "closed" | "unknown", detail) for the item's PR from `gh pr view`; unknown
+    when gh is missing, not logged in or the call fails, never a guess."""
+    gh = shutil.which("gh")
+    if not gh:
+        return "unknown", "gh is not installed"
+    import subprocess
+    target = pr.lstrip("#")
+    try:
+        out = subprocess.run([gh, "pr", "view", target, "--json", "state,mergedAt"], cwd=str(root),
+                             capture_output=True, text=True, timeout=30, env=kitlib.hermetic_env())
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return "unknown", f"gh failed: {exc}"
+    if out.returncode != 0:
+        return "unknown", "gh: " + ((out.stderr or out.stdout).strip().splitlines() or [f"exit {out.returncode}"])[0]
+    try:
+        data = json.loads(out.stdout)
+    except ValueError:
+        return "unknown", "gh gave no JSON"
+    state = str(data.get("state") or "").upper() if isinstance(data, dict) else ""
+    if state == "MERGED" and data.get("mergedAt"):
+        return "merged", ""
+    if state in ("OPEN", "CLOSED"):
+        return state.lower(), ""
+    return "unknown", f"gh said state {state or 'nothing'}"
 
 
 def main(argv=None):
@@ -324,10 +608,22 @@ def main(argv=None):
         status = opt("--status")
         rows = list_items(root, status)
         for r in rows:
-            print(f"{r['id']} | {r['status'] or '?'} | {r['brief']} | {r['note']}")
+            blocked = f" | blocked-by {', '.join(r['blocked_by'])}" if r["blocked_by"] else ""
+            print(f"{r['id']} | {r['status'] or '?'} | {r['brief']} | {r['note']}{blocked}")
         if not rows:
             print("items: none" + (f" with status {status}" if status else ""))
         return 0
+    if cmd == "status":
+        snap = snapshot(root)
+        if "--json" in rest:
+            print(json.dumps(snap, indent=2))
+        else:
+            print_status(snap)
+        return 0
+    if cmd == "conflicts":
+        code, lines = conflicts(root, [a.lower() for a in rest])
+        print("\n".join(lines))
+        return code
     if cmd == "unattended":
         changes = {}
         for arg in rest:
@@ -402,6 +698,9 @@ def main(argv=None):
         print("\n".join(str(d) for d in placed))
         return 0
     if cmd in ("log", "report", "verdict", "done", "show", "path"):
+        force = cmd == "done" and "--force" in rest
+        if force:
+            rest.remove("--force")
         if not rest:
             print(f"items: {cmd} needs an item id", file=sys.stderr)
             return 2
@@ -413,6 +712,18 @@ def main(argv=None):
             name = "REPORT.md" if cmd == "report" else "VERDICT.md"
             ok = write(root, item_id, name, text, "reported" if cmd == "report" else "verdict")
         elif cmd == "done":
+            p = item_path(root, item_id)
+            pr = refs(p, log_lines(p))[2] if p.is_dir() else ""
+            if pr:
+                state, detail = merge_state(root, pr)
+                if state in ("open", "closed") and not force:
+                    print(f"items: {item_id} not archived: PR {pr} is {state}"
+                          f"{', not merged' if state == 'closed' else ''}. `done {item_id} --force` archives it anyway.",
+                          file=sys.stderr)
+                    return 1
+                print(f"items: PR {pr} " + ("merged." if state == "merged" else
+                                            f"is {state}, archived with --force." if state in ("open", "closed") else
+                                            f"merge state unknown ({detail})."))
             ok = done(root, item_id)
             places, _ = kitlib.records(root)
             if ok and places:

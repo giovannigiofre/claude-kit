@@ -212,7 +212,10 @@ python3 <kit>/hooks/scripts/items.py list [--status queued]
 python3 <kit>/hooks/scripts/items.py log <id> <status> [note]
 python3 <kit>/hooks/scripts/items.py put <id> <file>...   # copy files into the item's out/ folder
 python3 <kit>/hooks/scripts/items.py show <id>
-python3 <kit>/hooks/scripts/items.py done <id>
+python3 <kit>/hooks/scripts/items.py done <id> [--force]   # refuses an open or unmerged PR
+python3 <kit>/hooks/scripts/items.py status [--json]        # one read-only snapshot of the open items
+python3 <kit>/hooks/scripts/items.py conflicts [<id> ...]   # exit 0 clean, 1 conflict, 2 unknown
+python3 <kit>/hooks/scripts/worktrees.py [--json]           # classify linked worktrees, print a plan
 python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow]
 ```
 
@@ -276,6 +279,41 @@ row to the board when one exists, so the status line and the coordinator see an 
 `/kit:handoff` or `/kit:scout take` queued from another session; the session-start line says
 how many items wait on disk. `.claude/lead/` is added to `.git/info/exclude` when the project
 does not ignore it.
+
+The same hook writes a token ledger line before the report line: `cost | in=… out=… cache_read=…
+cache_write=… tools=… minutes=… agent=<id>`, read from the thread's transcript (each reply counted
+once by its message id, tools as distinct tool calls, minutes from the first to the last
+timestamp). Tokens only, no dollar figure, since prices change and differ by plan. A resumed
+thread writes a new line with its whole total, so `status` sums only the latest line per agent. A
+transcript without usage writes nothing and never fails the hook.
+
+`status` reads the item folders, not board.md, so it is right even when the board has drifted:
+per open item the id, kind, status, last event and its age, note, agent, branch and PR (from the
+LOG or the `BRANCH / PR:` line of REPORT.md) and summed cost; then counts per status and the
+board's NEEDS YOU line split into questions (only where a known item id starts the next
+`<id>:`, so a question with a colon in it stays whole). `--json` gives the same for a script.
+
+A brief line `DEPENDS: <id>[, <id>]` marks the item `blocked-by <id>` in `list` and `status`
+until that item is done (archived, or last logged `done`); an id that does not exist blocks too.
+
+`conflicts` checks each open item's branch (local, else `origin/`) against the default branch and
+every pair against each other with `git merge-tree --write-tree --name-only`, which touches no
+checkout, and prints the files in conflict. Without git 2.38 or a branch it says `unknown` and why.
+
+`done <id>` on an item whose LOG or report names a PR runs `gh pr view <n> --json state,mergedAt`
+and refuses an open or closed-unmerged PR; `--force` archives it anyway and says so. Without gh,
+or when the call fails or answers something unexpected, it prints "merge state unknown" and
+archives as before: it never calls a PR merged on an incomplete check. It does not check `gh auth
+status` first, since that is a network call of its own.
+
+`hooks/scripts/worktrees.py` lists every linked worktree (never the main checkout) as `merged`
+(nothing ahead of the default branch), `stale` (unmerged, no commit or file change for 7 days),
+`active` (uncommitted changes, one from the last hour), `dirty` (uncommitted, older), `conflict`,
+`ready` (merges cleanly) or `unknown` (folder gone, no default branch, merge not testable), with a
+plan: `remove` only for a merged worktree with nothing uncommitted, `salvage` (push or bundle the
+branch) for stale work, `keep` otherwise. It prints the commands and removes nothing. git runs
+with GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR and GIT_PREFIX cleared, so a run from
+inside a git hook reads this repository.
 
 `hooks/scripts/proposals.py`: candidate work found by read-only explorers (`/kit:scout`), one
 card per finding in `.claude/lead/proposals/<id>.md` (frontmatter: id, fingerprint, origin,

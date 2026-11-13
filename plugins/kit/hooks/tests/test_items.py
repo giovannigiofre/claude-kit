@@ -40,6 +40,170 @@ def transcript(path, brief, final_text=None, handback=None):
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
 
 
+def git(repo, *args, date=None):
+    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+    for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        env.pop(k, None)
+    if date:
+        env.update(GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True, env=env).stdout
+
+
+def commit_file(repo, branch, name, text, start="main"):
+    git(repo, "checkout", "-q", "-B", branch, start)
+    (Path(repo) / name).write_text(text)
+    git(repo, "add", name)
+    git(repo, "commit", "-qm", f"{branch}: {name}")
+    git(repo, "checkout", "-q", "main")
+
+
+def usage_row(mid, stamp, tokens, tool=None):
+    content = [{"type": "tool_use", "id": tool, "name": "Bash", "input": {}}] if tool else [{"type": "text", "text": "hm"}]
+    return {"type": "assistant", "timestamp": stamp, "requestId": "req_" + mid,
+            "message": {"id": mid, "content": content,
+                        "usage": {"input_tokens": tokens[0], "output_tokens": tokens[1],
+                                  "cache_read_input_tokens": tokens[2], "cache_creation_input_tokens": tokens[3]}}}
+
+
+def snapshot_checks(tmp, check):
+    """cost lines, status, conflicts, DEPENDS and done's merge check, on a real repository."""
+    home = tmp / "home"
+    (home / ".claude").mkdir(parents=True)
+    env = dict(os.environ, HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), TMPDIR=str(tmp))
+    repo = tmp / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "kit.json").write_text("{}")
+    (repo / "app.py").write_text("x = 1\n")
+    git(repo, "add", "app.py")
+    git(repo, "commit", "-qm", "init")
+    lead = repo / ".claude" / "lead"
+
+    run(repo, "new", "Login", "--brief", "-", stdin="GOAL: login\nDONE WHEN: e2e\n", env=env)
+    run(repo, "new", "Footer", "--brief", "-", stdin="GOAL: footer\nDEPENDS: login, `search`\n", env=env)
+    run(repo, "new", "Search", env=env)
+
+    # the token ledger: a reply written as two lines (one per content block) counts once
+    t1 = tmp / "agent-a1.jsonl"
+    rows = [{"type": "user", "timestamp": "2026-11-13T10:00:00.000Z", "message": {"role": "user", "content": "ITEM: login\ngo"}},
+            usage_row("m1", "2026-11-13T10:00:05.100Z", (3, 100, 1000, 500), tool="t1"),
+            usage_row("m1", "2026-11-13T10:00:06.000Z", (3, 100, 1000, 500)),
+            usage_row("m2", "2026-11-13T10:12:30.000Z", (2, 50, 2000, 10), tool="t2"),
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "SubagentHandback",
+                                                           "input": {"message": "STATUS: done\nBRANCH / PR: `feat/login`, PR #12"}}]}}]
+    t1.write_text("".join(json.dumps(r) + "\n" for r in rows) + "not json\n")
+    hook(repo, {"cwd": str(repo), "agent_type": "kit:implementer", "agent_id": "a1",
+                "agent_transcript_path": str(t1), "last_assistant_message": ""}, env)
+    log = (lead / "items" / "login" / "LOG.md").read_text()
+    check("| cost | in=5 out=150 cache_read=3000 cache_write=510 tools=3 minutes=12.5 agent=a1\n" in log, log)
+    check(log.rstrip().splitlines()[-1].split(" | ")[1] == "reported", f"the report stays the last event: {log}")
+    # a transcript without usage records: no cost line, the hook still files the report
+    t2 = tmp / "agent-a2.jsonl"
+    transcript(t2, "ITEM: search\ngo", handback="STATUS: partial\nOPEN: needs push")
+    code, err = hook(repo, {"cwd": str(repo), "agent_type": "kit:implementer", "agent_id": "a2",
+                            "agent_transcript_path": str(t2), "last_assistant_message": ""}, env)
+    log2 = (lead / "items" / "search" / "LOG.md").read_text()
+    check(code == 0 and "| cost |" not in log2 and "| reported | partial" in log2, f"no usage, no cost line: {log2} {err}")
+    # the same thread resumed: its transcript grew, the new line is its total and replaces the old one
+    t1.write_text(t1.read_text() + json.dumps(usage_row("m3", "2026-11-13T10:20:00.000Z", (1, 10, 0, 0))) + "\n")
+    hook(repo, {"cwd": str(repo), "agent_type": "kit:implementer", "agent_id": "a1",
+                "agent_transcript_path": str(t1), "last_assistant_message": ""}, env)
+    snap = items.snapshot(repo)
+    login = next(r for r in snap["items"] if r["id"] == "login")
+    check(login["cost"] == {"in": 6, "out": 160, "cache_read": 3000, "cache_write": 510, "tools": 3, "minutes": 20.0,
+                            "threads": 1}, f"status counts a thread's latest cost line only: {login['cost']}")
+    check(login["agent"] == "a1" and login["branch"] == "feat/login" and login["pr"] == "#12",
+          f"agent, branch and PR from the LOG and REPORT.md: {login}")
+    check(login["status"] == "reported" and login["last_event"] == "reported" and login["kind"] == "ship"
+          and 0 <= login["age_minutes"] < 5, login)
+
+    # DEPENDS: blocked while a dependency is not done
+    footer = next(r for r in snap["items"] if r["id"] == "footer")
+    check(footer["blocked_by"] == ["login", "search"], footer)
+    code, out, _ = run(repo, "list", env=env)
+    check("footer | queued | GOAL: footer | from lead | blocked-by login, search" in out, out)
+    check(snap["counts"] == {"queued": 1, "reported": 2} and snap["questions"] is None, f"no board, no questions: {snap}")
+
+    # NEEDS YOU: a `;` inside a question stays in it; entries split only where a known id starts
+    (lead / "board.md").write_text("SHIP: pr\nNEEDS YOU: login: eu-west; or us-east?; footer: merge now; note: it is big\n"
+                                   "pr-9 | ship | x | DONE WHEN y | review | agent - | - | -\n")
+    code, out, _ = run(repo, "status", "--json", env=env)
+    data = json.loads(out)
+    check(data["questions"] == [{"id": "login", "question": "eu-west; or us-east?"},
+                                {"id": "footer", "question": "merge now; note: it is big"}], data["questions"])
+    code, out, _ = run(repo, "status", env=env)
+    check(code == 0 and "login | ship | reported |" in out and "feat/login #12" in out
+          and "footer | ship | queued blocked-by login, search |" in out and "counts: queued 1, reported 2" in out
+          and "- login: eu-west; or us-east?" in out, out)
+    (lead / "board.md").write_text("NEEDS YOU: none\n")
+    check(items.snapshot(repo)["questions"] == [], "NEEDS YOU: none is no question")
+
+    # conflicts: login and search both change app.py, footer changes another file
+    commit_file(repo, "feat/login", "app.py", "x = 2\n")
+    commit_file(repo, "feat/search", "app.py", "x = 3\n")
+    commit_file(repo, "feat/footer", "footer.py", "y = 1\n")
+    run(repo, "log", "search", "working", "branch feat/search", env=env)
+    run(repo, "log", "footer", "working", "branch `feat/footer`", env=env)
+    code, out, _ = run(repo, "conflicts", "login", "footer", env=env)
+    check(code == 0 and "clean    login (feat/login) with main" in out
+          and "clean    login (feat/login) with footer (feat/footer)" in out, f"two branches that do not conflict: {code} {out}")
+    code, out, _ = run(repo, "conflicts", env=env)
+    check(code == 1 and "conflict login (feat/login) with search (feat/search): app.py" in out
+          and "clean    search (feat/search) with main" in out, f"two that do: {code} {out}")
+    git(repo, "checkout", "-q", "-B", "main-moved", "main")
+    commit_file(repo, "main", "app.py", "x = 9\n", start="main")
+    code, out, _ = run(repo, "conflicts", "footer", "search", env=env)
+    check(code == 1 and "conflict search (feat/search) with main: app.py" in out, f"a conflict with the default branch: {out}")
+    run(repo, "log", "footer", "working", "branch feat/gone", env=env)
+    code, out, _ = run(repo, "conflicts", "footer", env=env)
+    check(code == 2 and "no such branch" in out, f"a branch that is not here: could not tell: {code} {out}")
+    code, out, _ = run(repo, "conflicts", "nope", env=env)
+    check(code == 2 and "no open item nope" in out, out)
+
+    # done: no gh on PATH says the merge state is unknown and archives as before
+    bare = tmp / "bin"
+    bare.mkdir()
+    (bare / "git").symlink_to(subprocess.run(["which", "git"], capture_output=True, text=True).stdout.strip())
+    nogh = dict(env, PATH=str(bare))
+    run(repo, "log", "search", "review", "PR #20 open", env=env)
+    code, out, err = run(repo, "done", "search", env=nogh)
+    check(code == 0 and "merge state unknown (gh is not installed)" in out and items.find(repo, "search") is not None
+          and not (lead / "items" / "search").exists(), f"done without gh: {code} {out} {err}")
+    snap = items.snapshot(repo)
+    footer = next(r for r in snap["items"] if r["id"] == "footer")
+    check(footer["blocked_by"] == ["login"], f"a dependency archived as done no longer blocks: {footer}")
+    # a fake gh: an open PR is refused, --force archives it, a merged one goes through
+    fake = tmp / "fakebin"
+    fake.mkdir()
+    (fake / "git").symlink_to(bare / "git")
+    (fake / "gh").write_text('#!/bin/sh\nwhile IFS= read -r l || [ -n "$l" ]; do echo "$l"; done < "$FAKE_GH"\n')  # shell builtins only
+    (fake / "gh").chmod(0o755)
+    answer = tmp / "gh.json"
+    withgh = dict(env, PATH=str(fake), FAKE_GH=str(answer))
+    answer.write_text('{"state": "OPEN", "mergedAt": null}')
+    code, out, err = run(repo, "done", "login", env=withgh)
+    check(code == 1 and "PR #12 is open" in err and (lead / "items" / "login").is_dir(), f"an open PR is refused: {code} {err}")
+    answer.write_text('{"state": "CLOSED", "mergedAt": null}')
+    code, out, err = run(repo, "done", "login", env=withgh)
+    check(code == 1 and "closed, not merged" in err, err)
+    answer.write_text('{"state": "MERGED", "mergedAt": "2026-11-13T10:00:00Z"}')
+    code, out, err = run(repo, "done", "login", env=withgh)
+    check(code == 0 and "PR #12 merged." in out and not (lead / "items" / "login").exists(), f"a merged PR: {code} {out} {err}")
+    footer = next(r for r in items.snapshot(repo)["items"] if r["id"] == "footer")
+    check(footer["blocked_by"] == [], f"every dependency done: unblocked: {footer}")
+    run(repo, "log", "footer", "review", "PR #13 open", env=env)
+    answer.write_text("not json")
+    code, out, _ = run(repo, "done", "footer", env=withgh)
+    check(code == 0 and "merge state unknown (gh gave no JSON)" in out, f"a failed check is unknown, never merged: {out}")
+    run(repo, "new", "Forced", env=env)
+    run(repo, "log", "forced", "review", "PR #14", env=env)
+    answer.write_text('{"state": "OPEN"}')
+    code, out, _ = run(repo, "done", "--force", "forced", env=withgh)
+    check(code == 0 and "is open, archived with --force" in out, out)
+
+
 def main():
     failed = 0
 
@@ -372,6 +536,9 @@ def main():
         check("push=allow rebase=allow merge=ask" in out and str(local) in out, f"a worktree reads the main checkout's: {out}")
         code, out, _ = run(wt, "records", env=env)
         check(out == f"RECORDS (from {local.resolve()}):\n- only one", f"a worktree reads the main checkout's records: {out}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        snapshot_checks(Path(tmp), check)
 
     print("items: all checks passed" if not failed else f"items: {failed} failures")
     return 1 if failed else 0
