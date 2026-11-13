@@ -232,6 +232,8 @@ project.
 
 - Keep it generic; anything project-specific goes in that project's `kit.json` or skills. Domain
   knowledge goes in a domain plugin that `kit:extras` offers.
+- `python3 tests/run_all.py` must pass before a pull request (every self-check and the mod's tests, locally:
+  the repo has no CI); put its last lines in the PR.
 - `python3 tests/test_budget.py` must pass: always-on description budgets per plugin, short
   SKILL.md files, no shouted rules, no request for the model's reasoning, no per-prompt or
   every-tool hooks in core, and every `kit:` reference resolving. Raise a budget only with a

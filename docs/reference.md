@@ -677,7 +677,12 @@ claude plugin validate ./plugins/kit && claude plugin validate .
 claude --plugin-dir ./plugins/kit            # try changes in one session without installing
 ```
 
-Self-checks (no tokens; `.github/workflows/tests.yml` runs every one of them on each pull request and on main):
+Before a pull request, run everything with one command: `python3 tests/run_all.py` (every file below, then
+the mod's tests when `claude` is installed; exit 0 = all good). The repo has no CI, so this is the gate: put
+its last lines in the PR. In your own `.claude/kit.json` for this repo, `{"verify": "python3 tests/run_all.py"}`
+makes it the kit's gate for the kit.
+
+The self-checks one by one (no tokens):
 
 ```bash
 python3 tests/test_budget.py
