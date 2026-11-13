@@ -740,7 +740,20 @@ def main():
         (f"python3 {items} sandbox status", thread, "allow"),
         (f"python3 {items} unattended", thread, "allow"),
         (f"python3 {items} list", thread, "allow"),
-        ("python3 items.py away on", thread, "allow"),  # the repo's own items.py, not the kit's
+        # from a thread the text rule fails safe: any items.py with the owner words, the repo's own too
+        ("python3 items.py away on", thread, "block"),
+        ("python3 items.py log a1 'turned away on for the night'", thread, "allow"),  # quoted message text
+        (f"cat <<EOF\nI away on\nEOF\npython3 {items} list", thread, "allow"),  # a here-document body
+        (f"{items} away on", thread, "block"),
+        (f"python3 {SCRIPT.parent / 'machine_setup.py'} --apply", thread, "block"),
+        (f"python3 {SCRIPT.parent / 'machine_setup.py'} --decline", thread, "block"),
+        (f"python3 {SCRIPT.parent / 'machine_setup.py'}", thread, "allow"),
+        (f"python3 {SCRIPT.parent / 'migrate_state.py'} undo", thread, "block"),
+        (f"python3 {SCRIPT.parent / 'migrate_state.py'} migrate --again", thread, "block"),
+        (f"python3 {SCRIPT.parent / 'migrate_state.py'} migrate --force", thread, "block"),
+        (f"python3 {SCRIPT.parent / 'migrate_state.py'} migrate", thread, "allow"),
+        (f"python3 {SCRIPT.parent / 'migrate_state.py'} status", thread, "allow"),
+        (f"python3 {SCRIPT.parent / 'machine_setup.py'} --apply", None, "allow"),
         (f"python3 {items} away on", None, "allow"),
         (f"python3 {items} unattended push=ask", None, "allow"),
     ]:
@@ -748,6 +761,27 @@ def main():
         if got != expect:
             failed += 1
             print(f"FAIL {'thread' if agent else 'main session'} {expect}: {command!r} -> {got}")
+    # the same rule in the spellings the lead skill teaches: a shell function and a variable
+    spell = {"direct": f"python3 {items} {{}}",
+             "function": f'I(){{{{ python3 {items} "$@"; }}}}; I {{}}',
+             "variable": f'I="python3 {items}"; $I {{}}'}
+    for form, template in spell.items():
+        for args, want in [("away on", "block"), ("away off", "block"), ("sandbox on", "block"),
+                           ("sandbox off", "block"), ("unattended push=allow", "block"),
+                           ("away status", "allow"), ("sandbox status", "allow"), ("unattended", "allow"),
+                           ("log a1 working", "allow"), ("put a1 status=review", "allow"), ("status", "allow"),
+                           ("path a1", "allow"), ("new 'a task'", "allow"), ("list", "allow"), ("done a1", "allow")]:
+            command = template.format(args)
+            for agent, expect in [(thread, want), (None, "allow")]:
+                got = verdict(home, r21, command, agent)
+                if got != expect:
+                    failed += 1
+                    print(f"FAIL {form} spelling from {'a thread' if agent else 'the main session'} {expect}: "
+                          f"{command!r} -> {got}")
+    code, _, err = call(home, r21, "Bash", {"command": spell["function"].format("away on")}, agent=thread)
+    if code != 2 or "only the coordinator" not in err or "items.py away on" not in err:
+        failed += 1
+        print(f"FAIL the function spelling's refusal names the command and the coordinator: {err}")
     code, _, err = call(home, r21, "Bash", {"command": "gh pr merge 12"}, agent=thread)
     if code != 2 or "needs merge" not in err:
         failed += 1

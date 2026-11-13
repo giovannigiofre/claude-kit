@@ -28,9 +28,11 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    the mergePullRequest mutation, a GitHub MCP merge tool); the coordinator merges,
                    and from the main session the merge is left to the permission system
   owner-settings   from a subagent: the kit's items.py commands that change the owner's settings
-                   (`away` and `sandbox` with on or off, `unattended` with any argument), found by
-                   the script's real path; `away status`, `sandbox status` and a bare `unattended`
-                   only read
+                   (`away` and `sandbox` with on or off, `unattended` with any argument), and
+                   `machine_setup.py --apply|--decline`, `migrate_state.py undo` and `migrate
+                   --again|--force`; found by the script's real path, and on the text in any
+                   spelling (a shell function, a variable); `away status`, `sandbox status`, a
+                   bare `unattended`, a bare `migrate` and `status` only read
   discard-work     git reset --hard, checkout/restore of the whole tree, clean, stash drop/clear
                    while there are uncommitted changes; git clean -x/-X always
   system           sudo/su/doas, mkfs, dd to a device, disk erase, shutdown/reboot, recursive
@@ -883,6 +885,50 @@ def owner_settings(argv, cwd):
     return None
 
 
+# From a subagent the owner commands are refused on the text as well, whatever the spelling: the lead
+# skill runs items.py through a shell function (`I(){ python3 .../items.py "$@"; }; I away on`), and
+# a variable (`I="python3 .../items.py"; $I away on`) hides it as well, so argv alone cannot see
+# them. A command that names one of these scripts anywhere and whose code holds its owner words is
+# refused; a thread loses nothing it should be doing by that over-matching.
+OWNER_SCRIPT = re.compile(r"(?<![\w.-])(items|machine_setup|migrate_state)\.py(?![\w.-])")
+OWNER_WORDS = {
+    "items": re.compile(r"(?<![\w-])(?:(?:away|sandbox)\s+(?:on|off)|unattended\s+[A-Za-z_][\w-]*=\S*)(?![\w-])"),
+    "machine_setup": re.compile(r"(?<![\w-])--(?:apply|decline)(?![\w-])"),
+    "migrate_state": re.compile(r"(?<![\w-])(?:undo|migrate(?![\w.-])[^\n;&|]*?\s--(?:again|force))(?![\w-])"),
+}
+
+
+def owner_text(command):
+    """`items.py away on` (or another owner command) when the shell text names one of the kit's
+    owner scripts and its code holds that script's owner words, else None. Code here is the text
+    without comments and here-document bodies, with quoted text that holds a space and no script
+    name dropped (a commit message, a log line), and other quotes removed (`I 'away' on`)."""
+    names = {m.group(1) for m in OWNER_SCRIPT.finditer(command)}
+    if not names:
+        return None
+    code = "\n".join(logical_lines(command.replace("\\\n", " ")))
+    mask = quote_mask(code)
+    out, i = [], 0
+    while i < len(code):
+        if mask[i] in "'\"":
+            j = i
+            while j < len(code) and mask[j] == mask[i]:
+                j += 1
+            span = code[i:j]
+            if not (re.search(r"\s", span) and not OWNER_SCRIPT.search(span)):
+                out.append(span)
+            i = j
+            continue
+        out.append(code[i])
+        i += 1
+    visible = re.sub(r"[\'\"]", "", "".join(out))
+    for name in sorted(names):
+        m = OWNER_WORDS[name].search(visible)
+        if m:
+            return f"{name}.py {' '.join(m.group(0).split())}"
+    return None
+
+
 HOOK_SUBS = {"commit", "push", "merge", "rebase", "cherry-pick", "am"}
 # -n is --no-verify only on commit and am; on push it is --dry-run, on merge and rebase --no-stat,
 # on cherry-pick --no-commit (git <sub> -h, git 2.43)
@@ -1262,6 +1308,9 @@ def check_bash(command, cwd, root, opts, agent=False):
                     return (decision, "project", f"{reason} (kit.json guard.{key})")
             except re.error:
                 continue
+    owned = owner_text(command) if agent else None
+    if owned:
+        return ("deny", "owner-settings", owned)
     if re.search(r":\(\)\s*\{\s*:\|:&\s*\};\s*:", command):
         return ("deny", "system", "fork bomb")
     if re.search(r">\s*/dev/(sd|disk|nvme|hd)", command):
@@ -1687,7 +1736,7 @@ def main():
               "mode: leave the PR open and report it under OPEN as `needs merge`.", file=sys.stderr)
         return 2
     if rule == "owner-settings":
-        print(f"kit guard (owner-settings): {why} changes the owner's settings, and only the coordinator "
+        print(f"kit guard (owner-settings): {why} changes the owner's settings or the kit's state, and only the coordinator "
               "runs it, at the owner's word. Say in your report what you need changed and why.", file=sys.stderr)
         return 2
     if rule == "wait":

@@ -96,8 +96,13 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
   `…/merge` or the `mergePullRequest` mutation, a GitHub MCP merge tool) is refused: the thread
   reports `needs merge` and the coordinator merges; from the main session `gh pr merge` is left to
   the permission system. Also from a subagent, the kit's `items.py` commands that change the
-  owner's settings (`away on|off`, `sandbox on|off`, `unattended` with any choice) are refused,
-  matched by the script's real path; `away status`, `sandbox status` and a bare `unattended` pass.
+  owner's settings (`away on|off`, `sandbox on|off`, `unattended` with any choice),
+  `machine_setup.py --apply|--decline`, and `migrate_state.py undo` or `migrate --again|--force`
+  are refused: by the script's real path, and on the text in any spelling, a shell function
+  (`I(){ python3 …/items.py "$@"; }; I away on`) or a variable included, when the command names
+  the script and its code (not quoted message text or a here-document body) holds those words;
+  `away status`, `sandbox status`, a bare `unattended`, the board commands, a bare `migrate` and
+  `status` pass. permission.py never auto-allows those forms from a subagent.
   One rule holds in every repo, with or without `kit.json` and with the guard off:
   a `kit:verifier` subagent (that agent type only, not another plugin's verifier) may write a
   memory file (a `MEMORY.md` in any case, anything in an `agent-memory` folder) only inside

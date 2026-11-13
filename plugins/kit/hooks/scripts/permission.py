@@ -9,7 +9,9 @@ folder (.kit/lead/, or .claude/lead/ in a project not moved yet). Three items.py
 settings instead: `away on|off` the user's settings.json, `sandbox on|off` the checkout's
 settings.local.json, `unattended <choices>` kit.local.json. The coordinator runs them at the
 owner's word, so they run unasked from the main session; from a subagent they are never allowed
-here (guard.py denies them first; this holds with the guard off too). migrate_state.py
+here, in any spelling guard.owner_text sees (a shell function, a variable; guard.py denies them
+first; this holds with the guard off too), and neither are machine_setup.py --apply|--decline
+and migrate_state.py undo or migrate --again|--force. migrate_state.py
 moves that state folder itself and refuses while a thread is at work, so only `status` and a bare
 `migrate` run unasked: `undo`, `--force` (moves past a thread at work) and `--root` (another
 repo) are the owner's to approve. Only an exact `check` or
@@ -26,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kitlib  # noqa: E402
 import settings_guard  # noqa: E402
+from guard import owner_text  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parents[2]
 SCRIPTS = {"gate.py", "lessons.py", "compact_logs.py", "items.py", "proposals.py",
@@ -63,6 +66,8 @@ def own_script(command, agent=False):
 def allowed(command, config, cwd=None, agent=False):
     command = command.strip()
     if settings_guard.command_targets(command, cwd):
+        return False
+    if agent and owner_text(command):  # the guard's rule, in any spelling: never unasked from a subagent
         return False
     gates = {str(config.get(k) or "").strip() for k in ("check", "verify")} - {""}
     return command in gates or own_script(command, agent)
