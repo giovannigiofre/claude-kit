@@ -1708,7 +1708,10 @@ def main():
     elif tool in ("Agent", "Task"):
         found = check_agents(data, opts)
     elif tool.startswith("mcp__") and "github" in tool.lower():
-        if data.get("agent_id") and "merge_pull_request" in tool.lower():
+        # any merge tool from a thread (merge_pull_request, enable_pr_auto_merge, ...) except one
+        # that only turns merging off; update_pull_request_branch has no "merge" in its name
+        short = tool.split("__")[-1].lower()
+        if data.get("agent_id") and "merge" in short and not short.startswith("disable_"):
             found = ("deny", "merge-thread", f"{tool.split('__')[-1]} from a thread")
         elif opts.get("attribution") != "allow":
             found = check_github_tool(tool_input)

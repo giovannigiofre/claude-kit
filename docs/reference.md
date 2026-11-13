@@ -93,7 +93,8 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
   `+refspec`, or with `--all`, is asked about from any caller, while `--force-with-lease` on a
   branch that is not protected stays free. From a subagent, a push that deletes a remote branch
   (`:branch`, `--delete`) is asked about, and merging a PR (`gh pr merge`, a `gh api` call to
-  `…/merge` or the `mergePullRequest` mutation, a GitHub MCP merge tool) is refused: the thread
+  `…/merge` or the `mergePullRequest` mutation, any GitHub MCP tool with `merge` in its name
+  but `disable_pr_auto_merge`) is refused: the thread
   reports `needs merge` and the coordinator merges; from the main session `gh pr merge` is left to
   the permission system. Also from a subagent, the kit's `items.py` commands that change the
   owner's settings (`away on|off`, `sandbox on|off`, `unattended` with any choice),

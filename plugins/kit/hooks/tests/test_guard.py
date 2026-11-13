@@ -790,12 +790,17 @@ def main():
     if code != 2 or "only the coordinator" not in err:
         failed += 1
         print(f"FAIL a thread's away on refusal names the coordinator: {err}")
-    for agent, expect in [(thread, "block"), (None, "allow")]:
-        got = verdict(home, r21, None, agent, "mcp__github__merge_pull_request", {"owner": "o", "repo": "r",
-                                                                                 "pullNumber": 12})
-        if got != expect:
-            failed += 1
-            print(f"FAIL the GitHub MCP merge tool from {'a thread' if agent else 'the main session'}: {got}")
+    # every GitHub MCP tool that merges or arms a merge is the coordinator's; turning it off is not
+    for tool, from_thread in [("merge_pull_request", "block"), ("enable_pr_auto_merge", "block"),
+                              ("disable_pr_auto_merge", "allow"), ("update_pull_request_branch", "allow"),
+                              ("pull_request_read", "allow")]:
+        for agent, expect in [(thread, from_thread), (None, "allow")]:
+            got = verdict(home, r21, None, agent, f"mcp__github__{tool}", {"owner": "o", "repo": "r",
+                                                                         "pullNumber": 12})
+            if got != expect:
+                failed += 1
+                print(f"FAIL the GitHub MCP tool {tool} from {'a thread' if agent else 'the main session'}: "
+                      f"{expect} expected, got {got}")
 
     # hermetic git: GIT_DIR inherited from a git hook does not turn guard.git to another repository
     sys.path.insert(0, str(SCRIPT.parent))
