@@ -331,6 +331,16 @@ def exclude_wanted(main, with_files):
     return list(dict.fromkeys(lines))
 
 
+def nothing_to_move(main, skipped):
+    """The line for a run that moved nothing: where the state is, and why it stays there."""
+    if kitlib.kit_dir_linked(main):
+        return (f"nothing to move: the state stays in {LEGACY}/, because {main / STATE} is a symlink "
+                f"(to {os.readlink(main / STATE)}) and nothing is written through it")
+    if skipped:
+        return f"nothing to move: what is left in place above stays in {LEGACY}/, read where it is"
+    return "nothing to move" + (f": the state is in {STATE}/" if (main / STATE).is_dir() else "")
+
+
 def migrate(main, dry=False, force=False, out=print, again=False):
     """Move what can move; returns (exit code, the entries moved, the conflicts left, the entries
     that failed with their error)."""
@@ -403,7 +413,7 @@ def migrate(main, dry=False, force=False, out=print, again=False):
             out(line)
     if done or not (conflicts or failed):
         out(f"moved {len(done)} entr{'y' if len(done) == 1 else 'ies'} to {STATE}/" if done
-            else "nothing to move" + (f": the state is in {STATE}/" if (main / STATE).is_dir() else ""))
+            else nothing_to_move(main, skipped))
     try:
         text = (main / ".gitignore").read_text(encoding="utf-8")
         if done and (f"{LEGACY}/lead" in text or f"{LEGACY}/evidence" in text):

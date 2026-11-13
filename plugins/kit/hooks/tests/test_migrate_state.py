@@ -473,7 +473,17 @@ def main():
         check(not (repo / ".kit").exists() and sorted(str(p.relative_to(shared)) for p in shared.rglob("*")) == before,
               "nothing moved or written")
         code, out = run(repo, "migrate")
-        check(code == 0 and "nothing to move" in out, f"migrate: {out}")
+        check(code == 0 and "nothing to move: what is left in place above stays in .claude/" in out, f"migrate: {out}")
+
+    # migrate with the main checkout's .kit a symlink says where the state is and why it stays
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = project(tmp)
+        elsewhere = Path(tmp) / "elsewhere"
+        elsewhere.mkdir()
+        (repo / ".kit").symlink_to(elsewhere)
+        code, out = run(repo, "migrate")
+        check(code == 0 and "the state stays in .claude/, because" in out and ".kit is a symlink" in out
+              and "the state is in .kit/" not in out and list(elsewhere.iterdir()) == [], f"migrate: {out}")
 
     # when the exclude line cannot be added, an entry still to move is a failure: migrate does
     # not say "nothing to move" or exit 0, status lists it, and a session start says it once
