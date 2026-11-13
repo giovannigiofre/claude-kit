@@ -34,7 +34,7 @@ expanded, the scripts are in the kit plugin's `hooks/scripts/`).
    done) goes to a proposal card instead: destination `card`.
 
 2. **Save it**: `I new "<name>" --brief - --from handoff` with the brief on stdin. It prints
-   the item id and the folder (`.claude/lead/items/<id>/BRIEF.md`, headed `ITEM: <id>`, which
+   the item id and the folder (`.kit/lead/items/<id>/BRIEF.md`, headed `ITEM: <id>`, which
    is how threads and hooks tie their reports to it). For `card`: a JSON object
    `{origin, summary, rationale, evidence, confidence, class}` to `P add -` (class A mechanical
    and reversible, B needs judgment, C a human decision) and stop here.
@@ -51,7 +51,7 @@ expanded, the scripts are in the kit plugin's `hooks/scripts/`).
    - **bg**: a new background session in this checkout:
      `claude --bg --name <id> "Read <path>/BRIEF.md and run it as item <id> with the kit:lead skill (ship mode from kit.json); report when the PR is ready."`
      Give the user the printed session id and `claude attach <id>` (or `claude agents`).
-   - **save**: nothing else; the item waits in `.claude/lead/items/`.
+   - **save**: nothing else; the item waits in `.kit/lead/items/`.
 
 4. **Reply in two lines**: the item id and path, and where it went (or that it waits). The
    session stays in ask mode until the user changes it.

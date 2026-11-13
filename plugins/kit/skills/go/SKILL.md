@@ -27,7 +27,7 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
    and records the tree it passed on, for the Evidence section), else the project's tests,
    lint, build. Then exercise the change: run the CLI, call the API, load the
    page (a project `verify` skill, or an older `e2e` one, says how). Save proof under
-   `.claude/evidence/<branch>/` and write one line per scenario: `<scenario> | pass/fail |
+   `.kit/evidence/<branch>/` of the main checkout (where `gate.py` keeps its record) and write one line per scenario: `<scenario> | pass/fail |
    <evidence file>`. A test that mocks the changed path, or reading the code, is not evidence.
    Fix failures and repeat.
 5. **Review, then simplify.** Run the `code-review` skill on the branch with the intent from step
@@ -40,7 +40,7 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
 6. **Risk and PR.** Rate the risk low, medium or high in one or two lines: blast radius (shared
    modules, auth, money, migrations, data deletion, public API), how much the evidence covers,
    how hard it is to roll back. Branch first if on the default branch. Stage only the files this
-   work changed (no secrets, `.env`, large data or `.claude/evidence/`), commit as the repo's
+   work changed (no secrets, `.env`, large data or `.kit/`), commit as the repo's
    configured git user with a message that says why (no AI co-author lines or footers), push
    and `gh pr create` (unless `no-pr`) with sections **Intent**, **Changes**,
    **Evidence**, **Fixed along the way**, **Risk**, **Open**; attach screenshots and logs with

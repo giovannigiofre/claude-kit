@@ -20,7 +20,7 @@ the model can't do alone, re-checked when a new model lands.
 | All day | just talk | in a project with `kit.json`, loop mode is on by default: every message goes to the coordinator (`kit:lead`), which answers, starts a thread or steers one, in at most four lines |
 | A messy idea | just write it | the coordinator (or `kit:shape`) asks 2-3 multiple-choice rounds and writes a brief with a checkable DONE WHEN |
 | Thinking it through first | `/kit-mode ask` | a discussion about the repo: Claude reads and reasons, changes no code (docs may be edited); `/kit:handoff` turns the conclusion into a brief and sends it to the coordinator, another open session or a new background session |
-| Finding work | `/kit:scout` | read-only explorers write deduplicated proposal cards (A mechanical, B needs judgment, C human-only) into `.claude/lead/proposals/`; `next` takes the A cards |
+| Finding work | `/kit:scout` | read-only explorers write deduplicated proposal cards (A mechanical, B needs judgment, C human-only) into `.kit/lead/proposals/`; `next` takes the A cards |
 | Something broke | describe it | `kit:investigate`: evidence (asks you once, with exact export steps), reproduction, hypotheses, a regression-tested fix |
 | UI or LLM work | describe it | the kit asks "Use Kit UI / Kit LLM for this?" and installs that plugin for the project on yes |
 | First PR in a project | answer once | "Do I merge PRs once they're green, or do you always review them first?"; the answer is saved in `kit.json` (`lead.merge`) |
@@ -34,10 +34,10 @@ threads' job.
 **The coordinator** is Claude Projects for the terminal (Projects runs only on web, desktop and
 mobile today). One conversation routes each message: a question is answered in place, new work
 becomes a thread (`kit:implementer` in its own worktree, in the background), a follow-up goes to
-the thread already working in that area. The board (`.claude/lead/board.md`) holds every item as
+the thread already working in that area. The board (`.kit/lead/board.md`) holds every item as
 `working`, `review` (ready for you), `needs-you`, `done`; it survives compaction and restarts, and
 comes back into context after a compaction. Each item is also a folder on disk
-(`.claude/lead/items/<id>/`: `BRIEF.md` you can edit to steer, `REPORT.md` and `VERDICT.md`
+(`.kit/lead/items/<id>/`: `BRIEF.md` you can edit to steer, `REPORT.md` and `VERDICT.md`
 written by the hooks when a thread and the verifier finish, `LOG.md` one line per event), so you
 can `cat` what the agents said at any time, from any session (mailbox idea from
 albiol2004/trio-agent-loop, MIT). Threads run the project's gate, exercise the change,
@@ -187,7 +187,7 @@ step 6 covers the worktree details (`.worktreeinclude`, the `@AGENTS.md` first l
 
 **Cloud sessions** (claude.ai/code) start from the environment's plugins, so the kit is there
 only when the environment's setup script installs it; the lesson ledger is per machine and a
-container starts empty, and the board lives in the checkout's gitignored `.claude/lead/`, so a
+container starts empty, and the board lives in the checkout's `.kit/lead/`, kept out of git, so a
 cloud session and your machine never see each other's items. The recipe and the consequences:
 [docs/reference.md](docs/reference.md#cloud-sessions).
 

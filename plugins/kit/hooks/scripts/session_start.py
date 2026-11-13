@@ -4,8 +4,10 @@ kit.json names them, offer the kit's machine settings once (not in a cloud conta
 ~/.claude is ephemeral: CLAUDE_CODE_REMOTE=true), re-apply the user's approved per-repo auto
 mode lines to user settings, import new memories into the kit's lesson ledger and hand the main
 session its lessons, the news of what the kit changed in them and, every lessons.REVIEW_DAYS, a
-line that the lesson review is due (lessons.py), and after a compaction put the coordinator's
-board back into context (stdout is added to context).
+line that the lesson review is due (lessons.py), move an older project's kit state out of
+.claude/ into .kit/ when nothing is at work (migrate_state.py: one line when it moves, one with
+the reason when it waits), and after a compaction put the coordinator's board back into context
+(stdout is added to context).
 
 A kit.json that exists is the opt-in, even `{}`: the "kit harness active" line is always printed
 then, with one line per key the kit does not know (and the closest known key), one per key of
@@ -22,7 +24,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kitlib  # noqa: E402
 import machine_setup  # noqa: E402
 
-BOARD = ".claude/lead/board.md"
 SESSION_LESSONS = 1600  # about 400 tokens of the ledger's lessons for the main session
 MAX_BOARD_CHARS = 8000  # the contract's size: a board within it comes back whole
 BOARD_LINES, BOARD_BYTES = 60, 8000  # the board's contract (kit:lead)
@@ -114,9 +115,11 @@ def as_list(config, key):
 
 def read_board(root, config):
     """(the board's path as configured, its text) or (rel, "") when there is none."""
-    lead = (config or {}).get("lead") if isinstance(config, dict) else None
-    rel = lead.get("board") if isinstance(lead, dict) and isinstance(lead.get("board"), str) else BOARD
-    path = Path(rel) if Path(rel).is_absolute() else Path(root) / rel
+    path = kitlib.board_file(root, config)  # .kit/lead/board.md, .claude/lead/ before the move
+    try:
+        rel = path.relative_to(root).as_posix()
+    except ValueError:
+        rel = str(path)
     try:
         return rel, path.read_text(encoding="utf-8").strip()
     except Exception:
@@ -130,7 +133,7 @@ def board_warning(text):
         return ""
     return (f"kit: the board is {len(lines)} lines, {size // 1000} KB, over its {BOARD_LINES}-line, "
             f"{BOARD_BYTES // 1000} KB contract: archive done rows (items.py done <id>), keep RULES to "
-            "standing rules and move dated decisions to .claude/lead/DECISIONS.md.")
+            "standing rules and move dated decisions to DECISIONS.md beside the board.")
 
 
 def print_board(root, config):
@@ -244,6 +247,13 @@ def main():
         return 0
     if config is None:
         return 0  # project has not opted in: stay silent
+    if data.get("source") != "compact":  # not mid-session: the coordinator may be using the board
+        try:  # an older project's state leaves .claude/, where every write by a thread asked the owner
+            import migrate_state
+            for line in migrate_state.auto(root):
+                print(line)
+        except Exception as exc:
+            print(f"kit: moving the kit's state to .kit/ skipped: {exc}")
     if data.get("source") != "compact":  # after a compaction print_board says it
         warning = board_warning(read_board(root, config)[1])
         if warning:

@@ -29,7 +29,7 @@ Keep it to the format below, about 25 lines; the detail lives in the PR body and
    the obvious test, lint and build commands. Where there is a surface, exercise
    it the way a user would (run the CLI, call the API, load the page; a project `verify` skill,
    or an older `e2e` one, says how, including setting up a fresh worktree). Save what proves it
-   under `.claude/evidence/<branch>/`. Run commands in the foreground with a `timeout` for how
+   in the evidence folder the kit's gate line names (`.kit/evidence/<branch>/`). Run commands in the foreground with a `timeout` for how
    long they should take (up to 10 minutes), so a hang has a deadline. Only a longer one runs in
    the background, with a `timeout` too (`(server)` in the description of one meant to keep
    running), and it must end on its own: never one whose exit waits on something you do later,

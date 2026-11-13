@@ -46,7 +46,8 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
   memory           the kit verifier (agent type kit:verifier only) writing a memory file (a
                    MEMORY.md in any case, anything in an agent-memory folder; by redirect, tee,
                    cp/mv/install/ln/rsync, dd, sed -i/perl -i/truncate, or interpreter code that
-                   opens a quoted path) outside <main checkout>/.claude/agent-memory/kit-verifier;
+                   opens a quoted path) outside <main checkout>/.kit/agent-memory/kit-verifier
+                   (`.claude/` in a project the kit has not moved yet: kitlib.state_entry);
                    quoted text and here-document bodies are data, not writes; checked in every
                    repo, kit.json or not, guard off too, since the verifier is the kit's
   hook-bypass      a git commit, push, merge, rebase, cherry-pick or am that skips the repository's
@@ -1398,7 +1399,7 @@ def record_denial(cwd, rule, why, session):
         pass
 
 
-MEMORY_DIR = Path(".claude") / "agent-memory" / "kit-verifier"
+MEMORY_NAME = "agent-memory/kit-verifier"  # a kit state entry, where kitlib.state_entry finds it
 MEMORY_COPIERS = {"cp", "mv", "install", "ln", "rsync", "ditto"}
 MEMORY_EDITORS = {"sed", "gsed", "perl"}  # in place (-i): the files they name are written
 MEMORY_CODE = re.compile(r"\bopen\s*\(|write_text|write_bytes|writeFile|appendFile|shutil\.(?:copy|move)|\.rename\(")
@@ -1449,7 +1450,7 @@ def memory_words(command):
 
 def memory_write(command, cwd):
     """For the kit verifier (in every repo): the memory file this command writes outside its one
-    memory folder, <main checkout>/.claude/agent-memory/kit-verifier (subagent_start.py names it),
+    memory folder, <main checkout>/.kit/agent-memory/kit-verifier (subagent_start.py names it),
     else None. A write counts when its target (a redirection, tee, the destination of cp/mv/install/
     ln/rsync, dd's of=, a file sed -i/perl -i/truncate names, or a quoted path in code given to an
     interpreter that opens or writes a file: best effort) is a MEMORY.md (any case: macOS), lies in
@@ -1460,7 +1461,7 @@ def memory_write(command, cwd):
     if "memory.md" not in flat and "agent-memory" not in flat:
         return None
     main = kitlib.main_checkout(cwd)
-    stable = Path(os.path.realpath(str(Path(main) / MEMORY_DIR))) if main else None
+    stable = Path(os.path.realpath(str(kitlib.state_entry(main, MEMORY_NAME)))) if main else None
     targets, env, code = memory_words(command)
     base = Path(cwd)
     segs = [s for s in segments(command) if s.get("argv")]
@@ -1516,7 +1517,7 @@ def main():
             stray = None
         if stray:
             main_dir = kitlib.main_checkout(cwd)
-            where = Path(main_dir) / MEMORY_DIR if main_dir else "the folder the kit named at start-up"
+            where = kitlib.state_entry(main_dir, MEMORY_NAME) if main_dir else "the folder the kit named at start-up"
             print(f"kit guard (memory): this writes {stray}, outside your memory folder {where}. Write the "
                   "pitfall there, by that absolute path: a memory written anywhere else is lost with its "
                   "worktree, or left untracked in the repo.", file=sys.stderr)

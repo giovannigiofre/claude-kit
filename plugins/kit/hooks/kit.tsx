@@ -330,23 +330,37 @@ function named(label: string, ids: string[]): string {
   return `${label} ${ids.length}: ${ids.slice(0, SHOWN_IDS).map(cut).join(', ')}${more}`
 }
 
+// The kit's working state lives in `.kit/` at the repo root; a project the kit has not moved yet
+// still has it in `.claude/` (Claude Code protects that folder, so threads stalled on prompts
+// writing there). Both are read, `.kit` first, as kitlib.state_entry does.
+const STATE_DIRS = ['.kit', '.claude']
+const LEGACY_BOARD = '.claude/lead/board.md' // the default /kit:init wrote into kit.json
+
 // The board from kit.json `lead.board` or the default path: null when there is no board,
 // undefined when it (or kit.json) exists but could not be read this time.
 async function readBoard($: $, root: string): Promise<Board | null | undefined> {
   const kitJson = await readJsonForWrite($, await kitJsonPath($, root))
   if (kitJson.isBroken) return undefined
   const lead = kitJson.value.lead
-  const boardPath = (lead && lead.board) || '.claude/lead/board.md'
-  const path = boardPath.startsWith('/') ? boardPath : `${root}/${boardPath}`
-  try {
-    return readBoardText(await $.fs.read(path))
-  } catch {
+  const custom = typeof (lead && lead.board) === 'string' ? lead.board.trim().replace(/^\.\//, '') : ''
+  const paths = custom && custom !== LEGACY_BOARD
+    ? [custom.startsWith('/') ? custom : `${root}/${custom}`]
+    : STATE_DIRS.map(dir => `${root}/${dir}/lead/board.md`)
+  for (const path of paths) {
     try {
-      return (await $.fs.exists(path)) ? undefined : null
+      return readBoardText(await $.fs.read(path))
+    } catch {
+      // the next place, or none
+    }
+  }
+  for (const path of paths) {
+    try {
+      if (await $.fs.exists(path)) return undefined
     } catch {
       return undefined
     }
   }
+  return null
 }
 
 // Overnight runs still going, in the project and each of its worktrees.
@@ -360,16 +374,18 @@ async function liveOvernightRuns($: $, root: string): Promise<number> {
   }
   let live = 0
   for (const r of roots) {
-    let entries: { name: string; kind: string }[] = []
-    try {
-      entries = (await $.fs.list(`${r}/.claude/overnight`)) as any
-    } catch {
-      continue
-    }
-    for (const entry of entries) {
-      if (entry.kind !== 'dir') continue
-      const state = await readJson($, `${r}/.claude/overnight/${entry.name}/state.json`)
-      if (state && !state.stop_reason) live++
+    for (const dir of STATE_DIRS) {
+      let entries: { name: string; kind: string }[] = []
+      try {
+        entries = (await $.fs.list(`${r}/${dir}/overnight`)) as any
+      } catch {
+        continue
+      }
+      for (const entry of entries) {
+        if (entry.kind !== 'dir') continue
+        const state = await readJson($, `${r}/${dir}/overnight/${entry.name}/state.json`)
+        if (state && !state.stop_reason) live++
+      }
     }
   }
   return live

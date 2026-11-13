@@ -21,7 +21,11 @@ function world(on: On, files: Record<string, string> = {}, agents: any[] = [], e
     written[e.path] = e.text
     return { value: undefined }
   })
-  on('fs.list', () => ({ deny: 'ENOENT' }))
+  on('fs.list', (_, e: any) => { // the folders under a path, from the files in memory
+    const dir = `${e.path}/`
+    const names = [...new Set(Object.keys(files).filter(f => f.startsWith(dir)).map(f => f.slice(dir.length).split('/')[0]))]
+    return names.length ? { value: names.map(name => ({ name, kind: 'dir' })) } : { deny: 'ENOENT' }
+  })
   on('settings.read', () => ({ value: {} }))
   on('agent.list', () => ({ value: agents }))
   on('command.register', (_, e: any) => ({ value: { command: e.name } }))
@@ -227,6 +231,25 @@ test('the status line follows the board on every tick', async ($, on) => {
   ].join('\n')
   await clock.advance(15000)
   expect(lines.at(-1)).toBe('light · host · $1.50')
+})
+
+test('the board and overnight runs are read from .kit first, then .claude', async ($, on) => {
+  const files: Record<string, string> = {
+    '/repo/.claude/kit.json': JSON.stringify({ lead: { board: '.claude/lead/board.md' } }),
+    '/repo/.kit/lead/board.md': 'NEEDS YOU: none\nB1 | ship | moved | DONE WHEN e2e | review | agent B1 | PR #4 | CI green',
+    '/repo/.claude/lead/board.md': 'NEEDS YOU: none\nA1 | ship | old | DONE WHEN e2e | review | agent A1 | PR #3 | CI green',
+    '/repo/.kit/overnight/r1/state.json': JSON.stringify({ stop_reason: null }),
+    '/repo/.claude/overnight/r0/state.json': JSON.stringify({ stop_reason: null }),
+  }
+  world(on, files)
+  const lines: (string | undefined)[] = []
+  on('ui.status', (_, e) => {
+    lines.push(e.text)
+    return { value: undefined }
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  // the old default board path in kit.json follows the move; a run in either layout is live
+  expect(lines.at(-1)).toBe('loop · host · $1.50 · ready 1: B1 · 2 overnight')
 })
 
 test('a thread waiting for an answer counts on the line; a board that gains work for the person keeps the line right', async ($, on) => {

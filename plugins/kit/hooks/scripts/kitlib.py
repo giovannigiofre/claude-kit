@@ -438,6 +438,109 @@ def exclude(root, rel):
         pass
 
 
+def exclude_dir(root, rel):
+    """Keep the folder `rel` (under the checkout `root`) out of git: the line `/<rel>/` in
+    .git/info/exclude, unless the project ignores the folder already."""
+    root, rel = Path(root), str(rel).strip("/")
+    try:
+        if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", f"{rel}/probe"], capture_output=True,
+                          timeout=10, env=git_env()).returncode == 0:
+            return
+    except Exception:
+        return
+    info = git_out(root, "rev-parse", "--git-path", "info/exclude")
+    if not info:
+        return
+    info = Path(info) if Path(info).is_absolute() else root / info
+    try:
+        info.parent.mkdir(parents=True, exist_ok=True)
+        text = info.read_text(encoding="utf-8") if info.exists() else ""
+        line = f"/{rel}/"
+        if line not in text.splitlines():
+            info.write_text(text + ("" if not text or text.endswith("\n") else "\n") + line + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+# Where the kit keeps a project's working state: `.kit/` at the repo root, or `.claude/` in a
+# project that has not moved yet. Claude Code asks the owner before any write inside `.claude`
+# (a protected path; only `.claude/worktrees/` is exempt) and no allow rule pre-approves it, so
+# background threads stalled on those prompts while the owner was away; writes under `.kit/`
+# pass. What Claude Code reads (settings, skills/, agents/, worktrees/, loop.md) and the kit's own
+# kit.json / kit.local.json stay in `.claude/`: the gate commands permission.py lets run unasked
+# come from kit.json, so it stays behind the protected path. migrate_state.py moves the entries.
+STATE_DIR = ".kit"
+LEGACY_STATE_DIR = ".claude"
+# What moves, an allowlist: a name missing here stays where it is (other agents' agent-memory too).
+STATE_NAMES = ("lead", "evidence", "overnight", "agent-memory/kit-verifier")
+PER_CHECKOUT_STATE = ("overnight",)  # in the checkout the run is in, a linked worktree included
+LEGACY_BOARD = ".claude/lead/board.md"  # the default /kit:init wrote into kit.json `lead.board`
+
+
+def has_legacy_state(base):
+    """True when the checkout `base` still holds kit state under `.claude/`."""
+    return any((Path(base) / LEGACY_STATE_DIR / name).exists() for name in STATE_NAMES)
+
+
+def state_dir_name(base):
+    """`.kit` when it exists in the checkout `base` (pass the main checkout), `.claude` when that
+    still holds kit state, else `.kit`: a new project starts there."""
+    base = Path(base)
+    if (base / STATE_DIR).is_dir():
+        return STATE_DIR
+    return LEGACY_STATE_DIR if has_legacy_state(base) else STATE_DIR
+
+
+def _state_bases(root, per_checkout):
+    own = git_root(root) or Path(root)
+    main = main_checkout(root) or own
+    return own, main, (own if per_checkout else main)
+
+
+def state_dir(root, per_checkout=False):
+    """The folder new kit state goes to, decided on the main checkout; `per_checkout` puts it in
+    `root`'s own checkout (overnight runs live in the worktree they ran in)."""
+    _, main, base = _state_bases(root, per_checkout)
+    return base / state_dir_name(main)
+
+
+def state_entry(root, name, per_checkout=None):
+    """Where the entry `name` (one of STATE_NAMES) is: `.kit/<name>` when it exists, else
+    `.claude/<name>` when that exists, else under state_dir, where it will be made. Reads and
+    writes both go through this, so an entry the move left behind (tracked in git, say) is still
+    the one in use. `lead`, `evidence` and the verifier's memory are the main checkout's."""
+    if per_checkout is None:
+        per_checkout = name.split("/")[0] in PER_CHECKOUT_STATE
+    _, main, base = _state_bases(root, per_checkout)
+    for folder in (STATE_DIR, LEGACY_STATE_DIR):
+        if (base / folder / name).exists():
+            return base / folder / name
+    return base / state_dir_name(main) / name
+
+
+def board_file(root, config=None):
+    """The board: kit.json `lead.board` (relative to `root`), else `<state>/lead/board.md`. The old
+    default /kit:init wrote there, `.claude/lead/board.md`, counts as the default, so it follows
+    the move."""
+    lead = config.get("lead") if isinstance(config, dict) else None
+    board = lead.get("board") if isinstance(lead, dict) and isinstance(lead.get("board"), str) else ""
+    if not board.strip() or Path(board.strip()).as_posix() == LEGACY_BOARD:
+        return state_entry(root, "lead") / "board.md"
+    return Path(board) if Path(board).is_absolute() else Path(root) / board
+
+
+def exclude_state(root, name):
+    """Keep the state entry `name` out of git where it is now: one line per entry
+    (`/.kit/lead/`), never a blanket `/.kit/`, so a project may commit other files there."""
+    path = state_entry(root, name)
+    for base in dict.fromkeys(_state_bases(root, False)[:2]):
+        try:
+            exclude_dir(base, path.relative_to(base).as_posix())
+            return
+        except ValueError:
+            continue
+
+
 GATE_TIMEOUTS = {"check": 540, "verify": 1800}  # seconds; kit.json checkTimeout / verifyTimeout override
 
 

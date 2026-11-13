@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """The coordinator's items on disk: one folder per piece of work, written mostly by hooks.
 
-    .claude/lead/items/<id>/BRIEF.md     the goal, DONE WHEN, scope: written when the item is
+    <state>/lead/items/<id>/BRIEF.md     the goal, DONE WHEN, scope: written when the item is
                                          made (by the lead, /kit:handoff or a proposal card),
                                          editable by the user to steer the next round
-    .claude/lead/items/<id>/REPORT.md    the thread's final report (SubagentStop, kit:implementer)
-    .claude/lead/items/<id>/VERDICT.md   the verifier's report (SubagentStop, kit:verifier)
-    .claude/lead/items/<id>/LOG.md       one line per event, append-only
-    .claude/lead/items/<id>/out/         files a thread leaves for the coordinator (`put`): a
+    <state>/lead/items/<id>/REPORT.md    the thread's final report (SubagentStop, kit:implementer)
+    <state>/lead/items/<id>/VERDICT.md   the verifier's report (SubagentStop, kit:verifier)
+    <state>/lead/items/<id>/LOG.md       one line per event, append-only
+    <state>/lead/items/<id>/out/         files a thread leaves for the coordinator (`put`): a
                                          scout's outputs, which must outlive its worktree
-    .claude/lead/items/done/<id>/        archived when the item is done; its board row moves
-                                         to .claude/lead/archive.md (an earlier archive of the
+    <state>/lead/items/done/<id>/        archived when the item is done; its board row moves
+                                         to <state>/lead/archive.md (an earlier archive of the
                                          same id is kept: done/<id>-2, -3, ...)
+
+<state> is `.kit` at the repo root, or `.claude` in a project the kit has not moved yet
+(kitlib.state_entry; migrate_state.py moves it).
 
 The board stays the index; these files are what survives a compaction, a restart or a look from
 another session (`cat` them). BRIEF.md starts with `ITEM: <id>`: a thread briefed with its text
@@ -75,15 +78,13 @@ STATUSES = ("queued", "working", "review", "needs-you", "landing", "done", "park
 
 
 def board_file(root):
-    """`.claude/lead/board.md`, or kit.json `lead.board`."""
+    """The board: `<state>/lead/board.md` (kitlib.state_entry), or kit.json `lead.board`."""
     config, _ = kitlib.load_config(root)
-    lead = (config or {}).get("lead") if isinstance(config, dict) else None
-    board = lead.get("board") if isinstance(lead, dict) and isinstance(lead.get("board"), str) else ".claude/lead/board.md"
-    return Path(board) if Path(board).is_absolute() else Path(root) / board
+    return kitlib.board_file(root, config)
 
 
 def lead_dir(root):
-    """`.claude/lead` or the folder of kit.json `lead.board`."""
+    """`<state>/lead` (`.kit/lead`, or `.claude/lead` before the move) or the folder of kit.json `lead.board`."""
     return board_file(root).parent
 
 
@@ -92,30 +93,17 @@ def items_dir(root):
 
 
 def ensure_excluded(root):
-    """The lead's folder stays out of git unless the project ignores it already."""
-    import subprocess
+    """The lead's folder stays out of git unless the project ignores it already: the line for the
+    state entry where it is now (`/.kit/lead/`), or for the folder of a board kit.json names."""
     root = Path(root)
-    rel = lead_dir(root)
+    lead = lead_dir(root)
+    if lead == kitlib.state_entry(root, "lead"):
+        kitlib.exclude_state(root, "lead")
+        return
     try:
-        rel = rel.relative_to(root).as_posix()
+        kitlib.exclude_dir(root, lead.relative_to(root).as_posix())
     except ValueError:
         return
-    probe = subprocess.run(["git", "-C", str(root), "check-ignore", "-q", f"{rel}/probe"], capture_output=True,
-                           env=kitlib.git_env())
-    if probe.returncode == 0:
-        return
-    exclude = kitlib.git_out(root, "rev-parse", "--git-path", "info/exclude")
-    if not exclude:
-        return
-    exclude = Path(exclude) if Path(exclude).is_absolute() else root / exclude
-    try:
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-        line = f"/{rel}/"
-        if line not in text.splitlines():
-            exclude.write_text(text + ("" if not text or text.endswith("\n") else "\n") + line + "\n", encoding="utf-8")
-    except OSError:
-        pass
 
 
 def slug(text, limit=40):
@@ -158,8 +146,9 @@ def log(root, item_id, status, note=""):
 
 def put(root, item_id, sources):
     """Copy files into the item's out/ folder and return where they went, or None without the item.
-    `.claude` is a protected path of Claude Code, so a thread's own `mkdir` or `cp` there asks the
-    owner; this script, run by its real path, does not (permission.py). Only regular files, by
+    `.claude` is a protected path of Claude Code, so a thread's own `mkdir` or `cp` there asked the
+    owner before the state moved to `.kit`; this script, run by its real path, never does
+    (permission.py), in either layout. Only regular files, by
     their own name, only into out/ itself: a symlink in the way is replaced, never followed."""
     p = find(root, item_id)
     if not p:

@@ -470,7 +470,7 @@ def harvest(cwd):
     if kit and kit != info["origin"]:
         kit_info = {"slug": auto_mode_sync.slug_for(kit), "origin": kit, "name": kit.rsplit("/", 1)[-1]}
     sources = [
-        (main / ".claude" / "agent-memory" / "kit-verifier", "verifier", lambda name: True),
+        (kitlib.state_entry(main, "agent-memory/kit-verifier"), "verifier", lambda name: True),
         (kitlib.config_dir() / "projects" / cc_slug(main) / "memory", "memory",
          lambda name: name.startswith("feedback_")),
     ]
@@ -553,7 +553,9 @@ def candidates(info, agent):
     rows = [r for r in read_rows(file_of(info["slug"])) + read_rows(file_of(MACHINE))
             if r.get("status") == "active" and agent in (r.get("applies") or {}).get("agents", AGENTS)]
     if agent == "verifier":  # the verifier's own memory index is already in its context
-        own = str(Path(info["main"]) / ".claude" / "agent-memory" / "kit-verifier") + os.sep
+        # in either layout: a pitfall imported before the move to .kit/ keeps the path it had then
+        own = tuple(str(Path(info["main"]) / folder / "agent-memory" / "kit-verifier") + os.sep
+                    for folder in (kitlib.STATE_DIR, kitlib.LEGACY_STATE_DIR))
         rows = [r for r in rows if not str(r.get("file", "")).startswith(own)]
     return sorted(rows, key=rank, reverse=True)
 

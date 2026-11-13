@@ -55,9 +55,10 @@ and its CI actually run, not guesses.
    every worktree it creates, and `"worktree": {"symlinkDirectories": ["node_modules"]}` in
    `.claude/settings.json` saves a reinstall per thread. A Next.js 16.3+ app writes its own agent block into `AGENTS.md`
    (bundled docs under `node_modules/next/dist/docs/`): check it is there.
-7. **gitignore**: `.claude/evidence/` (proof from `/kit:go` and threads), `.claude/overnight/`
-   (run logs), `.claude/kit.local.json` (this machine's unattended git choices) and
-   `.claude/lead/` (the board), unless the user wants the board shared.
+7. **gitignore**: `.kit/evidence/` (proof from `/kit:go` and threads), `.kit/overnight/`
+   (run logs), `.kit/lead/` (the board), `.kit/agent-memory/` (the verifier's pitfalls) and
+   `.claude/kit.local.json` (this machine's unattended git choices), unless the user wants the
+   board shared. The kit keeps each out of git itself too, in `.git/info/exclude`.
    `.claude/review-decisions.md` stays committed so every clone skips declined findings.
 8. **Compaction**: add a short `# Compact instructions` section to CLAUDE.md (keep the goal,
    constraints and decisions stated exactly, user preferences, in-flight work and branches, open
@@ -125,6 +126,6 @@ without one uses its main checkout's):
   "learn": {"model": true}, "llm": "on",
   "author": "Name <email>",
   "lead": {"read": ["docs/backlog.md"], "backlog": "docs/backlog.md", "notes": "...", "ship": "pr",
-           "merge": "user", "parallel": 3, "budget": "none", "loops": [], "board": ".claude/lead/board.md"}
+           "merge": "user", "parallel": 3, "budget": "none", "loops": [], "board": ".kit/lead/board.md"}
 }
 ```

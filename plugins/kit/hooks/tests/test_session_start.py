@@ -113,7 +113,10 @@ def main():
         # a kit.json that exists is the opt-in, even `{}`: the header line always prints
         (repo / ".claude" / "kit.json").write_text("{}")
         out = run({"cwd": str(repo), "source": "startup"})
-        assert out.strip() == "kit harness active for this project (.claude/kit.json):", out
+        # this project's legacy board still has A1 working, so its state waits in .claude/, saying why
+        *waiting, header = out.strip().splitlines()
+        assert header == "kit harness active for this project (.claude/kit.json):", out
+        assert len(waiting) == 1 and "stays in .claude/ for now (board row A1 is working" in waiting[0], out
         # a typo is named with the closest known key, at the top level and inside a section
         (repo / ".claude" / "kit.json").write_text(json.dumps({"chek": "make lint", "verfy": "make test",
                                                                "lead": {"baord": "docs/b.md", "notes": "n"},
@@ -181,6 +184,48 @@ def main():
         (repo / ".claude" / "kit.json").write_text("{broken")
         out = run({"cwd": str(repo), "source": "startup"})
         assert "cannot read" in out, "a broken kit.json is reported, not ignored"
+
+    # an older project's state leaves .claude/ at a session start, unless a thread is at work
+    with tempfile.TemporaryDirectory() as tmp:
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.org"]
+        repo = Path(tmp) / "old"
+        (repo / ".claude" / "lead" / "items" / "A1").mkdir(parents=True)
+        (repo / ".claude" / "evidence" / "main").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / ".claude" / "kit.json").write_text("{}")
+        (repo / ".claude" / "lead" / "board.md").write_text("A1 | ship | a | DONE WHEN x | queued | - | - | -\n")
+        log = repo / ".claude" / "lead" / "items" / "A1" / "LOG.md"
+        log.write_text("- 2026-11-01 10:00 | working | feat/a\n")
+        (repo / ".claude" / "evidence" / "main" / "gate-verify.json").write_text("{}")
+        (repo / ".git" / "info" / "exclude").write_text("/.claude/lead/\n/.claude/evidence/\n")
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert "stays in .claude/ for now (item A1 is working" in out, out
+        assert (repo / ".claude" / "lead" / "board.md").exists() and not (repo / ".kit").exists(), "nothing moved"
+        assert "moved this project" not in run({"cwd": str(repo), "source": "compact"}), "never mid-session"
+        log.write_text(log.read_text() + "- 2026-11-01 11:00 | done | merged\n")
+        out = run({"cwd": str(repo), "source": "startup"})
+        moved = [l for l in out.splitlines() if "moved this project's kit state" in l]
+        assert len(moved) == 1 and "(evidence, lead) from .claude/ to .kit/" in moved[0] and "undo" in moved[0], out
+        assert (repo / ".kit" / "lead" / "board.md").exists() and not (repo / ".claude" / "lead").exists(), "moved"
+        assert "/.kit/lead/" in (repo / ".git" / "info" / "exclude").read_text()
+        status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"], capture_output=True, text=True).stdout
+        assert status == "?? .claude/\n", f"only kit.json, which was never excluded, shows: {status!r}"
+        assert "kit state" not in run({"cwd": str(repo), "source": "startup"}), "once moved, silent"
+        # a tracked entry is never moved for the owner: the command to run is printed instead
+        (repo / ".claude" / "overnight" / "r1").mkdir(parents=True)
+        (repo / ".claude" / "overnight" / "r1" / "end-state.json").write_text("{}")
+        subprocess.run(git + ["-C", str(repo), "add", "-f", ".claude/overnight"], check=True)
+        subprocess.run(git + ["-C", str(repo), "commit", "-qm", "runs"], check=True)
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert "run `git mv .claude/overnight .kit/overnight` and commit" in out, out
+        assert (repo / ".claude" / "overnight" / "r1").is_dir(), "the tracked entry stayed"
+        # a fresh project has nothing to move and makes no .kit/ by starting a session
+        fresh = Path(tmp) / "fresh"
+        (fresh / ".claude").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(fresh)], check=True)
+        (fresh / ".claude" / "kit.json").write_text("{}")
+        out = run({"cwd": str(fresh), "source": "startup"})
+        assert "kit state" not in out and not (fresh / ".kit").exists(), out
     print("session_start: all checks passed")
 
 

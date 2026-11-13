@@ -36,7 +36,7 @@ def main():
         repo = Path(tmp) / "repo"
         (repo / "docs").mkdir(parents=True)
         subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
-        (repo / ".claude").mkdir()
+        (repo / ".claude" / "lead").mkdir(parents=True)  # a project from before the move to .kit
         (repo / ".claude" / "kit.json").write_text(json.dumps({"check": "true"}))
         (repo / "docs" / "setup.md").write_text("run make install\n")
         (repo / "src").mkdir()
