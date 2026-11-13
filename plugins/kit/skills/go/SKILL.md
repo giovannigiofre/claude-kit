@@ -27,7 +27,8 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
    and records the tree it passed on, for the Evidence section), else the project's tests,
    lint, build. Then exercise the change: run the CLI, call the API, load the
    page (a project `verify` skill, or an older `e2e` one, says how). Save proof under
-   `.kit/evidence/<branch>/` of the main checkout (where `gate.py` keeps its record) and write one line per scenario: `<scenario> | pass/fail |
+   `.kit/evidence/<branch>/` of the checkout you work in (`gate.py` keeps its own record in the
+   main checkout's) and write one line per scenario: `<scenario> | pass/fail |
    <evidence file>`. A test that mocks the changed path, or reading the code, is not evidence.
    Fix failures and repeat.
 5. **Review, then simplify.** Run the `code-review` skill on the branch with the intent from step

@@ -473,7 +473,10 @@ STATE_DIR = ".kit"
 LEGACY_STATE_DIR = ".claude"
 # What moves, an allowlist: a name missing here stays where it is (other agents' agent-memory too).
 STATE_NAMES = ("lead", "evidence", "overnight", "agent-memory/kit-verifier")
-PER_CHECKOUT_STATE = ("overnight",)  # in the checkout the run is in, a linked worktree included
+# In the checkout they belong to, a linked worktree included: a run lives in the checkout it ran
+# in, and a thread saves its proof under its own worktree. The gate's record is the exception:
+# gate.py keeps it in the main checkout's evidence folder, so it outlives the worktree.
+PER_CHECKOUT_STATE = ("overnight", "evidence")
 LEGACY_LEAD = ".claude/lead/"  # a kit.json `lead.board` under it moves with the folder (board_file)
 
 
@@ -537,10 +540,10 @@ def board_file(root, config=None):
     return path
 
 
-def exclude_state(root, name):
+def exclude_state(root, name, per_checkout=None):
     """Keep the state entry `name` out of git where it is now: one line per entry
     (`/.kit/lead/`), never a blanket `/.kit/`, so a project may commit other files there."""
-    path = state_entry(root, name)
+    path = state_entry(root, name, per_checkout)
     for base in dict.fromkeys(_state_bases(root, False)[:2]):
         try:
             exclude_dir(base, path.relative_to(base).as_posix())

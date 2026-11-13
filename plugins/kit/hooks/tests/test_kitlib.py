@@ -157,6 +157,10 @@ def main():
         check(kitlib.state_dir_name(repo) == ".kit", "kit.json alone is not state: a fresh project uses .kit")
         check(kitlib.state_entry(tree, "lead") == repo / ".kit" / "lead", kitlib.state_entry(tree, "lead"))
         check(kitlib.state_entry(tree, "overnight") == tree / ".kit" / "overnight", "overnight is per checkout")
+        check(kitlib.state_entry(tree, "evidence") == tree / ".kit" / "evidence", "evidence is per checkout")
+        check(kitlib.state_entry(tree, "evidence", per_checkout=False) == repo / ".kit" / "evidence",
+              "the gate's record asks for the main checkout's")
+        check(set(kitlib.PER_CHECKOUT_STATE) <= set(kitlib.STATE_NAMES), "per-checkout names are state names")
         check(kitlib.board_file(tree, {}) == repo / ".kit" / "lead" / "board.md", kitlib.board_file(tree, {}))
         legacy = {"lead": {"board": ".claude/lead/board.md"}}
         check(kitlib.board_file(repo, legacy) == repo / ".kit" / "lead" / "board.md", "the old default follows the move")

@@ -43,7 +43,7 @@ def main():
         assert gate_only.startswith(f"kit: in {repo} and its worktrees, run the project's gate with `python3 ") and "gate.py\" check`" in gate_only \
             and gate_only.count("\n") == 0, gate_only
         # proof goes where the gate's record goes, named in full: the main checkout's .kit/evidence
-        assert f"in {repo}/.kit/evidence/<branch>/, where other proof goes too" in gate_only, gate_only
+        assert f"in {repo}/.kit/evidence/<branch>/, and other proof goes in `.kit/evidence/<branch>/` of the worktree you work in" in gate_only, gate_only
         assert "/.kit/evidence/" in (repo / ".git" / "info" / "exclude").read_text().splitlines()
         assert not (repo / ".kit").exists(), "the line names the folder; the gate makes it"
         # with items on the board, a thread is told how to log without writing in .claude itself
