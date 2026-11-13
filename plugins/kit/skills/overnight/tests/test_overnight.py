@@ -456,6 +456,21 @@ def test_project_with_legacy_state_keeps_its_runs_in_claude():
     assert "/.claude/overnight/" in excluded(d) and len(end["commits"]) == 2 and clean(d)
 
 
+def test_a_symlinked_kit_folder_is_not_where_runs_go():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("overnight_under_test", SCRIPT)
+    overnight = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(overnight)
+    d = Path(tempfile.mkdtemp())
+    elsewhere = Path(tempfile.mkdtemp())
+    (d / ".kit").symlink_to(elsewhere)
+    assert overnight.runs_dir(d) == d / ".claude" / "overnight", overnight.runs_dir(d)
+    main = Path(tempfile.mkdtemp())
+    (main / ".kit").symlink_to(elsewhere)
+    tree = Path(tempfile.mkdtemp())
+    assert overnight.runs_dir(tree, main) == tree / ".claude" / "overnight", "a worktree follows the main checkout"
+
+
 def test_push_sends_the_branch_to_origin_once_at_the_end():
     d, fake = repo(["change", "done"])
     remote = Path(tempfile.mkdtemp()) / "origin.git"

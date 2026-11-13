@@ -547,20 +547,30 @@ def add_exclude_lines(root, lines):
 
 def exclude_lines(root, files=(), dirs=()):
     """The exclude lines (`/<file>`, `/<dir>/`) for paths under the checkout `root` that git does not
-    ignore yet; one `git check-ignore` call for all of them, and [] when git cannot answer."""
+    ignore yet. One `git check-ignore` call for all of them; when that call fails (one path beyond a
+    symlink fails it for all), each path is checked on its own, and a path git cannot answer for
+    gets its line anyway: an extra ignore line is harmless, a missing one is not."""
     asked = [(f.strip("/"), "/" + f.strip("/")) for f in files]
     asked += [(f"{d.strip('/')}/probe", f"/{d.strip('/')}/") for d in dirs]
     if not asked:
         return []
-    try:
-        done = subprocess.run(["git", "-C", str(root), "check-ignore", "-z", "--stdin"],
-                              input="".join(p + "\0" for p, _ in asked), capture_output=True, text=True,
-                              timeout=10, env=git_env())
-    except Exception:
-        return []
-    if done.returncode not in (0, 1):
-        return []
-    ignored = set(done.stdout.split("\0"))
+
+    def check(paths):
+        try:
+            done = subprocess.run(["git", "-C", str(root), "check-ignore", "-z", "--stdin"],
+                                  input="".join(p + "\0" for p in paths), capture_output=True, text=True,
+                                  timeout=10, env=git_env())
+        except Exception:
+            return None
+        return set(done.stdout.split("\0")) if done.returncode in (0, 1) else None
+
+    ignored = check([p for p, _ in asked])
+    if ignored is None:
+        if not git_root(root):
+            return []
+        ignored = set()
+        for path, _ in asked:
+            ignored |= check([path]) or set()
     return [line for path, line in asked if path not in ignored]
 
 
@@ -599,10 +609,18 @@ def has_legacy_state(base):
     return any((Path(base) / LEGACY_STATE_DIR / name).exists() for name in STATE_NAMES)
 
 
+def kit_dir_linked(base):
+    """True when the checkout's `.kit` is a symlink: it is not the kit's folder, nothing is written
+    through it, and the checkout stays on `.claude/` (migrate_state.py says so once)."""
+    return (Path(base) / STATE_DIR).is_symlink()
+
+
 def state_dir_name(base):
-    """`.kit` when it exists in the checkout `base` (pass the main checkout), `.claude` when that
-    still holds kit state, else `.kit`: a new project starts there."""
+    """`.kit` when it is a folder in the checkout `base` (pass the main checkout), `.claude` when
+    that still holds kit state or `.kit` is a symlink, else `.kit`: a new project starts there."""
     base = Path(base)
+    if kit_dir_linked(base):
+        return LEGACY_STATE_DIR
     if (base / STATE_DIR).is_dir():
         return STATE_DIR
     return LEGACY_STATE_DIR if has_legacy_state(base) else STATE_DIR
@@ -623,7 +641,8 @@ def state_dir(root, per_checkout=False):
 
 def state_entry(root, name, per_checkout=None):
     """Where the entry `name` (one of STATE_NAMES) is: `.kit/<name>` when it exists, else
-    `.claude/<name>` when that exists, else under state_dir, where it will be made. Reads and
+    `.claude/<name>` when that exists (a `.kit` that is a symlink is never looked in), else
+    under state_dir, where it will be made. Reads and
     writes both go through this, so an entry the move left behind (tracked in git, say) is still
     the one in use. `lead` and the verifier's memory are the main checkout's; `evidence` and
     `overnight` are each checkout's own (PER_CHECKOUT_STATE) unless `per_checkout` is False, as
@@ -631,7 +650,7 @@ def state_entry(root, name, per_checkout=None):
     if per_checkout is None:
         per_checkout = name.split("/")[0] in PER_CHECKOUT_STATE
     _, main, base = _state_bases(root, per_checkout)
-    for folder in (STATE_DIR, LEGACY_STATE_DIR):
+    for folder in (LEGACY_STATE_DIR,) if kit_dir_linked(base) else (STATE_DIR, LEGACY_STATE_DIR):
         if (base / folder / name).exists():
             return base / folder / name
     return base / state_dir_name(main) / name

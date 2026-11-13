@@ -235,6 +235,28 @@ def main():
         check(held.stdout.strip() == "[]" and "/late/" not in info.read_text(), f"a busy lock gives up, unchanged: {held.stdout}{held.stderr}")
         check(kitlib.exclude_lines(repo, files=["owner-secret.env", "x.txt"], dirs=["notes-private", "y"]) == ["/x.txt", "/y/"],
               "only the paths git does not ignore yet")
+        # one path beyond a symlink fails git's batched check for all: each is then checked alone,
+        # and the one git cannot answer for gets its line anyway
+        (repo / "shared").mkdir()
+        (repo / "linked").symlink_to(repo / "shared")
+        batched = subprocess.run(["git", "-C", str(repo), "check-ignore", "-z", "--stdin"], input="linked/probe\0",
+                                 capture_output=True, text=True)
+        check(batched.returncode == 128, f"the batched check fails on a symlink: {batched.returncode}")
+        got = kitlib.exclude_lines(repo, files=["owner-secret.env", "x.txt"], dirs=["linked", "notes-private", "y"])
+        check(got == ["/x.txt", "/linked/", "/y/"], f"fall back per path: {got}")
+        real_run = kitlib.subprocess.run
+        kitlib.subprocess.run = lambda cmd, **k: (subprocess.CompletedProcess(cmd, 128, "", "fatal")
+                                                   if "check-ignore" in cmd else real_run(cmd, **k))
+        try:
+            got = kitlib.exclude_lines(repo, files=["owner-secret.env"], dirs=["y"])
+        finally:
+            kitlib.subprocess.run = real_run
+        check(got == ["/owner-secret.env", "/y/"], f"git answering nothing: every line is added: {got}")
+        with tempfile.TemporaryDirectory() as outside:
+            check(kitlib.exclude_lines(outside, dirs=["y"]) == [], "outside git: none")
+        (repo / ".kit").symlink_to(repo / "shared")
+        check(kitlib.state_dir_name(repo) == ".claude", "a symlinked .kit is not the kit's folder")
+        (repo / ".kit").unlink()
 
     print("kitlib: all checks passed" if not failed else f"kitlib: {failed} failures")
     return 1 if failed else 0
