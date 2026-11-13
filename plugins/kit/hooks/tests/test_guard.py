@@ -312,7 +312,21 @@ def main():
                                (sibling, f"cd {repo} && rm -rf .kit/agent-memory", "block"),
                                (repo, "rm -rf .kit/lead/items/x1/out", "allow"),
                                (repo, "rm -rf .kit/lead/items/x1/out/shot.png", "allow"),
-                               (sibling, "rm -rf .kit", "allow"), (sibling, "rm -rf .kit/evidence", "allow")):
+                               (sibling, "rm -rf .kit", "allow"), (sibling, "rm -rf .kit/evidence", "allow"),
+                               (repo, "rm -rf .kit/lead/items", "block"), (repo, "rm -rf .kit/lead/items/", "block"),
+                               (repo, "rm -rf .kit/lead/proposals", "block"), (repo, "rm -rf .kit/lead/*", "block"),
+                               (repo, "rm -rf .kit/lead/items/*", "block"), (repo, "rm -rf .kit/*", "block"),
+                               (repo, "rm -rf .kit/agent-memory/kit-verifier", "block"),
+                               (repo, "find .kit/lead/items -delete", "block"),
+                               (sibling, f"rm -rf {repo}/.kit/lead/items", "block"),
+                               (sibling, f"rm -rf {repo}/.kit/lead/proposals", "block"),
+                               (sibling, f"rm -rf {repo}/.kit/lead/*", "block"),
+                               (sibling, f"rm -rf {repo}/.kit/agent-memory/kit-verifier", "block"),
+                               (repo, "rm -rf .kit/lead/items/x1", "allow"), (repo, "rm -rf .kit/lead/items/x1/*", "allow"),
+                               (repo, "rm -rf .kit/lead/items-old", "allow"), (repo, "rm -rf .kit/leads", "allow"),
+                               (repo, "rm -rf .kit/agent-memory/other", "allow"),
+                               (repo, "rm -rf .kit/agent-memory/kit-verifier-old", "allow"),
+                               (sibling, "rm -rf .kit/lead/items", "allow")):
         got = verdict(home, cwd, command)
         if got != want:
             failed += 1
