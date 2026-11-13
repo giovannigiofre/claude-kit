@@ -550,7 +550,8 @@ def segments(command, inner=False):
 
 def git(cwd, *args):
     try:
-        out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=10)
+        out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=10,
+                             env=kitlib.git_env())
         return out.stdout.strip() if out.returncode == 0 else ""
     except Exception:
         return ""
