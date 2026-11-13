@@ -181,8 +181,9 @@ An entry in both places is left alone in both, the others move anyway, and the s
 so once (and again only if the set changes); a source another session already moved is not a
 conflict. `status` always lists them with both paths. What the session start said is kept in the
 git dir (`kit-migration-said.json`), not in the project. An entry tracked in git is not moved and
-gets no exclude line in either layout: the `git mv` to run is printed. An entry that is a symlink
-(`.claude/lead` pointing at a shared folder) is left where it is, gets no exclude line of its own
+gets no exclude line in either layout: the `git mv` to run is printed. An entry that is a symlink, or
+is reached through one (`.claude` itself, or a `.claude/agent-memory` that several checkouts
+share), is left where it is, gets no exclude line of its own
 and is said once; the other entries move anyway. When git cannot check a path, the exclude line is
 added anyway, and an entry whose line git still does not see stays put and is reported as not
 moved (`migrate` exits 1, `status` lists it to move). A `.kit` that is a symlink is not the kit's
