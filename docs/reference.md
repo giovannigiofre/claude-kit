@@ -670,7 +670,7 @@ claude plugin validate ./plugins/kit && claude plugin validate .
 claude --plugin-dir ./plugins/kit            # try changes in one session without installing
 ```
 
-Self-checks (no tokens):
+Self-checks (no tokens; `.github/workflows/tests.yml` runs every one of them on each pull request and on main):
 
 ```bash
 python3 tests/test_budget.py
