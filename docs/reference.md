@@ -513,6 +513,7 @@ config dir (`~/.claude` unless `CLAUDE_CONFIG_DIR` says otherwise):
 ~/.claude/kit-lessons/<slug>.jsonl        one lesson per line (id, kind, text, status, seen, misses, evidence)
 ~/.claude/kit-lessons/<slug>.events.jsonl raw captured events, capped
 ~/.claude/kit-lessons/<slug>.ops.jsonl    before-images of every change, for undo
+~/.claude/kit-lessons/<slug>.deliveries.jsonl  which thread was given which lessons, for scores
 ~/.claude/kit-lessons/_machine.jsonl      lessons that hold on this machine across repos
 ```
 
@@ -544,8 +545,30 @@ next thread.
 
 **Delivery**: kit:implementer and kit:verifier get this repo's active lessons at start (the
 verifier minus its own memory, which it already reads), the main session gets gate and guard
-lessons after the gate lines. Most repeated and newest first; about 600 tokens for a thread,
-400 for the session. With an empty ledger the thread gets the memory index lines directly.
+lessons after the gate lines. Lessons seen in the last 30 days come first, then the most repeated
+and newest (being delivered does not count as being seen); about 600 tokens for a thread, 400 for
+the session. With an empty ledger the thread gets the memory index lines directly.
+
+**Scores**: each lesson counts its deliveries and its misses (seen again after it was delivered).
+`lessons.py wrong <id>` adds one to `harmful` and drops a keep; at 2 the distiller retires it.
+A lesson scores `helpful` when a thread it was delivered to ends with a kit:verifier PASS and the
+lesson was not seen again in between; each delivery scores once. Only a delivery that names its
+thread (`deliver(..., thread=agent_id)`) is matched to the verdict's agent id; the SubagentStart
+hook does not pass that id yet, so until it does `helpful` stays at 0.
+`lessons.py stats` lists deliveries, misses, the miss rate, helpful and harmful per lesson.
+
+**Between accounts**: with two Claude accounts (each its own config dir) the ledgers are separate.
+`lessons.py export FILE` writes the machine lessons, `--repo DIR` that repo's, as JSON lines for
+the other account. The text is rewritten first (the home folder becomes `~`, the exported repo's
+checkout becomes repo-relative, the account name goes); a lesson that still holds something
+secret-shaped, an absolute path, an email address or a name from this machine's ledgers (and, for
+machine lessons, a file name, path or env var) is skipped. It prints how many it wrote and skipped,
+by reason, never the skipped text. `lessons.py import FILE [--dry-run]` on the other account counts
+each line as one sighting: a new lesson starts as a candidate, except one active in the source's
+machine ledger, which stays active in this one; a repo line goes to the ledger of DIR. Each lesson
+keeps the exported id, so importing a file twice changes nothing and a lesson does not come back to
+the account it left; `undo <id>` reverses an import, and `--dry-run` lists what would be added,
+merged or ignored. Scores are not carried over.
 
 **Distiller** (`distill.py`): runs after a kit:verifier PASS that follows a FAIL on the same branch (the FAIL's
 problems become active lessons), at SessionEnd once 5 new events are pending (in the background),
@@ -593,7 +616,7 @@ and previews the distiller's merges, retires and promotions on a throwaway copy 
 rewords too when the model is allowed: that one call counts for the day and the review applies its
 answer; `--no-model` says rewords are skipped), then, once the user agrees, `lessons.py review`: it
 drops the ledgers of test and scratchpad repos and retires the machine lessons only they held
-(`prune`), retires lessons neither seen nor delivered for 90 days, then runs the distiller. Every
+(`prune`), retires lessons not seen for 90 days (delivered or not; a kept one stays), then runs the distiller. Every
 retire can be undone; a dropped ledger cannot. The dry run writes only metadata to `_repos.json`
 (`model_runs`, and `model_preview`, the answers the review applies), never a lesson; its judge
 verdicts are kept the same way, so the review promotes what it listed.
@@ -604,7 +627,10 @@ python3 <kit>/hooks/scripts/lessons.py render implementer|verifier|lead [DIR]
 python3 <kit>/hooks/scripts/lessons.py add pitfall KEY "one line" [DIR]
 python3 <kit>/hooks/scripts/lessons.py retire L4 [DIR]
 python3 <kit>/hooks/scripts/lessons.py undo L4 [DIR]
+python3 <kit>/hooks/scripts/lessons.py wrong L4 [DIR]
 python3 <kit>/hooks/scripts/lessons.py stats [DIR]
+python3 <kit>/hooks/scripts/lessons.py export [--machine | --repo DIR] [FILE|-]
+python3 <kit>/hooks/scripts/lessons.py import FILE|- [--dry-run] [DIR]
 python3 <kit>/hooks/scripts/lessons.py news [DIR]
 python3 <kit>/hooks/scripts/lessons.py distill [--no-model] [DIR]
 python3 <kit>/hooks/scripts/lessons.py review [--dry-run] [--no-model] [DIR]

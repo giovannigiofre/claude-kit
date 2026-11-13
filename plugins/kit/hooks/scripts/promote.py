@@ -149,7 +149,8 @@ def create(members, wording=None):
     best = max((r for _, r in members), key=lessons.rank)
     with lessons.change(lessons.MACHINE) as state:
         record = {k: v for k, v in best.items() if k not in ("file", "sources", "delivered", "last_delivered",
-                                                              "proposal", "promote", "fixed_in", "judged")}
+                                                              "deliveries", "proposal", "promote", "fixed_in",
+                                                              "judged")}
         if wording:
             record["text"] = wording
         record.update({"id": lessons.next_id(state["rows"], "M"), "status": "active", "origin_src": "promoted",

@@ -2,7 +2,7 @@
 name: learn
 description: Tidies the kit's lesson ledger for this repo (merge, retire, propose hardening), shows or undoes what it learned, and turns a correction or a repeated mistake into a durable fix - a check, a hook entry, a project skill or a CLAUDE.md line. Use after the user corrects Claude, when the verifier caught the same defect twice, or with "undo", "news", "list" or "sweep".
 disable-model-invocation: true
-argument-hint: "[empty = distill + this session's corrections | undo <id> | retire <id> | news | list | stats | promote [id] | sweep [N] | the lesson to make stick]"
+argument-hint: "[empty = distill + this session's corrections | undo <id> | retire <id> | wrong <id> | news | list | stats | export | import <file> | promote [id] | sweep [N] | the lesson to make stick]"
 ---
 
 # /learn: the kit's lessons, kept small and true
@@ -20,7 +20,7 @@ expanded, the script is in the kit plugin's `hooks/scripts/`).
 - **empty**: run `$L review --dry-run .` and show its lines; when it would drop a ledger or retire
   a lesson, ask the user once before `$L review .`, then relay its lines as they are (each says
   what changed and how to undo it). It drops ledgers of test and scratchpad repos, retires lessons
-  neither seen nor delivered for 90 days, merges duplicates, retires lessons whose fix shipped,
+  not seen for 90 days (being delivered does not count), merges duplicates, retires lessons whose fix shipped,
   proposes retiring stale ones and writes hardening proposals; with a model allowed it also rewords
   unclear lessons and judges whether a lesson held by 2 repos is generic enough for all (haiku, at
   most $0.05 a call, one run a day per repo). `--no-model` skips the model, and a lesson waiting
@@ -30,6 +30,13 @@ expanded, the script is in the kit plugin's `hooks/scripts/`).
 - **undo <id>**: `$L undo <id> .`, then say what came back. On a proposal (to retire, or to
   harden) this keeps the lesson as it is, and the distiller does not ask again.
 - **retire <id>**: `$L retire <id> .`, for example to accept a proposal to retire a stale lesson.
+- **wrong <id>**: `$L wrong <id> .` when the user says a lesson is wrong; the second time the
+  distiller retires it. `undo` takes a mark back.
+- **export**, **import <file>**: move lessons to the user's other Claude account. `$L export
+  <file>` writes this machine's lessons (`--repo .` for this repo's), scrubbed of paths, repo
+  names and the account name, and says how many it skipped and why. On the other account run
+  `$L import <file> --dry-run .`, show what it would add, merge or ignore, then `$L import <file> .`.
+  Importing twice changes nothing; `undo <id>` takes one import back.
 - **promote [id]**: follow `promote.md` in this folder. Without an id, list the kit candidates.
 - **news**, **list**, **stats**: `$L news .`, `$L list --all .`, `$L stats .`; show the output,
   shortened to what the user asked about.
