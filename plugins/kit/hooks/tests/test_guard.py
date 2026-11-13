@@ -740,7 +740,20 @@ def main():
         (f"python3 {items} sandbox status", thread, "allow"),
         (f"python3 {items} unattended", thread, "allow"),
         (f"python3 {items} list", thread, "allow"),
-        ("python3 items.py away on", thread, "allow"),  # the repo's own items.py, not the kit's
+        # from a thread the text rule fails safe: any items.py with the owner words, the repo's own too
+        ("python3 items.py away on", thread, "block"),
+        ("python3 items.py log a1 'turned away on for the night'", thread, "allow"),  # quoted message text
+        (f"cat <<EOF\nI away on\nEOF\npython3 {items} list", thread, "allow"),  # a here-document body
+        (f"{items} away on", thread, "block"),
+        (f"python3 {SCRIPT.parent / 'machine_setup.py'} --apply", thread, "block"),
+        (f"python3 {SCRIPT.parent / 'machine_setup.py'} --decline", thread, "block"),
+        (f"python3 {SCRIPT.parent / 'machine_setup.py'}", thread, "allow"),
+        (f"python3 {SCRIPT.parent / 'migrate_state.py'} undo", thread, "block"),
+        (f"python3 {SCRIPT.parent / 'migrate_state.py'} migrate --again", thread, "block"),
+        (f"python3 {SCRIPT.parent / 'migrate_state.py'} migrate --force", thread, "block"),
+        (f"python3 {SCRIPT.parent / 'migrate_state.py'} migrate", thread, "allow"),
+        (f"python3 {SCRIPT.parent / 'migrate_state.py'} status", thread, "allow"),
+        (f"python3 {SCRIPT.parent / 'machine_setup.py'} --apply", None, "allow"),
         (f"python3 {items} away on", None, "allow"),
         (f"python3 {items} unattended push=ask", None, "allow"),
     ]:
@@ -748,6 +761,27 @@ def main():
         if got != expect:
             failed += 1
             print(f"FAIL {'thread' if agent else 'main session'} {expect}: {command!r} -> {got}")
+    # the same rule in the spellings the lead skill teaches: a shell function and a variable
+    spell = {"direct": f"python3 {items} {{}}",
+             "function": f'I(){{{{ python3 {items} "$@"; }}}}; I {{}}',
+             "variable": f'I="python3 {items}"; $I {{}}'}
+    for form, template in spell.items():
+        for args, want in [("away on", "block"), ("away off", "block"), ("sandbox on", "block"),
+                           ("sandbox off", "block"), ("unattended push=allow", "block"),
+                           ("away status", "allow"), ("sandbox status", "allow"), ("unattended", "allow"),
+                           ("log a1 working", "allow"), ("put a1 status=review", "allow"), ("status", "allow"),
+                           ("path a1", "allow"), ("new 'a task'", "allow"), ("list", "allow"), ("done a1", "allow")]:
+            command = template.format(args)
+            for agent, expect in [(thread, want), (None, "allow")]:
+                got = verdict(home, r21, command, agent)
+                if got != expect:
+                    failed += 1
+                    print(f"FAIL {form} spelling from {'a thread' if agent else 'the main session'} {expect}: "
+                          f"{command!r} -> {got}")
+    code, _, err = call(home, r21, "Bash", {"command": spell["function"].format("away on")}, agent=thread)
+    if code != 2 or "only the coordinator" not in err or "items.py away on" not in err:
+        failed += 1
+        print(f"FAIL the function spelling's refusal names the command and the coordinator: {err}")
     code, _, err = call(home, r21, "Bash", {"command": "gh pr merge 12"}, agent=thread)
     if code != 2 or "needs merge" not in err:
         failed += 1
@@ -756,12 +790,17 @@ def main():
     if code != 2 or "only the coordinator" not in err:
         failed += 1
         print(f"FAIL a thread's away on refusal names the coordinator: {err}")
-    for agent, expect in [(thread, "block"), (None, "allow")]:
-        got = verdict(home, r21, None, agent, "mcp__github__merge_pull_request", {"owner": "o", "repo": "r",
-                                                                                 "pullNumber": 12})
-        if got != expect:
-            failed += 1
-            print(f"FAIL the GitHub MCP merge tool from {'a thread' if agent else 'the main session'}: {got}")
+    # every GitHub MCP tool that merges or arms a merge is the coordinator's; turning it off is not
+    for tool, from_thread in [("merge_pull_request", "block"), ("enable_pr_auto_merge", "block"),
+                              ("disable_pr_auto_merge", "allow"), ("update_pull_request_branch", "allow"),
+                              ("pull_request_read", "allow")]:
+        for agent, expect in [(thread, from_thread), (None, "allow")]:
+            got = verdict(home, r21, None, agent, f"mcp__github__{tool}", {"owner": "o", "repo": "r",
+                                                                         "pullNumber": 12})
+            if got != expect:
+                failed += 1
+                print(f"FAIL the GitHub MCP tool {tool} from {'a thread' if agent else 'the main session'}: "
+                      f"{expect} expected, got {got}")
 
     # hermetic git: GIT_DIR inherited from a git hook does not turn guard.git to another repository
     sys.path.insert(0, str(SCRIPT.parent))

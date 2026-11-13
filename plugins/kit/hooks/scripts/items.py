@@ -134,7 +134,10 @@ def sandbox(here, action):
                 return False
             settings["sandbox"] = SANDBOX
 
-        result = kitlib.update_settings(path, add)
+        try:
+            result = kitlib.update_settings(path, add)
+        except OSError as exc:
+            return 1, kitlib.write_failed(exc, f"The sandbox in {path}")
         if result != "written":
             return 1, f"{path} changed while the kit wrote it; nothing was changed. Run sandbox on again."
         return 0, (f"Sandbox on: wrote the kit's block to {path}. Bash runs inside it without a prompt; "
@@ -706,6 +709,9 @@ def main(argv=None):
             except ValueError as exc:
                 print(f"items: {exc}", file=sys.stderr)
                 return 1
+            except OSError as exc:
+                print(kitlib.write_failed(exc, f"UNATTENDED in {kitlib.unattended_prefs(root)[2]}"), file=sys.stderr)
+                return 1
         _, is_set, path = kitlib.unattended_prefs(root)
         effective, notes = kitlib.unattended_effective(root)
         line = "UNATTENDED: " + " ".join(f"{k}={effective[k]}" for k in kitlib.UNATTENDED_STEPS)
@@ -745,7 +751,10 @@ def main(argv=None):
                 "own": f"Away: on (you set it in {path}).", "off": "Away: off.",
                 "broken": f"{path} is not a valid JSON object."}[state]
         else:
-            code, message = (kitlib.away_on if action == "on" else kitlib.away_off)()
+            try:
+                code, message = (kitlib.away_on if action == "on" else kitlib.away_off)()
+            except OSError as exc:  # kitlib.SettingsBusy, or a config dir that cannot be written
+                code, message = 1, kitlib.write_failed(exc, f"Away (permissions.{kitlib.AWAY_KEY} in {kitlib.user_settings()})")
         print(message)
         return code
     if cmd == "records":

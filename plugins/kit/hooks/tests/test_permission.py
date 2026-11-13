@@ -80,6 +80,22 @@ def main():
                     failed += 1
                     print(f"FAIL {want} expected from {'a subagent' if agent else 'the main session'}, "
                           f"got {got}: items.py {args}")
+        # the function and variable spellings: never unasked from a subagent, even when the project's own
+        # check is written that way (the guard's text rule, so this holds with the guard off too)
+        for form in (f'I(){{ python3 {items} "$@"; }}; I away on', f'I="python3 {items}"; $I sandbox on',
+                     f'I(){{ python3 {items} "$@"; }}; I unattended push=allow',
+                     f"python3 {SCRIPTS / 'machine_setup.py'} --decline"):
+            (repo / ".claude" / "kit.json").write_text(json.dumps({"check": form}))
+            for agent, want in ((False, "allow"), (True, "prompt")):
+                got = ask(repo, form, agent)
+                if got != want:
+                    failed += 1
+                    print(f"FAIL {want} expected from {'a subagent' if agent else 'the main session'}, got {got}: {form!r}")
+        form = f'I(){{ python3 {items} "$@"; }}; I list'
+        (repo / ".claude" / "kit.json").write_text(json.dumps({"check": form}))
+        if ask(repo, form, True) != "allow":
+            failed += 1
+            print("FAIL a check that only reads the board stays unasked from a subagent")
         (repo / ".claude" / "kit.json").unlink()
         if ask(repo, "make lint") != "prompt":
             failed += 1
