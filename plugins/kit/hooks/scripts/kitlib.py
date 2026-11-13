@@ -299,6 +299,27 @@ def _unattended_steps(cwd):
     return files, unreadable, steps
 
 
+def asking_rules(cwd):
+    """{step: [(rule, where)]}: the ask rules, in any settings scope or the kit guard's askCommands,
+    that match a push, rebase or merge as the kit runs them. Each such command stops on a prompt
+    in every permission mode (auto too) and from a thread; the owner's saved preference is not read."""
+    rules = []
+    for f in permission_files(cwd):
+        value, ok = read_json(f)
+        perms = value.get("permissions") if ok and isinstance(value.get("permissions"), dict) else {}
+        listed = perms.get("ask")
+        rules += [(str(r), f) for r in (listed if isinstance(listed, list) else [])]
+    guard_rules = [(pattern, where, hit) for (b, pattern, where, hit) in _guard_rules(cwd) if b == "ask"]
+    out = {}
+    for step in UNATTENDED_STEPS:
+        probes = UNATTENDED_PROBES[step]
+        found = [(r, f) for (r, f) in rules if any(bash_rule_matches(r, p) for p in probes)]
+        found += [(pattern, where) for (pattern, where, hit) in guard_rules if any(hit(p) for p in probes)]
+        if found:
+            out[step] = found
+    return out
+
+
 def unattended_effective(cwd):
     """(effective, notes): a step is `allow` only when the owner chose allow, no deny or ask rule in
     any scope matches its commands, and an allow rule covers every one of them; otherwise `ask`,

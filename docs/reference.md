@@ -406,6 +406,12 @@ file (below). Nothing else is touched: the guard has already judged the
 command, and the permission system decides the rest. `/fewer-permission-prompts` (built in)
 writes a broader read-only allowlist to project settings if you want one.
 
+An `ask` rule wins over every allow rule and over auto mode, in a compound command too. So when a rule in any
+settings scope (or the guard's `askCommands`) asks before a push, a rebase or a merge as the kit runs them, the
+start-up lines name the rules and their file (`kitlib.asking_rules`), tell Claude to run each such step once
+and never repeat one left waiting, and to tell the owner the cause at the first such prompt and ask once
+whether to change the rules, through `items.py unattended` and its PROPOSAL. The kit never changes them itself.
+
 `settings_guard.py` (PreToolUse: Write, Edit, MultiEdit, NotebookEdit, Bash, Monitor) answers
 `ask` in every permission mode for a change to a Claude Code settings file: `settings*.json` in
 any `.claude` folder or in `CLAUDE_CONFIG_DIR`, and the managed settings, in any case. Like

@@ -60,6 +60,22 @@ def main():
         (repo / "docs" / "board.md").write_text("SHIP: local | PARALLEL: 1 | BUDGET: none\n")
         assert "SHIP: local" in run({"cwd": str(repo), "source": "compact"})
 
+        # a permission rule that asks before push, rebase or merge is named, with its file, once
+        assert "permission rules ask" not in out, "no ask rule, no line"
+        settings = repo / ".claude" / "settings.json"
+        settings.write_text(json.dumps({"permissions": {
+            "allow": ["Bash(git status*)"], "deny": ["Bash(git push --force*)"],
+            "ask": ["Bash(git push*)", "Bash(git reset --hard*)", "Bash(git rebase *)", "Bash(gh pr merge*)"]}}))
+        out = run({"cwd": str(repo), "source": "startup"})
+        line = next(l for l in out.splitlines() if "permission rules ask" in l)
+        assert "push, rebase, merge here" in line and "`Bash(git push*)`" in line and "`Bash(gh pr merge*)`" in line, line
+        assert "in .claude/settings.json" in line and "reset" not in line and "force" not in line, line
+        settings.write_text(json.dumps({"permissions": {"ask": ["Bash(git reset --hard*)"], "allow": ["Bash(git push*)"]}}))
+        assert "permission rules ask" not in run({"cwd": str(repo), "source": "startup"}), "an ask on another command is not named"
+        settings.write_text("{ not json")
+        assert "permission rules ask" not in run({"cwd": str(repo), "source": "startup"}), "a broken settings file is not this line's business"
+        settings.unlink()
+
         # kit.json author: an AI identity (a cloud container's default) becomes the user's
         def ident():
             return [subprocess.run(["git", "-C", str(repo), "config", k], capture_output=True, text=True).stdout.strip()
