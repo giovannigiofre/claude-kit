@@ -23,7 +23,7 @@ the model can't do alone, re-checked when a new model lands.
 | Finding work | `/kit:scout` | read-only explorers write deduplicated proposal cards (A mechanical, B needs judgment, C human-only) into `.kit/lead/proposals/`; `next` takes the A cards |
 | Something broke | describe it | `kit:investigate`: evidence (asks you once, with exact export steps), reproduction, hypotheses, a regression-tested fix |
 | UI or LLM work | describe it | the kit asks "Use Kit UI / Kit LLM for this?" and installs that plugin for the project on yes |
-| First PR in a project | answer once | "Do I merge PRs once they're green, or do you always review them first?"; the answer is saved in `kit.json` (`lead.merge`) |
+| Merging | nothing, or say so | you merge; say "merge green PRs yourself" and the coordinator saves `lead.merge: agent` in `kit.json` |
 | Finishing by hand | `/kit:go` | PR with intent, live evidence (the gate run is recorded on the exact tree), what was fixed, risk; keeps CI green; merges if the project allows it |
 | Evening | "tonight keep doing X until Y" | `kit:overnight`: a fresh session per small step, a commit only when the gate passes, caps or none |
 | Every two weeks or so | `/kit:learn` | when the session-start line says the review is due: turns repeated corrections into checks or rules, and prunes instructions that no longer help (at most 4 changes, each approved); capture and distilling run on their own, `sweep` reads transcripts for repeated corrections |
