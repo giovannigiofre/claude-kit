@@ -512,6 +512,19 @@ thread (`deliver(..., thread=agent_id)`) is matched to the verdict's agent id; t
 hook does not pass that id yet, so until it does `helpful` stays at 0.
 `lessons.py stats` lists deliveries, misses, the miss rate, helpful and harmful per lesson.
 
+**Between accounts**: with two Claude accounts (each its own config dir) the ledgers are separate.
+`lessons.py export FILE` writes the machine lessons, `--repo DIR` that repo's, as JSON lines for
+the other account. The text is rewritten first (the home folder becomes `~`, the exported repo's
+checkout becomes repo-relative, the account name goes); a lesson that still holds something
+secret-shaped, an absolute path, an email address or a name from this machine's ledgers (and, for
+machine lessons, a file name, path or env var) is skipped. It prints how many it wrote and skipped,
+by reason, never the skipped text. `lessons.py import FILE [--dry-run]` on the other account counts
+each line as one sighting: a new lesson starts as a candidate, except one active in the source's
+machine ledger, which stays active in this one; a repo line goes to the ledger of DIR. Each lesson
+keeps the exported id, so importing a file twice changes nothing and a lesson does not come back to
+the account it left; `undo <id>` reverses an import, and `--dry-run` lists what would be added,
+merged or ignored. Scores are not carried over.
+
 **Distiller** (`distill.py`): runs after a kit:verifier PASS that follows a FAIL on the same branch (the FAIL's
 problems become active lessons), at SessionEnd once 5 new events are pending (in the background),
 and on `/kit:learn`. Without tokens it merges lessons that say the same thing, retires a lesson
@@ -571,6 +584,8 @@ python3 <kit>/hooks/scripts/lessons.py retire L4 [DIR]
 python3 <kit>/hooks/scripts/lessons.py undo L4 [DIR]
 python3 <kit>/hooks/scripts/lessons.py wrong L4 [DIR]
 python3 <kit>/hooks/scripts/lessons.py stats [DIR]
+python3 <kit>/hooks/scripts/lessons.py export [--machine | --repo DIR] [FILE|-]
+python3 <kit>/hooks/scripts/lessons.py import FILE|- [--dry-run] [DIR]
 python3 <kit>/hooks/scripts/lessons.py news [DIR]
 python3 <kit>/hooks/scripts/lessons.py distill [--no-model] [DIR]
 python3 <kit>/hooks/scripts/lessons.py review [--dry-run] [--no-model] [DIR]

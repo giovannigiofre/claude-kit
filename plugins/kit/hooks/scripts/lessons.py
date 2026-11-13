@@ -23,6 +23,10 @@ picks active lessons for that agent, recently seen first, then most repeated and
 the caller's budget. A lesson scores `harmful` when the user marks it wrong (two retire it) and
 `helpful` when a thread it was delivered to ends with a verifier PASS and no repeat of it.
 
+Lessons travel between accounts (each with its own config dir) as JSON lines: `export` writes
+them scrubbed of this machine (paths, repo names, the account name, secret-shaped text) and skips
+what still names one; `import FILE` counts each as a sighting, once per exported lesson.
+
   python3 lessons.py list [--all] [DIR]        lessons of the repo at DIR (default cwd)
   python3 lessons.py render AGENT [DIR]        what AGENT (lead|implementer|verifier) would get
   python3 lessons.py add KIND KEY TEXT [DIR]   add a lesson by hand (or count a repeat of KEY)
@@ -30,6 +34,8 @@ the caller's budget. A lesson scores `harmful` when the user marks it wrong (two
   python3 lessons.py undo ID [DIR]             undo the last change to lesson ID
   python3 lessons.py wrong ID [DIR]            mark a lesson wrong (harmful + 1; two retire it)
   python3 lessons.py import [DIR]              import verifier and feedback memories now
+  python3 lessons.py export [--machine | --repo DIR] [FILE|-]  lessons for another account
+  python3 lessons.py import FILE|- [--dry-run] [DIR]  lessons exported by another account
   python3 lessons.py stats [DIR]               counts for this repo's ledger and events
   python3 lessons.py news [DIR]                the last changes the kit made to the ledger
   python3 lessons.py distill [--no-model] [DIR]  merge, retire, propose hardening (distill.py)
@@ -82,6 +88,7 @@ REVIEW_DAYS = 14
 IDLE_DAYS = 90
 RECENT_DAYS = 30  # seen within this many days: ranked above lessons that are only being delivered
 DELIVERIES_CAP = 500
+EXPORT_VERSION = 1
 KIND_BY_PREFIX = {"pitfall": "pitfall", "reference": "recipe", "feedback": "preference", "project": "recipe"}
 
 
@@ -824,6 +831,162 @@ def live_count(slug):
 
 # ---- commands ------------------------------------------------------------------------------
 
+# ---- between accounts ----------------------------------------------------------------------
+
+ABS_PATH = re.compile(r"(?<![\w.~:/])(?:/[\w.@-]+){2,}|\b[A-Za-z]:\\")
+EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+
+
+def account():
+    """A short, stable mark for this account's ledgers (its config dir), not the dir itself."""
+    return hashlib.sha1(str(base().resolve()).encode()).hexdigest()[:10]
+
+
+def portable(text, own=None):
+    """`text` rewritten for another account, and why it still cannot go (None when it can).
+    This machine's home becomes ~, the exported repo's checkout (`own`) becomes repo-relative,
+    the account name goes; what is left must not name a path, repo or account of this machine.
+    The reason never quotes the text."""
+    import promote
+    names, paths = promote.denylist()
+    if own:
+        mine = {own["slug"], Path(own.get("main") or "").name}
+        if not str(own.get("origin") or "").startswith("/"):
+            mine.update(str(own.get("origin") or "").split("/")[1:])
+        names = [n for n in names if n not in mine]
+        main = str(own.get("main") or "")
+        if main:
+            text = text.replace(main + "/", "").replace(main, ".")
+    home = str(Path.home())
+    text = text.replace(home + "/", "~/").replace(home, "~")
+    user = Path.home().name
+    if len(user) >= 3:
+        text = re.sub(rf"(?<![A-Za-z0-9]){re.escape(user)}(?![A-Za-z0-9])", "the user", text)
+    if kitlib.looks_secret(text):
+        return text, "secret-shaped text"
+    if any(p in text for p in paths if p != home) or ABS_PATH.search(text):
+        return text, "a path on this machine"
+    if EMAIL.search(text):
+        return text, "an email address"
+    if any(re.search(rf"(?<![A-Za-z0-9]){re.escape(t)}(?![A-Za-z0-9])", text, re.I) for t in names):
+        return text, "names a repo or its setup"
+    if not own:
+        hit = promote.specific(text)
+        if hit:
+            return text, "a repo-specific " + hit.split(" (")[0].replace("a ", "", 1).replace("an ", "", 1)
+    return text, None
+
+
+def export(info=None):
+    """The live lessons of the machine ledger (or of repo `info`) as rows for `import`, and the
+    count of skipped ones by reason."""
+    slug = info["slug"] if info else MACHINE
+    mark = account() + ("" if not info else "-" + hashlib.sha1(slug.encode()).hexdigest()[:8])
+    out, skipped = [], {}
+    for r in read_rows(file_of(slug)):
+        if r.get("status") not in ("active", "candidate"):
+            continue
+        text, why = portable(str(r.get("text") or ""), info)
+        if not why and kitlib.looks_secret(str(r.get("key") or "")):
+            why = "secret-shaped text"
+        if why:
+            skipped[why] = skipped.get(why, 0) + 1
+            continue
+        key = re.sub(r"[^\w.-]+", "-", str(r.get("key") or ""))[:80]
+        out.append({"v": EXPORT_VERSION, "src": f"{mark}:{r['id']}", "scope": "repo" if info else "machine",
+                    "key": key, "kind": r.get("kind") or "pitfall", "text": text,
+                    "agents": (r.get("applies") or {}).get("agents") or list(AGENTS),
+                    "status": r.get("status"), "created": r.get("created"), "last": r.get("last"),
+                    "via": [v.split(":", 1)[1] for v in r.get("sources") or [] if v.startswith("export:")]})
+    return out, skipped
+
+
+def import_plan(rows, info):
+    """What importing `rows` would do, line by line: (row, ledger slug or None, action, detail).
+    action is add, merge (detail: the lesson id) or ignore (detail: why)."""
+    own = account()
+    ledgers = {}
+    plan = []
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("key") or not row.get("text") or ":" not in str(row.get("src", "")):
+            plan.append((row, None, "ignore", "not a lesson line"))
+            continue
+        marks = [str(row["src"])] + [str(v) for v in row.get("via") or []]
+        if any(m.split(":", 1)[0].split("-", 1)[0] == own for m in marks):
+            plan.append((row, None, "ignore", "came from this account"))
+            continue
+        machine = row.get("scope") == "machine"
+        if not machine and not info:
+            plan.append((row, None, "ignore", "a repo lesson, and DIR is not a repo"))
+            continue
+        slug = MACHINE if machine else info["slug"]
+        if slug not in ledgers:
+            ledgers[slug] = read_rows(file_of(slug))
+        led = ledgers[slug]
+        if any("export:" + m in (r.get("sources") or []) for r in led for m in marks):
+            plan.append((row, slug, "ignore", "already imported"))
+            continue
+        if kitlib.looks_secret(str(row["text"])) or kitlib.looks_secret(str(row["key"])):
+            plan.append((row, slug, "ignore", "secret-shaped text"))
+            continue
+        found = next((r for r in led if r.get("key") == row["key"]), None)
+        for _ in range(10):
+            if not found or found.get("status") != "merged":
+                break
+            found = next((r for r in led if r.get("id") == found.get("merged_into")), None)
+        plan.append((row, slug, "merge", found["id"]) if found else (row, slug, "add", ""))
+    return plan
+
+
+def import_rows(rows, info, dry_run=False):
+    """Import exported lessons: each counts as one sighting (src "import", so no miss). New ones
+    start as candidates; one active in the source's machine ledger stays active in this one.
+    The exported id is kept in `sources`, so a second import of the same file changes nothing;
+    `undo` reverses one. Returns (lines to print, counts by action)."""
+    lines, counts = [], {"add": 0, "merge": 0, "ignore": 0}
+    for row, slug, action, detail in import_plan(rows, info):
+        counts[action] += 1
+        text = brief(clean_text(row.get("text", ""))) if isinstance(row, dict) and action != "ignore" else ""
+        if dry_run:
+            lines.append({"add": f"would add: {text}", "merge": f"would merge into {detail}: {text}",
+                          "ignore": f"would ignore ({detail})"}[action])
+            continue
+        if action == "ignore":
+            continue
+        active = row.get("scope") == "machine" and row.get("status") == "active"
+        agents = [a for a in row.get("agents") or AGENTS if a in AGENTS] or list(AGENTS)
+        when = {k: row[k] for k in ("created", "last") if re.fullmatch(r"\d{4}-\d\d-\d\d", str(row.get(k) or ""))}
+        lesson_id = observe(slug, str(row["key"])[:80], str(row.get("kind") or "pitfall")[:20], row["text"],
+                            "import", "another account", agents,
+                            [] if slug == MACHINE else [info["origin"]], activate_at=1 if active else 2,
+                            extra=dict(when, imported=today()))
+        if not lesson_id:
+            counts[action] -= 1
+            counts["ignore"] += 1
+            continue
+        if slug != MACHINE:
+            register(info)
+        with change(slug, log=False) as state:  # undo of the import also forgets it was imported
+            for r in state["rows"]:
+                if r.get("id") == lesson_id:
+                    r.setdefault("sources", []).append("export:" + str(row["src"]))
+        verb = "added" if action == "add" else "merged into"
+        lines.append(f"{verb} {lesson_id}: {text} · " + UNDO.format(lesson_id))
+    return lines, counts
+
+
+def read_export(source):
+    text = sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8", errors="replace")
+    rows = []
+    for line in text.splitlines():
+        if line.strip():
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                rows.append(None)
+    return rows
+
+
 def wrong(slug, lesson_id):
     """The user says a lesson is wrong: harmful + 1 (undoable). It drops any keep, so the
     distiller retires it at two."""
@@ -856,6 +1019,50 @@ def stats(info):
             "pass_rounds_30d": by_src.get("verdict-pass", 0), "per_lesson": per}
 
 
+def portable_main(cmd, rest):
+    """lessons.py export | import FILE."""
+    if cmd == "export":
+        info = None
+        if "--repo" in rest:
+            i = rest.index("--repo")
+            where = rest[i + 1] if i + 1 < len(rest) else os.getcwd()
+            rest = rest[:i] + rest[i + 2:]
+            info = repo(where)
+            if not info:
+                print(f"kit lessons: {where} is not a git checkout the kit can key a ledger to", file=sys.stderr)
+                return 1
+        rest = [a for a in rest if a != "--machine"]
+        dest = rest[0] if rest else "-"
+        rows, skipped = export(info)
+        body = "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n" for r in rows)
+        if dest == "-":
+            sys.stdout.write(body)
+        else:
+            Path(dest).write_text(body, encoding="utf-8")
+        why = ", ".join(f"{n} {k}" for k, n in sorted(skipped.items()))
+        print(f"kit lessons: exported {len(rows)}, skipped {sum(skipped.values())}" + (f" ({why})" if why else ""),
+              file=sys.stderr if dest == "-" else sys.stdout)
+        return 0
+    dry = "--dry-run" in rest
+    rest = [a for a in rest if a != "--dry-run"]
+    source, where = rest[0], (rest[1:] or [os.getcwd()])[0]
+    try:
+        rows = read_export(source)
+    except OSError as exc:
+        print(f"kit lessons: cannot read {source}: {exc.strerror}", file=sys.stderr)
+        return 2
+    try:
+        lines, counts = import_rows(rows, repo(where), dry)
+    except Busy:
+        print("kit lessons: the ledger is busy; try again")
+        return 1
+    for line in lines:
+        print(line)
+    print(("kit lessons (dry run): would add " if dry else "kit lessons: added ")
+          + f"{counts['add']}, merge {counts['merge']}, ignore {counts['ignore']}")
+    return 0
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__)
@@ -878,6 +1085,8 @@ def main(argv):
         import promote
         return promote.main(argv)
     cmd, rest = argv[0], argv[1:]
+    if cmd == "export" or (cmd == "import" and rest and (rest[0] == "-" or Path(rest[0]).is_file())):
+        return portable_main(cmd, rest)  # import DIR (or nothing) is the memory import below
     show_all = "--all" in rest
     rest = [a for a in rest if a != "--all"]
     need = {"list": 0, "render": 1, "add": 3, "retire": 1, "undo": 1, "wrong": 1, "import": 0, "stats": 0,
