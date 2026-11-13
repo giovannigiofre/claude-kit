@@ -22,7 +22,7 @@ headline is kept, never the evidence. A verdict is tied to the branch its brief 
 number), and a PASS confirms only the last FAIL on that same branch; with neither named it
 confirms nothing. The LOG line of a filed report names the agent (`..., agent <id>`) and, for a
 verifier, the `REVIEWED: <sha>` its report states. Items are looked up in the main checkout: a
-thread stopping in its worktree (the hook's cwd) has no `.claude/lead/` of its own. Apart from
+thread stopping in its worktree (the hook's cwd) has no `lead/` folder of its own. Apart from
 the missing report, silent and never blocks a stop. A project without .claude/kit.json does
 nothing, the nudge included. Standard library only. `subagent_stop.py --missing <transcript>`
 exits 1 when that transcript's last run delivered no report (the hooks module asks).
@@ -350,7 +350,7 @@ def main():
     if sys.argv[1:2] == ["--missing"]:
         return 1 if len(sys.argv) > 2 and missing_report(sys.argv[2]) else 0
     data = kitlib.read_input()
-    # the items live in the main checkout: a thread stopping in its worktree (cwd) has no .claude/lead/
+    # the items live in the main checkout: a thread stopping in its worktree (cwd) has no lead/ of its own
     cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     root = kitlib.main_checkout(cwd) or kitlib.project_root(data)
     config, _ = kitlib.load_config(root)

@@ -74,7 +74,7 @@ def snapshot_checks(tmp, check):
     repo = tmp / "repo"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")
-    (repo / ".claude").mkdir()
+    (repo / ".claude" / "lead").mkdir(parents=True)  # a project from before the move to .kit
     (repo / ".claude" / "kit.json").write_text("{}")
     (repo / "app.py").write_text("x = 1\n")
     git(repo, "add", "app.py")
@@ -204,6 +204,41 @@ def snapshot_checks(tmp, check):
     check(code == 0 and "is open, archived with --force" in out, out)
 
 
+def fresh_project_checks(tmp, check):
+    """A project with only kit.json: every command writes under .kit/, from a worktree too, and
+    git status stays clean."""
+    home = tmp / "home"
+    (home / ".claude").mkdir(parents=True)
+    env = dict(os.environ, HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), TMPDIR=str(tmp))
+    repo = tmp / "fresh"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "kit.json").write_text("{}")
+    (repo / ".git" / "info").mkdir(parents=True, exist_ok=True)
+    (repo / ".git" / "info" / "exclude").write_text("/.claude/kit.json\n")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+    tree = tmp / "fresh-wt"
+    git(repo, "worktree", "add", "-q", "-b", "feat/a", str(tree))
+    (tree / "plan.md").write_text("plan\n")
+    code, out, err = run(repo, "new", "Alpha", "--brief", "-", stdin="GOAL: a\n", env=env)
+    lead = repo / ".kit" / "lead"
+    check(code == 0 and (lead / "items" / "alpha" / "BRIEF.md").is_file(), f"new under .kit: {code} {out} {err}")
+    code, _, err = run(tree, "log", "alpha", "working", "branch feat/a", env=env)
+    code2, _, err2 = run(tree, "put", "alpha", "plan.md", env=env)
+    check(code == 0 and code2 == 0 and (lead / "items" / "alpha" / "out" / "plan.md").is_file(), f"log, put: {err} {err2}")
+    code, out, _ = run(repo, "status", env=env)
+    check(code == 0 and "alpha" in out and "feat/a" in out, f"status: {out}")
+    code, out, err = run(repo, "done", "--force", "alpha", env=env)
+    check(code == 0 and (lead / "items" / "done" / "alpha").is_dir(), f"done: {code} {out} {err}")
+    check(not (repo / ".claude" / "lead").exists() and not (tree / ".kit").exists(), "nothing under .claude or the worktree")
+    lines = (repo / ".git" / "info" / "exclude").read_text().splitlines()
+    check("/.kit/lead/" in lines and "/.kit/" not in lines, f"one exclude line for lead: {lines}")
+    status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all"],
+                            capture_output=True, text=True).stdout
+    check(status == "", f"git status clean of kit state: {status!r}")
+
+
 def main():
     failed = 0
 
@@ -220,7 +255,7 @@ def main():
         repo = Path(tmp) / "repo"
         repo.mkdir()
         subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
-        (repo / ".claude").mkdir()
+        (repo / ".claude" / "lead").mkdir(parents=True)  # a project from before the move to .kit
         (repo / ".claude" / "kit.json").write_text(json.dumps({"check": "true"}))
         subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
                         "commit", "-q", "--allow-empty", "-m", "init"], check=True)
@@ -539,6 +574,9 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmp:
         snapshot_checks(Path(tmp), check)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        fresh_project_checks(Path(os.path.realpath(tmp)), check)
 
     print("items: all checks passed" if not failed else f"items: {failed} failures")
     return 1 if failed else 0

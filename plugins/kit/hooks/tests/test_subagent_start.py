@@ -81,7 +81,7 @@ def main():
             subprocess.run(["git", "-C", str(other), *args], check=True)
         subprocess.run(["git", "-C", str(other), "worktree", "add", "-q", "-b", "w", str(otree)], check=True)
         (otree / "services" / "api").mkdir(parents=True)
-        folder = other / ".claude" / "agent-memory" / "kit-verifier"
+        folder = other / ".kit" / "agent-memory" / "kit-verifier"  # a fresh project: the state goes to .kit
         for cwd in (otree / "services" / "api", otree, other):
             got = run(cwd, config, "kit:verifier")
             assert got.startswith(f"kit: your memory folder is {folder} (") and "is empty so far" in got, got

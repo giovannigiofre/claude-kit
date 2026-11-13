@@ -101,8 +101,20 @@ def run(d, fake, *args, env_extra=None):
                           "--rate-limit-wait", "0", *args],
                          cwd=d, capture_output=True, text=True, timeout=120, env={**env(d), **(env_extra or {})})
     assert out.returncode == 0, out.stderr + out.stdout
-    run_dir = sorted((d / ".claude" / "overnight").iterdir())[-1]
+    run_dir = sorted(runs(d).iterdir())[-1]
     return out.stdout, json.loads((run_dir / "end-state.json").read_text()), run_dir
+
+
+def runs(d):
+    """Where the runs went: `.kit/overnight`, or `.claude/overnight` in a project not moved yet."""
+    for name in (".kit", ".claude"):
+        if (d / name / "overnight").is_dir():
+            return d / name / "overnight"
+    raise AssertionError(f"no run directory under {d}")
+
+
+def excluded(d):
+    return (d / ".git" / "info" / "exclude").read_text().splitlines()
 
 
 def commits(d):
@@ -313,7 +325,7 @@ def test_session_limit_waits_instead_of_failing():
                           "--gate", "true", "--rate-limit-wait", "1"],
                          cwd=d, capture_output=True, text=True, timeout=120, env=env(d))
     assert out.returncode == 0 and "waiting 1s" in out.stdout, out.stdout + out.stderr
-    run_dir = sorted((d / ".claude" / "overnight").iterdir())[-1]
+    run_dir = sorted(runs(d).iterdir())[-1]
     end = json.loads((run_dir / "end-state.json").read_text())
     assert len(end["commits"]) == 2 and end["iteration"] == 2, end
 
@@ -379,7 +391,7 @@ def test_dry_run_creates_nothing():
     out = subprocess.run([sys.executable, str(SCRIPT), "x", "--dry-run", "--agent-cmd", "false"],
                          cwd=d, capture_output=True, text=True, env=env(d))
     assert out.returncode == 0 and "iteration 1" in out.stdout, out.stderr
-    assert not (d / ".claude").exists() and len(commits(d)) == 1
+    assert not (d / ".claude").exists() and not (d / ".kit").exists() and len(commits(d)) == 1
     branch = subprocess.run(["git", "-C", str(d), "branch", "--show-current"], capture_output=True, text=True).stdout.strip()
     assert branch == "main", branch
 
@@ -399,6 +411,24 @@ def test_worktree_gate_comes_from_the_main_checkout():
     assert mod.kit_gate(wt) == "make test", mod.kit_gate(wt)
     (d / ".claude" / "kit.json").unlink()
     assert mod.kit_gate(wt) is None, "no kit.json anywhere: no gate"
+
+def test_fresh_project_runs_under_kit_and_excludes_them_first():
+    d, fake = repo(["bad", "done"])  # the failed first iteration undoes with git clean -fd
+    _, end, run_dir = run(d, fake)
+    assert run_dir.parent == d / ".kit" / "overnight" and not (d / ".claude").exists(), run_dir
+    assert (run_dir / "notes.md").exists() and len(end["commits"]) == 1, end
+    lines = excluded(d)
+    assert "/.kit/overnight/" in lines and "/.kit/evidence/" in lines and "/.kit/" not in lines, lines
+    assert clean(d)
+
+
+def test_project_with_legacy_state_keeps_its_runs_in_claude():
+    d, fake = repo(["change", "done"])
+    (d / ".claude" / "lead").mkdir(parents=True)  # state from before the move to .kit
+    _, end, run_dir = run(d, fake)
+    assert run_dir.parent == d / ".claude" / "overnight" and not (d / ".kit").exists(), run_dir
+    assert "/.claude/overnight/" in excluded(d) and len(end["commits"]) == 2 and clean(d)
+
 
 if __name__ == "__main__":
     os.environ.pop("KIT_OVERNIGHT_AGENT", None)

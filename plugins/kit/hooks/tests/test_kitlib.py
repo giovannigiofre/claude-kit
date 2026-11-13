@@ -143,6 +143,39 @@ def main():
             for k, v in saved.items():
                 os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
+    # where the kit's working state lives: .kit for a fresh project, .claude until it is moved,
+    # decided on the main checkout so a worktree finds the same board
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / "repo"
+        repo.mkdir()
+        sh(repo, "init", "-q", "-b", "main")
+        sh(repo, "commit", "-q", "--allow-empty", "-m", "init")
+        tree = Path(tmp) / "wt"
+        sh(repo, "worktree", "add", "-q", "-b", "w", str(tree))
+        (repo / ".claude").mkdir()
+        (repo / ".claude" / "kit.json").write_text("{}")
+        check(kitlib.state_dir_name(repo) == ".kit", "kit.json alone is not state: a fresh project uses .kit")
+        check(kitlib.state_entry(tree, "lead") == repo / ".kit" / "lead", kitlib.state_entry(tree, "lead"))
+        check(kitlib.state_entry(tree, "overnight") == tree / ".kit" / "overnight", "overnight is per checkout")
+        check(kitlib.board_file(tree, {}) == repo / ".kit" / "lead" / "board.md", kitlib.board_file(tree, {}))
+        legacy = {"lead": {"board": ".claude/lead/board.md"}}
+        check(kitlib.board_file(repo, legacy) == repo / ".kit" / "lead" / "board.md", "the old default follows the move")
+        check(kitlib.board_file(repo, {"lead": {"board": "docs/board.md"}}) == repo / "docs" / "board.md", "a custom board stays")
+        (repo / ".claude" / "evidence").mkdir()
+        check(kitlib.state_dir_name(repo) == ".claude", "legacy state keeps the project in .claude")
+        check(kitlib.state_entry(tree, "lead") == repo / ".claude" / "lead", "a new entry joins the old layout")
+        check(kitlib.board_file(repo, legacy) == repo / ".claude" / "lead" / "board.md", "the legacy board")
+        kitlib.exclude_state(tree, "lead")
+        lines = (repo / ".git" / "info" / "exclude").read_text().splitlines()
+        check("/.claude/lead/" in lines, f"one line per entry: {lines}")
+        (repo / ".kit" / "lead").mkdir(parents=True)
+        check(kitlib.state_dir_name(repo) == ".kit", ".kit wins once it exists")
+        check(kitlib.state_entry(repo, "lead") == repo / ".kit" / "lead", "lead moved")
+        check(kitlib.state_entry(repo, "evidence") == repo / ".claude" / "evidence", "a half-moved entry is still found")
+        kitlib.exclude_state(repo, "lead")
+        lines = (repo / ".git" / "info" / "exclude").read_text().splitlines()
+        check("/.kit/lead/" in lines and "/.kit/" not in lines, f"never a blanket .kit line: {lines}")
+
     print("kitlib: all checks passed" if not failed else f"kitlib: {failed} failures")
     return 1 if failed else 0
 

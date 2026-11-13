@@ -22,7 +22,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kitlib  # noqa: E402
 import machine_setup  # noqa: E402
 
-BOARD = ".claude/lead/board.md"
 SESSION_LESSONS = 1600  # about 400 tokens of the ledger's lessons for the main session
 MAX_BOARD_CHARS = 8000  # the contract's size: a board within it comes back whole
 BOARD_LINES, BOARD_BYTES = 60, 8000  # the board's contract (kit:lead)
@@ -114,9 +113,11 @@ def as_list(config, key):
 
 def read_board(root, config):
     """(the board's path as configured, its text) or (rel, "") when there is none."""
-    lead = (config or {}).get("lead") if isinstance(config, dict) else None
-    rel = lead.get("board") if isinstance(lead, dict) and isinstance(lead.get("board"), str) else BOARD
-    path = Path(rel) if Path(rel).is_absolute() else Path(root) / rel
+    path = kitlib.board_file(root, config)  # .kit/lead/board.md, .claude/lead/ before the move
+    try:
+        rel = path.relative_to(root).as_posix()
+    except ValueError:
+        rel = str(path)
     try:
         return rel, path.read_text(encoding="utf-8").strip()
     except Exception:
@@ -130,7 +131,7 @@ def board_warning(text):
         return ""
     return (f"kit: the board is {len(lines)} lines, {size // 1000} KB, over its {BOARD_LINES}-line, "
             f"{BOARD_BYTES // 1000} KB contract: archive done rows (items.py done <id>), keep RULES to "
-            "standing rules and move dated decisions to .claude/lead/DECISIONS.md.")
+            "standing rules and move dated decisions to DECISIONS.md beside the board.")
 
 
 def print_board(root, config):

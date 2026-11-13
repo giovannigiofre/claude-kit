@@ -29,7 +29,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-RUNS_DIR = Path(".claude") / "overnight"
+# The kit's working state lives in `.kit/` at the repo root. It used to live in `.claude/`, which
+# Claude Code protects, so a background thread's every write there waited on an owner prompt.
+# A project the kit has not moved yet keeps its runs where they are (kitlib.state_entry; this
+# script is standalone, so it repeats the rule here).
+STATE_DIR, LEGACY_STATE_DIR = ".kit", ".claude"
+LEGACY_STATE = ("lead", "evidence", "overnight", "agent-memory/kit-verifier")
 
 REPORT_SCHEMA = {
     "type": "object",
@@ -109,14 +114,35 @@ def undo(root, to="HEAD"):
     git(root, "clean", "-q", "-fd")  # excluded/ignored files (the run directory) survive
 
 
-def exclude_runs_dir(root):
-    """Keep run directories out of git without touching the project's .gitignore."""
+def runs_dir(root, main=None):
+    """`.kit/overnight` of this checkout, or `.claude/overnight` where runs already are. A new run in
+    a project whose main checkout still keeps its state in `.claude` (and has no `.kit`) goes
+    there too, so one project never has two layouts."""
+    root = Path(root)
+    for name in (STATE_DIR, LEGACY_STATE_DIR):
+        if (root / name / "overnight").is_dir():
+            return root / name / "overnight"
+    main = Path(main) if main else root
+    if not (main / STATE_DIR).is_dir() and any((main / LEGACY_STATE_DIR / n).is_dir() for n in LEGACY_STATE):
+        return root / LEGACY_STATE_DIR / "overnight"
+    return root / STATE_DIR / "overnight"
+
+
+def exclude_runs_dir(root, runs=None):
+    """Keep run directories (and the gate's evidence) out of git without touching the project's
+    .gitignore. `undo` runs `git clean -fd`, so an unexcluded run directory would be deleted by the
+    first failed iteration: this runs before that one. One line per folder, never all of `.kit/`."""
     exclude = Path(git(root, "rev-parse", "--git-path", "info/exclude"))
     if not exclude.is_absolute():
         exclude = Path(root) / exclude
     exclude.parent.mkdir(parents=True, exist_ok=True)
     text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-    missing = [line for line in (f"/{RUNS_DIR.as_posix()}/", "/.claude/evidence/") if line not in text.splitlines()]
+    runs = Path(runs) if runs else runs_dir(root)
+    state = runs.parent.name
+    wanted = [f"/{state}/overnight/", f"/{state}/evidence/"]
+    if state != LEGACY_STATE_DIR and (Path(root) / LEGACY_STATE_DIR / "evidence").is_dir():
+        wanted.append(f"/{LEGACY_STATE_DIR}/evidence/")
+    missing = [line for line in wanted if line not in text.splitlines()]
     if missing:
         exclude.write_text(text + ("" if text.endswith("\n") or not text else "\n") + "\n".join(missing) + "\n",
                            encoding="utf-8")
@@ -399,7 +425,9 @@ def main(argv=None):
         state = {"root": str(root), "branch": branch, "run_id": run_id, "iteration": 0, "cost": 0.0,
                  "tokens": 0, "commits": [], "failures": 0, "stop_reason": None,
                  "args": {k: v for k, v in vars(args).items() if k not in ("resume", "dry_run")}}
-        run_dir = root / RUNS_DIR / run_id
+        common = git(Path.cwd(), "rev-parse", "--path-format=absolute", "--git-common-dir")
+        main = Path(common).parent if Path(common).name == ".git" else root
+        run_dir = runs_dir(root, main) / run_id
 
     # the gate comes from the checkout the run starts from (a worktree may not exist yet)
     gate = args.gate or kit_gate(root if root.exists() else main_checkout)
@@ -439,7 +467,7 @@ def main(argv=None):
         git(root, "checkout", "-q", "-b", state["branch"])
 
     run_dir.mkdir(parents=True, exist_ok=True)
-    exclude_runs_dir(root)
+    exclude_runs_dir(root, run_dir.parent)
     (run_dir / "objective.md").write_text(args.objective + "\n", encoding="utf-8")
     log = (run_dir / "log.jsonl").open("a", encoding="utf-8")
 
