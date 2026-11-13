@@ -115,7 +115,7 @@ VERIFIED: <gate lines, reviewer verdict if any; production: confirmed by the use
 NOT VERIFIED / RISK: <gaps, evidence the user could not provide>
 ```
 
-- A non-obvious cause, or a correction from the user: suggest `/kit:learn`, which prefers a
+- A non-obvious cause, or a correction from the user: run `kit:learn` yourself, which prefers a
   check a machine runs (a lint, a test, `.claude/kit.json`) over a sentence. Then offer `/kit:go`.
 
 ## Red flags: stop and go back to step 1

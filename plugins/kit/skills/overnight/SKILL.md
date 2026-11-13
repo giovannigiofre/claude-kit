@@ -116,4 +116,5 @@ Run files in `.kit/overnight/<run id>/` of the checkout the run is in, as the ru
    interactive rebase or cherry-pick the good ones onto a fresh branch.
 3. Have `kit:verifier` review the branch against the objective, then `/kit:go` to open the PR
    with evidence and a risk rating. The overnight commits are first-pass work, not reviewed work.
-4. If a failure repeated in the notes, suggest `/kit:learn` so the next run avoids it.
+4. If a failure repeated in the notes, run the `kit:learn` review yourself so the next run avoids
+   it; ask the user only before it changes a committed instruction file.

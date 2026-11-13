@@ -643,11 +643,12 @@ timeout or an unclear answer the lesson stays local and is asked about on a late
 a generic rewording, promoted only when that passes the structural check too.
 
 **Upkeep**: from 14 days after the last review (the first session starts the clock) the session
-start adds one line, "the lesson review is due", at most once per 14 days (a declined review comes
-back a period later), and `/kit:learn` runs `lessons.py review --dry-run`, which changes nothing
+start adds one line, "the lesson review is due", at most once per 14 days, and the coordinator
+runs the review itself (`kit:learn` loads on its own; it asks the user only before changing a
+committed instruction file, and a skipped review comes back a period later). It runs `lessons.py review --dry-run`, which changes nothing
 and previews the distiller's merges, retires and promotions on a throwaway copy of the ledgers (its
 rewords too when the model is allowed: that one call counts for the day and the review applies its
-answer; `--no-model` says rewords are skipped), then, once the user agrees, `lessons.py review`: it
+answer; `--no-model` says rewords are skipped), then `lessons.py review` (every change has an undo): it
 drops the ledgers of test and scratchpad repos and retires the machine lessons only they held
 (`prune`), retires lessons not seen for 90 days (delivered or not; a kept one stays), then runs the distiller. Every
 retire can be undone; a dropped ledger cannot. The dry run writes only metadata to `_repos.json`
