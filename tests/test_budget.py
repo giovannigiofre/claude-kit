@@ -37,7 +37,9 @@ PLUGINS = ROOT / "plugins"
 # characters of always-on description text per plugin (about 4 characters per token)
 # kit-ui 1200 -> 1300 on 2026-11-12 for kit-ui:direction: kit-ui loads only in UI projects,
 # so its 276 chars cost nothing elsewhere.
-ALWAYS_ON_BUDGET = {"kit": 2600, "kit-ui": 1300, "kit-llm": 1200}
+# kit 2600 -> 4200 on 2026-11-13: go, learn, intake and scout load on their own now (the owner talks
+# from a phone and does not type slash commands), so their descriptions are always on, about 1500 chars.
+ALWAYS_ON_BUDGET = {"kit": 4200, "kit-ui": 1300, "kit-llm": 1200}
 MAX_DESCRIPTION = 1024
 SUBAGENT_LESSONS = 2400  # about 600 tokens, injected into every kit:implementer and kit:verifier
 SESSION_LESSONS = 1600  # about 400 tokens, added to the session start text

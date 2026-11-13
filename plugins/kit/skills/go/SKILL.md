@@ -1,7 +1,6 @@
 ---
 name: go
-description: Finishes work end to end - intent, sync with the base, test it the way a user would, review, simplify, risk rating, PR, then keeps CI green. Use when the user appends "/go" or says the work is ready to ship; "/kit:go babysit [PR]" only watches open PRs.
-disable-model-invocation: true
+description: Use when the user says a branch or change is ready to ship, or asks to finish it ("ship it", "open the PR", "/go"). Finishes the work end to end - intent, sync with the base, test it the way a user would, review, simplify, risk rating, PR, CI kept green, then merge per the project's policy (the user merges unless kit.json says otherwise); "babysit [PR]" only watches open PRs.
 argument-hint: "[optional: what was built, PR title hint, 'no-pr', 'no-babysit', 'babysit [PR]']"
 ---
 

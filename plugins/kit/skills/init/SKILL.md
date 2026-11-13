@@ -1,6 +1,6 @@
 ---
 name: init
-description: Sets up the kit in the current project - writes .claude/kit.json (fast check, full verify, per-file onEdit commands, protected paths, coordinator settings) from what the repo actually uses, a project verify skill that says how to exercise the app, and proposes permissions and a safety profile. Use when starting to use the kit in a project or when the SessionStart notice says kit.json is missing.
+description: Sets up the kit in the current project - writes .claude/kit.json (fast check, full verify, per-file onEdit commands, protected paths, coordinator settings) from what the repo actually uses, a project verify skill that says how to exercise the app, and proposes permissions. Use when the user asks to set the kit up in a project, or wants a gate, checks or a coordinator where .claude/kit.json does not exist yet.
 disable-model-invocation: true
 ---
 
