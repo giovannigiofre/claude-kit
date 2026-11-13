@@ -201,6 +201,41 @@ def main():
         lines = (repo / ".git" / "info" / "exclude").read_text().splitlines()
         check("/.kit/lead/" in lines and "/.kit/" not in lines, f"never a blanket .kit line: {lines}")
 
+    # .git/info/exclude has one writer: locked, appended to, replaced in one step. Writers racing
+    # from the main checkout and a worktree keep the owner's lines, each other's, and whole lines.
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / "r"
+        repo.mkdir()
+        sh(repo, "init", "-q", "-b", "main")
+        sh(repo, "commit", "-q", "--allow-empty", "-m", "init")
+        sh(repo, "worktree", "add", "-q", "-b", "side", str(Path(tmp) / "wt"))
+        info = repo / ".git" / "info" / "exclude"
+        owner = ["# the owner's", "/owner-secret.env", "/notes-private/"]
+        info.write_text("\n".join(owner) + "\n")
+        info.chmod(0o640)
+        writer = ("import sys; sys.path.insert(0, sys.argv[1]); import kitlib\n"
+                  "for n in range(15):\n"
+                  "    kitlib.add_exclude_lines(sys.argv[2], [f'/{sys.argv[3]}-{n}/', '/.kit/lead/'])\n")
+        for round_ in range(5):
+            procs = [subprocess.Popen([sys.executable, "-c", writer, str(SCRIPTS), str(where), f"w{round_}{k}"])
+                     for k, where in enumerate([repo, repo, Path(tmp) / "wt", Path(tmp) / "wt"])]
+            codes = [p.wait(timeout=120) for p in procs]
+            check(codes == [0, 0, 0, 0], f"round {round_}: the writers ran: {codes}")
+        lines = info.read_text().splitlines()
+        check(lines[:3] == owner, f"the owner's lines are kept, first: {lines[:4]}")
+        want = {f"/w{r}{k}-{n}/" for r in range(5) for k in range(4) for n in range(15)}
+        check(want <= set(lines), f"no writer's line was lost: {sorted(want - set(lines))[:5]}")
+        check(len(lines) == len(set(lines)) == 3 + len(want) + 1, f"each line once, none cut: {len(lines)}")
+        check(info.stat().st_mode & 0o777 == 0o640, "the file's mode is kept")
+        check(kitlib.add_exclude_lines(repo, ["/owner-secret.env"]) == [], "a line already there is not added again")
+        with kitlib.file_lock(info.with_name("exclude.kit-lock")):
+            held = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import kitlib;"
+                                   "kitlib.EXCLUDE_LOCK_WAIT = 0.2; print(kitlib.add_exclude_lines(sys.argv[2], ['/late/']))",
+                                   str(SCRIPTS), str(repo)], capture_output=True, text=True, timeout=60)
+        check(held.stdout.strip() == "[]" and "/late/" not in info.read_text(), f"a busy lock gives up, unchanged: {held.stdout}{held.stderr}")
+        check(kitlib.exclude_lines(repo, files=["owner-secret.env", "x.txt"], dirs=["notes-private", "y"]) == ["/x.txt", "/y/"],
+              "only the paths git does not ignore yet")
+
     print("kitlib: all checks passed" if not failed else f"kitlib: {failed} failures")
     return 1 if failed else 0
 

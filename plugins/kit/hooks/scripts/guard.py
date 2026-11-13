@@ -621,7 +621,8 @@ def delete_target(word, cwd, repos):
             return ("deny", f"delete inside .git ('{word}')")
         if any(t == r or under(r, t) for r in roots):
             return ("deny", f"delete of the repository root ('{word}')")
-        if t in kit_state_roots(repos):
+        state = kit_state_roots(repos)
+        if t in state or (glob.has_magic(t.name) and t.parent in state):
             return ("deny", f"delete of the kit's state folder ('{word}'): the board, items and memory of every thread")
     # what is allowed is decided on the real path, so a symlink cannot lead the delete elsewhere
     if any(under(real, c) for c in tilde(CACHE_PATHS)) or any(under(real, r) for r in roots) \
@@ -631,15 +632,18 @@ def delete_target(word, cwd, repos):
 
 
 def kit_state_roots(repos):
-    """The main checkout's `.kit`, `.kit/lead` and `.kit/agent-memory`: once the state left the
-    protected `.claude/`, nothing but this stops a thread's `rm -rf .kit` from taking every item
-    with it, from a worktree as well. An item's own folders (its `out/`) stay deletable."""
+    """The main checkout's `.kit`, `.kit/lead`, its `items` and `proposals`, `.kit/agent-memory`
+    and the verifier's memory: once the state left the protected `.claude/`, nothing but this
+    stops a thread's `rm -rf .kit` from taking every item with it, from a worktree as well. A
+    glob directly inside one of them (`.kit/lead/*`) is refused too. One item's own folder and
+    its `out/` stay deletable."""
     found = set()
     for r in repos:
         main = kitlib.main_checkout(r)
         if main:
             for base in {Path(main), Path(os.path.realpath(main))}:
-                found.update(base / kitlib.STATE_DIR / rel for rel in ("", "lead", "agent-memory"))
+                found.update(base / kitlib.STATE_DIR / rel for rel in
+                             ("", "lead", "lead/items", "lead/proposals", "agent-memory", "agent-memory/kit-verifier"))
     return {Path(os.path.normpath(p)) for p in found}
 
 

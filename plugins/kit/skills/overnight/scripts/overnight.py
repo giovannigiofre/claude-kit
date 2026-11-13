@@ -136,21 +136,48 @@ def runs_dir(root, main=None):
 def exclude_runs_dir(root, runs=None):
     """Keep run directories (and the gate's evidence) out of git without touching the project's
     .gitignore. `undo` runs `git clean -fd`, so an unexcluded run directory would be deleted by the
-    first failed iteration: this runs before that one. One line per folder, never all of `.kit/`."""
+    first failed iteration: this runs before that one. One line per folder, never all of `.kit/`.
+    The same rule as the kit's kitlib.add_exclude_lines (this script stands alone): under a lock
+    in the git dir, read the file, append only the missing lines, replace it in one step."""
     exclude = Path(git(root, "rev-parse", "--git-path", "info/exclude"))
     if not exclude.is_absolute():
         exclude = Path(root) / exclude
-    exclude.parent.mkdir(parents=True, exist_ok=True)
-    text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
     runs = Path(runs) if runs else runs_dir(root)
     state = runs.parent.name
     wanted = [f"/{state}/overnight/", f"/{state}/evidence/"]
     if state != LEGACY_STATE_DIR and (Path(root) / LEGACY_STATE_DIR / "evidence").is_dir():
         wanted.append(f"/{LEGACY_STATE_DIR}/evidence/")
-    missing = [line for line in wanted if line not in text.splitlines()]
-    if missing:
-        exclude.write_text(text + ("" if text.endswith("\n") or not text else "\n") + "\n".join(missing) + "\n",
-                           encoding="utf-8")
+    add_lines(exclude, wanted)
+
+
+def add_lines(path, wanted, wait=2.0):
+    """Append the lines of `wanted` that `path` lacks, never removing or rewriting one."""
+    import fcntl
+    import tempfile
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name(path.name + ".kit-lock"), "a") as lock:
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"{path} is locked by another process; try again") from None
+                time.sleep(0.05)
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        missing = [line for line in dict.fromkeys(wanted) if line not in text.splitlines()]
+        if not missing:
+            return
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text + ("" if text.endswith("\n") or not text else "\n") + "\n".join(missing) + "\n")
+            os.chmod(tmp, (path.stat().st_mode & 0o777) if path.exists() else 0o644)
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
 
 
 def slugify(text, limit=32):

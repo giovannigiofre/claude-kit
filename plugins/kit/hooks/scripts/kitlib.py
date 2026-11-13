@@ -451,52 +451,129 @@ def unattended_proposal(cwd):
     return out
 
 
+EXCLUDE_LOCK_WAIT = 2.0  # seconds; a session start must not stall on a stuck holder
+
+
+class Busy(OSError):
+    """Another process held the lock for longer than the wait."""
+
+
+def git_common_path(root, name):
+    """The absolute path of `name` in the repository's common git dir (shared by its worktrees),
+    else None outside git."""
+    found = git_out(root, "rev-parse", "--path-format=absolute", "--git-path", name, timeout=10)
+    return Path(found) if found else None
+
+
+def git_lock(root, name, wait=None):
+    """A lock on `<git dir>/<name>`, shared by every checkout of the repository (Busy after `wait`)."""
+    path = git_common_path(root, name)
+    if path is None:
+        raise Busy(f"{root} is not in a git repository")
+    return file_lock(path, wait)
+
+
+class file_lock:
+    """flock on `path`, tried every 50 ms until `wait` seconds have passed, then Busy."""
+
+    def __init__(self, path, wait=None):
+        self.path, self.fh = Path(path), None
+        self.wait = EXCLUDE_LOCK_WAIT if wait is None else wait
+
+    def __enter__(self):
+        import fcntl
+        import time
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.fh = open(self.path, "a")
+        deadline = time.monotonic() + self.wait
+        while True:
+            try:
+                fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    self.fh.close()
+                    raise Busy(f"{self.path} is held by another process") from None
+                time.sleep(0.05)
+
+    def __exit__(self, *exc):
+        self.fh.close()  # closing the file releases the lock
+        return False
+
+
+def write_text_atomic(path, text):
+    """Replace `path` with `text` through a temporary file in the same folder, so a reader sees the
+    old file or the new one, never part of one; the file's mode is kept."""
+    import shutil
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if path.exists():
+            shutil.copymode(path, tmp)
+        else:
+            os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def add_exclude_lines(root, lines):
+    """The one writer of .git/info/exclude: under a lock in the git dir, read the file, append the
+    lines it lacks, and replace it in one step. It never removes or rewrites a line, so the owner's
+    own and another process's survive two writers at once. Returns the lines added ([] when none,
+    outside git, or when the lock stayed busy)."""
+    wanted = list(dict.fromkeys(line for line in lines if line))
+    info = git_common_path(root, "info/exclude") if wanted else None
+    if not info:
+        return []
+    try:
+        with file_lock(info.with_name("exclude.kit-lock")):
+            text = info.read_text(encoding="utf-8") if info.exists() else ""
+            have = set(text.splitlines())
+            missing = [line for line in wanted if line not in have]
+            if missing:
+                write_text_atomic(info, text + ("" if not text or text.endswith("\n") else "\n")
+                                  + "\n".join(missing) + "\n")
+            return missing
+    except OSError:
+        return []
+
+
+def exclude_lines(root, files=(), dirs=()):
+    """The exclude lines (`/<file>`, `/<dir>/`) for paths under the checkout `root` that git does not
+    ignore yet; one `git check-ignore` call for all of them, and [] when git cannot answer."""
+    asked = [(f.strip("/"), "/" + f.strip("/")) for f in files]
+    asked += [(f"{d.strip('/')}/probe", f"/{d.strip('/')}/") for d in dirs]
+    if not asked:
+        return []
+    try:
+        done = subprocess.run(["git", "-C", str(root), "check-ignore", "-z", "--stdin"],
+                              input="".join(p + "\0" for p, _ in asked), capture_output=True, text=True,
+                              timeout=10, env=git_env())
+    except Exception:
+        return []
+    if done.returncode not in (0, 1):
+        return []
+    ignored = set(done.stdout.split("\0"))
+    return [line for path, line in asked if path not in ignored]
+
+
 def exclude(root, rel):
     """Keep `rel` (a file under the checkout `root`) out of git through .git/info/exclude, unless
     the project ignores it already."""
-    root = Path(root)
-    try:
-        if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", rel], capture_output=True,
-                          timeout=10, env=git_env()).returncode == 0:
-            return
-    except Exception:
-        return
-    info = git_out(root, "rev-parse", "--git-path", "info/exclude")
-    if not info:
-        return
-    info = Path(info) if Path(info).is_absolute() else root / info
-    try:
-        info.parent.mkdir(parents=True, exist_ok=True)
-        text = info.read_text(encoding="utf-8") if info.exists() else ""
-        line = "/" + rel.lstrip("/")
-        if line not in text.splitlines():
-            info.write_text(text + ("" if not text or text.endswith("\n") else "\n") + line + "\n", encoding="utf-8")
-    except OSError:
-        pass
+    add_exclude_lines(root, exclude_lines(root, files=[rel]))
 
 
 def exclude_dir(root, rel):
     """Keep the folder `rel` (under the checkout `root`) out of git: the line `/<rel>/` in
     .git/info/exclude, unless the project ignores the folder already."""
-    root, rel = Path(root), str(rel).strip("/")
-    try:
-        if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", f"{rel}/probe"], capture_output=True,
-                          timeout=10, env=git_env()).returncode == 0:
-            return
-    except Exception:
-        return
-    info = git_out(root, "rev-parse", "--git-path", "info/exclude")
-    if not info:
-        return
-    info = Path(info) if Path(info).is_absolute() else root / info
-    try:
-        info.parent.mkdir(parents=True, exist_ok=True)
-        text = info.read_text(encoding="utf-8") if info.exists() else ""
-        line = f"/{rel}/"
-        if line not in text.splitlines():
-            info.write_text(text + ("" if not text or text.endswith("\n") else "\n") + line + "\n", encoding="utf-8")
-    except OSError:
-        pass
+    add_exclude_lines(root, exclude_lines(root, dirs=[str(rel)]))
 
 
 # Where the kit keeps a project's working state: `.kit/` at the repo root, or `.claude/` in a
@@ -548,7 +625,9 @@ def state_entry(root, name, per_checkout=None):
     """Where the entry `name` (one of STATE_NAMES) is: `.kit/<name>` when it exists, else
     `.claude/<name>` when that exists, else under state_dir, where it will be made. Reads and
     writes both go through this, so an entry the move left behind (tracked in git, say) is still
-    the one in use. `lead`, `evidence` and the verifier's memory are the main checkout's."""
+    the one in use. `lead` and the verifier's memory are the main checkout's; `evidence` and
+    `overnight` are each checkout's own (PER_CHECKOUT_STATE) unless `per_checkout` is False, as
+    for gate.py's record, which stays in the main checkout's evidence."""
     if per_checkout is None:
         per_checkout = name.split("/")[0] in PER_CHECKOUT_STATE
     _, main, base = _state_bases(root, per_checkout)
