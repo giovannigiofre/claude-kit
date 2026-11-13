@@ -779,10 +779,51 @@ def main():
         if got != expect:
             failed += 1
             print(f"FAIL {'thread' if agent else 'main session'} {expect}: {command!r} -> {got}")
+    # options before the owner word, shells reading a cluster with c, env's options, positional
+    # function arguments and declared bindings: refused from a thread, the main session's own
+    migrate, machine = SCRIPT.parent / "migrate_state.py", SCRIPT.parent / "machine_setup.py"
+    for command, owner in [
+        (f"python3 {migrate} --root /tmp/r undo", True),
+        (f"python3 {migrate} --root=/tmp/r undo", True),
+        (f"python3 {migrate} --dry-run undo", True),
+        (f"python3 {migrate} --force migrate", True),
+        (f"python3 {migrate} --again migrate", True),
+        (f"python3 {migrate} --root /tmp/r --ag migrate", True),
+        (f"python3 {machine} -q --apply", True),
+        (f'bash -lc "python3 {items} away on"', True),
+        (f'bash -ec "python3 {items} away on"', True),
+        (f'sh -xec "python3 {items} sandbox off"', True),
+        (f"env -u FOO python3 {items} away on", True),
+        (f"env --unset=FOO python3 {items} away on", True),
+        (f"env -C /tmp python3 {items} away on", True),
+        (f"env --chdir=/tmp python3 {items} away on", True),
+        (f"env -i A=b python3 {items} away on", True),
+        (f'f(){{ python3 {items} "$1" "$2"; }}; f away on', True),
+        (f'f(){{ python3 {items} "${{1}}" "$2"; }}; f unattended push=allow', True),
+        (f'readonly I="python3 {items}"; $I away on', True),
+        (f'export I="python3 {items}"; $I away on', True),
+        (f'f(){{ local I="python3 {items}"; $I away on; }}; f', True),
+        (f'declare -r I="python3 {items}"; $I sandbox on', True),
+        # reads in the same spellings keep passing
+        (f"python3 {migrate} --root /tmp/r status", False),
+        (f"python3 {migrate} --root undo status", False),  # undo is --root's value here
+        (f"python3 {migrate} --dry-run migrate", False),
+        (f'bash -lc "python3 {items} away status"', False),
+        (f"env -u FOO python3 {items} log a1 working", False),
+        (f'f(){{ python3 {items} "$1" "$2"; }}; f away status', False),
+        (f'bash {SCRIPT.parent}/x.sh -c "python3 {items} away on"', False),  # a script's own -c
+    ]:
+        for agent, expect in [(thread, "block" if owner else "allow"), (None, "allow")]:
+            got = verdict(home, r21, command, agent)
+            if got != expect:
+                failed += 1
+                print(f"FAIL {'thread' if agent else 'main session'} {expect}: {command!r} -> {got}")
     # the same rule in the spellings the lead skill teaches: a shell function and a variable
     spell = {"direct": f"python3 {items} {{}}",
              "function": f'I(){{{{ python3 {items} "$@"; }}}}; I {{}}',
-             "variable": f'I="python3 {items}"; $I {{}}'}
+             "positional": f'I(){{{{ python3 {items} "$1" "$2"; }}}}; I {{}}',
+             "variable": f'I="python3 {items}"; $I {{}}',
+             "readonly": f'readonly I="python3 {items}"; $I {{}}'}
     for form, template in spell.items():
         for args, want in [("away on", "block"), ("away off", "block"), ("sandbox on", "block"),
                            ("sandbox off", "block"), ("unattended push=allow", "block"),
