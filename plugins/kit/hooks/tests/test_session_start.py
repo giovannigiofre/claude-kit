@@ -116,7 +116,7 @@ def main():
         # this project's legacy board still has A1 working, so its state waits in .claude/, saying why
         *waiting, header = out.strip().splitlines()
         assert header == "kit harness active for this project (.claude/kit.json):", out
-        assert len(waiting) == 1 and "stays in .claude/ for now (board row A1 is working" in waiting[0], out
+        assert len(waiting) == 1 and "waits to move from .claude/ to .kit/ (board row A1 is working" in waiting[0], out
         # a typo is named with the closest known key, at the top level and inside a section
         (repo / ".claude" / "kit.json").write_text(json.dumps({"chek": "make lint", "verfy": "make test",
                                                                "lead": {"baord": "docs/b.md", "notes": "n"},
@@ -199,7 +199,7 @@ def main():
         (repo / ".claude" / "evidence" / "main" / "gate-verify.json").write_text("{}")
         (repo / ".git" / "info" / "exclude").write_text("/.claude/lead/\n/.claude/evidence/\n")
         out = run({"cwd": str(repo), "source": "startup"})
-        assert "stays in .claude/ for now (item A1 is working" in out, out
+        assert "waits to move from .claude/ to .kit/ (item A1 is working" in out and "stays in" not in out, out
         assert (repo / ".claude" / "lead" / "board.md").exists() and not (repo / ".kit").exists(), "nothing moved"
         assert "moved this project" not in run({"cwd": str(repo), "source": "compact"}), "never mid-session"
         log.write_text(log.read_text() + "- 2026-11-01 11:00 | done | merged\n")
@@ -219,6 +219,15 @@ def main():
         out = run({"cwd": str(repo), "source": "startup"})
         assert "run `git mv .claude/overnight .kit/overnight` and commit" in out, out
         assert (repo / ".claude" / "overnight" / "r1").is_dir(), "the tracked entry stayed"
+        assert "git mv" not in run({"cwd": str(repo), "source": "startup"}), "said once, not at every start"
+        # undo sticks: the next session start leaves the state in .claude/ and says nothing
+        script = Path(__file__).resolve().parent.parent / "scripts" / "migrate_state.py"
+        undo = subprocess.run([sys.executable, str(script), "undo", "--root", str(repo)], capture_output=True, text=True)
+        assert undo.returncode == 0 and (repo / ".claude" / "lead" / "board.md").exists(), undo.stdout + undo.stderr
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert "kit:" not in "\n".join(l for l in out.splitlines() if "state" in l) and not (repo / ".kit" / "lead").exists(), out
+        again = subprocess.run([sys.executable, str(script), "migrate", "--root", str(repo)], capture_output=True, text=True)
+        assert (repo / ".kit" / "lead" / "board.md").exists(), "migrate by hand moves it again: " + again.stdout + again.stderr
         # a fresh project has nothing to move and makes no .kit/ by starting a session
         fresh = Path(tmp) / "fresh"
         (fresh / ".claude").mkdir(parents=True)
