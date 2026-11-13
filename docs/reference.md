@@ -418,7 +418,10 @@ command `cd`s into one, or it writes and names one; a thread's worktree below
 `/Library/Application Support/ClaudeCode/`) counts when the part of the command that names it (split at `;`, `&&`, `||`, `&`) may write. This
 check fails safe: a stage counts as writing unless its first word is known not to write, which
 means a reader, `echo`, `mkdir`, a loop or block keyword, or git `status`/`add`/`commit`/`push`/…
-(`perl -e`, `ruby -e` and a `case` clause count as writing).
+(`perl -e`, `ruby -e` and a `case` clause count as writing). A `$(...)` is judged as a command of its own and
+stands as one word where it was: `ls .claude; n=$(git -C $w status | wc -l)` reads, while a body that may
+write, a `$(...)` inside a part that may write (`cp x $(echo .claude/)`), `$((...))`, backticks and a
+redirection still make the whole command count.
 The first word is the one found after `(`, `{`, `then`, `do`, wrappers such as `sudo`, `nice`,
 `timeout` and `xargs`, and assignments. The string run by `bash|sh|zsh -c` and `eval` is judged in
 turn. So `cp -r x .claude/`, `bash -c 'cp x .claude/'`, `( cp -r x .claude/ )`, `node x.js --out
