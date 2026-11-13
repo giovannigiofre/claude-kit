@@ -49,6 +49,8 @@ def main():
             (f"python3 {SCRIPTS / 'migrate_state.py'} status", "allow"),
             (f"python3 {SCRIPTS / 'migrate_state.py'} migrate --force", "prompt"),
             (f"python3 {SCRIPTS / 'migrate_state.py'} undo", "prompt"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} migrate --again", "prompt"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} migrate --again --force", "prompt"),
             (f"python3 {SCRIPTS / 'migrate_state.py'} migrate --root /other", "prompt"),
             (f"python3 {SCRIPTS / 'migrate_state.py'} --root /other migrate", "prompt"),
             (f"python3 {SCRIPTS / 'migrate_state.py'} migrate --dry-run", "prompt"),

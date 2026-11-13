@@ -2,7 +2,7 @@
 """Move a project's kit working state from `.claude/` to `.kit/`, and back.
 
     python3 migrate_state.py status  [--root DIR]
-    python3 migrate_state.py migrate [--root DIR] [--dry-run] [--force]
+    python3 migrate_state.py migrate [--root DIR] [--dry-run] [--force] [--again]
     python3 migrate_state.py undo    [--root DIR] [--dry-run] [--force]
 
 Why: Claude Code treats `.claude` as a protected path (only `.claude/worktrees/` is exempt), so
@@ -20,25 +20,28 @@ How, one entry at a time, so a run that dies half-way leaves nothing unreadable:
   - refuses (exit 2) while a thread or run is at work: an item whose LOG.md ends in `working`
     or `landing`, a board row in one of those statuses, an overnight run with no stop_reason
     and no end-state.json. `--force` overrides (a thread that died leaves `working` behind);
-  - the `/.kit/<entry>/` exclude lines are added before anything moves, and the old
-    `/.claude/<entry>/` lines are never removed: a leftover or later-made `.claude/evidence/`
-    must not show in `git status`, where `git add -A` or the overnight runner's `git clean -fd`
-    would catch it;
+  - the exclude lines are computed once and added in one call (kitlib.add_exclude_lines, which
+    locks, appends and never removes a line) before anything moves: `/.kit/<entry>/` and the
+    old `/.claude/<entry>/`, so a leftover or later-made `.claude/evidence/` stays out of
+    `git status`, where `git add -A` or the overnight runner's `git clean -fd` would catch it.
+    An entry tracked in git gets no line in either layout;
   - each entry is one `os.rename` from `.claude/<entry>` to `.kit/<entry>` (across filesystems:
     copy, compare, then delete the source). kitlib.state_entry looks for each entry in `.kit/`
     first and then in `.claude/`, so between two renames every entry is read from wherever it
-    is, and the next run carries on. No lock: two runs racing on one entry, the loser's rename
-    finds no source and that is fine;
+    is, and the next run carries on. Two session starts at once: the one that finds the source
+    gone says nothing about it; `.kit/migration.json` (the log of runs) is merged under a lock;
   - an entry with files tracked in git stays where it is and the `git mv` to run is printed;
+    a checkout whose `.kit` is a symlink gets nothing moved into it;
   - an entry in both places is a conflict: both stay, the other entries move anyway, and
-    `status` lists it with the two paths. The session start says so once, not at every start
-    (the set it reported is kept in `.kit/migration.json`), and again only when that set changes;
+    `status` lists it with the two paths. The session start says it, and why a move waits,
+    once, and again only when that changes (what it said is kept in the git dir);
   - a `.kit.migrating/` folder left by an older version of this script is emptied into `.kit/`
     by the same rule and removed once empty;
   - `undo` moves the known entries found under `.kit/` back and sets kit.local.json
-    `lead.state` to ".claude", so the session start leaves the project alone; `migrate` by hand
-    clears it. Undo reads nothing from `.kit/migration.json` and never edits the exclude file.
-Exit: 0 done or nothing to do, 1 error, 2 refused (at work), 3 conflicts left.
+    `lead.state` to ".claude": the session start then leaves the project alone and `migrate`
+    refuses; the owner moves it again with `migrate --again`. Undo reads nothing from
+    `.kit/migration.json` and never edits the exclude file.
+Exit: 0 done or nothing to do, 1 error, 2 refused (at work, or after undo), 3 conflicts left.
 Standard library only.
 """
 
@@ -61,6 +64,7 @@ STATE, LEGACY = kitlib.STATE_DIR, kitlib.LEGACY_STATE_DIR
 OLD_STAGING = ".kit.migrating"  # the staging folder of the first version of this script
 MANIFEST = "migration.json"
 NOTE = "kit-state-moved.txt"
+SAID = "kit-migration-said.json"  # in the git dir: what the session start said last
 BUSY = ("working", "landing")
 SCRIPT = Path(__file__).resolve()
 
@@ -146,13 +150,21 @@ def same_tree(a, b):
     return not mismatch and not errors and all(same_tree(Path(a) / d, Path(b) / d) for d in cmp.common_dirs)
 
 
+def present(path):
+    return path.exists() or path.is_symlink()
+
+
 def move(src, dst):
-    """Move one entry: "moved", "gone" (another run took it first) or "conflict" (dst exists).
-    os.rename never replaces a folder that has files in it, so nothing is overwritten. Across
-    filesystems: copy beside dst, compare, rename it into place, and only then delete src."""
+    """Move one entry: "moved", "gone" (the source is not there: another session moved it first)
+    or "conflict" (source and destination both there, checked again after a refused rename, so a
+    session that lost the race is never told about a conflict). os.rename never replaces a folder
+    that has files in it, so nothing is overwritten. Across filesystems: copy beside dst, compare,
+    rename it into place, and only then delete src."""
+    if not present(src):
+        return "gone"
+    if present(dst):
+        return "conflict" if present(src) else "gone"
     dst.parent.mkdir(parents=True, exist_ok=True)
-    if dst.exists() or dst.is_symlink():
-        return "conflict"
     try:
         os.rename(src, dst)
         return "moved"
@@ -160,7 +172,7 @@ def move(src, dst):
         return "gone"
     except OSError as exc:
         if exc.errno in (errno.ENOTEMPTY, errno.EEXIST):
-            return "conflict"
+            return "conflict" if present(src) and present(dst) else "gone"
         if exc.errno != errno.EXDEV:
             raise
     tmp = dst.with_name(dst.name + ".copying")
@@ -174,7 +186,7 @@ def move(src, dst):
         os.rename(tmp, dst)
     except OSError:
         shutil.rmtree(tmp)
-        return "conflict"
+        return "conflict" if present(src) and present(dst) else "gone"
     shutil.rmtree(src)
     return "moved"
 
@@ -204,20 +216,26 @@ def plan(main, src_dir, dst_dir):
     conflicts (src, dst), both present."""
     moves, skipped, conflicts = [], [], []
     for checkout in checkouts(main):
+        link = checkout / dst_dir
+        if dst_dir == STATE and link.is_symlink():
+            if any(present(checkout / src_dir / name) for name in names_for(checkout, main)):
+                skipped.append((checkout / src_dir, f"{link} is a symlink (to {os.readlink(link)}), and nothing is "
+                                f"moved into a link; move the entries by hand, or replace the link with a folder"))
+            continue
         sources = [checkout / src_dir]
         if src_dir == LEGACY and checkout == main:
             sources.append(checkout / OLD_STAGING)
         for name in names_for(checkout, main):
             for base in sources:
                 src, dst = base / name, checkout / dst_dir / name
-                if not (src.exists() or src.is_symlink()):
+                if not present(src):
                     continue
                 rel = src.relative_to(checkout).as_posix()
                 if src.is_symlink():
                     skipped.append((src, "a symlink: move what it points to by hand"))
                 elif tracked(checkout, rel):
                     skipped.append((src, f"tracked in git: run `git mv {rel} {dst_dir}/{name}` and commit"))
-                elif dst.exists() or dst.is_symlink():
+                elif present(dst):
                     conflicts.append((src, dst))
                 else:
                     moves.append((checkout, name, src, dst))
@@ -237,15 +255,67 @@ def read_manifest(main):
         return {}
 
 
-def write_manifest(main, value):
-    path = Path(main) / STATE / MANIFEST
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+def add_run(main, done):
+    """Append this run to `.kit/migration.json` under the lock, read and merged there, so two
+    sessions moving at once each keep the other's entries."""
+    with kitlib.git_lock(main, "kit-migration.lock"):
+        record = read_manifest(main)
+        runs = record.get("runs") if isinstance(record.get("runs"), list) else []
+        record.update(version=2, runs=runs + [{"when": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "moved": done}])
+        record.pop("reported", None)  # kept in the git dir now (tell_once)
+        kitlib.write_text_atomic(Path(main) / STATE / MANIFEST, json.dumps(record, indent=2) + "\n")
 
 
-def migrate(main, dry=False, force=False, out=print):
-    """Move what can move; returns (exit code, the entries moved, the conflicts left)."""
+def tell_once(main, lines):
+    """`lines` when they differ from what the session start said last, else []. What was said is
+    kept in the git dir (`kit-migration-said.json`), not in the project, so saying it never makes
+    a `.kit/` or writes into one that is not the kit's yet."""
+    path = kitlib.git_common_path(main, SAID)
+    if path is None:
+        return lines
+    try:
+        with kitlib.git_lock(main, SAID + ".lock"):
+            try:
+                before = json.loads(path.read_text(encoding="utf-8")).get("said")
+            except Exception:
+                before = None
+            if before == sorted(lines) or (before is None and not lines):
+                return []
+            kitlib.write_text_atomic(path, json.dumps({"said": sorted(lines)}, indent=2) + "\n")
+            return lines
+    except kitlib.Busy:
+        return []  # another session start is saying it now
+    except OSError:
+        return lines
+
+
+def exclude_wanted(main, with_files):
+    """Every exclude line the move needs, computed once: `/.kit/<entry>/` and `/.claude/<entry>/`
+    for each entry found in either place, except one tracked in git (it is not the kit's to hide)
+    and in a checkout whose `.kit` is a symlink (nothing moves there); with `with_files`, the
+    manifest's, the note's and kit.local.json's too (undo writes it later)."""
+    lines = []
+    for checkout in checkouts(main):
+        if (checkout / STATE).is_symlink():
+            continue
+        dirs = []
+        for name in names_for(checkout, main):
+            found = [f"{folder}/{name}" for folder in (STATE, LEGACY, OLD_STAGING) if present(checkout / folder / name)]
+            if found and not any(tracked(checkout, rel) for rel in found):
+                dirs += [f"{STATE}/{name}", f"{LEGACY}/{name}"]
+        files = [kitlib.LOCAL_CONFIG, f"{STATE}/{MANIFEST}", f"{LEGACY}/{NOTE}"] if with_files and checkout == main else []
+        lines += kitlib.exclude_lines(checkout, files=files, dirs=dirs)
+    return list(dict.fromkeys(lines))
+
+
+def migrate(main, dry=False, force=False, out=print, again=False):
+    """Move what can move; returns (exit code, the entries moved, the conflicts left, the entries
+    that failed with their error)."""
     main = Path(main)
+    if kitlib.lead_local(main, "state") == LEGACY and not again:
+        raise Refused(2, [f"not moving: the owner moved the state back to {LEGACY}/ with `undo` "
+                          f"(kit.local.json lead.state); the owner moves it again with: "
+                          f"python3 {SCRIPT} migrate --again"])
     why = busy(main)
     if why and not force:
         raise Refused(2, ["not moving: work is in progress. Wait for it, or --force if it is gone:"]
@@ -260,15 +330,12 @@ def migrate(main, dry=False, force=False, out=print):
             out("would leave in both places:")
             for line in conflict_lines(conflicts):
                 out(line)
-        return (3 if conflicts else 0), [], conflicts
+        return (3 if conflicts else 0), [], conflicts, []
+    if again:
+        kitlib.save_lead_local(main, "state", None)
     # the new line first, so the entry is never visible to git, and the old one kept (added if a
-    # .gitignore covered it before), so a later write to the old place stays hidden too
-    for checkout in checkouts(main):
-        for name in names_for(checkout, main):
-            if any((checkout / folder / name).exists() for folder in (STATE, LEGACY, OLD_STAGING)):
-                kitlib.exclude_dir(checkout, f"{STATE}/{name}")
-                kitlib.exclude_dir(checkout, f"{LEGACY}/{name}")
-    kitlib.exclude(main, kitlib.LOCAL_CONFIG)  # so that a later undo, which writes it, adds no line
+    # .gitignore covered it before), so a later write to the old place stays hidden too; one call
+    kitlib.add_exclude_lines(main, exclude_wanted(main, with_files=bool(moves)))
     ready = []
     for move_ in moves:
         checkout, name, src, _ = move_
@@ -276,9 +343,13 @@ def migrate(main, dry=False, force=False, out=print):
             ready.append(move_)
         else:
             out(f"left in place: {src} (git would see {STATE}/{name}/: .git/info/exclude could not take it)")
-    done = []
+    done, failed = [], []
     for checkout, name, src, dst in ready:
-        how = move(src, dst)
+        try:
+            how = move(src, dst)
+        except OSError as exc:
+            failed.append((src, exc))
+            continue
         if how == "conflict":
             conflicts.append((src, dst))
         elif how == "moved":
@@ -286,23 +357,28 @@ def migrate(main, dry=False, force=False, out=print):
             done.append({"checkout": str(checkout), "name": name, "from": str(src), "to": str(dst)})
     prune(main / OLD_STAGING, main)
     if done:
-        kitlib.exclude(main, f"{STATE}/{MANIFEST}")
-        record = read_manifest(main)
-        runs = record.get("runs") if isinstance(record.get("runs"), list) else []
-        record.update(version=2, runs=runs + [{"when": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "moved": done}])
-        write_manifest(main, record)
+        try:
+            add_run(main, done)
+        except OSError as exc:  # the log only; the entries are where kitlib looks for them
+            out(f"note: {main / STATE / MANIFEST} not updated ({exc})")
         for checkout in {Path(d["checkout"]) for d in done}:
+            if not (checkout / LEGACY).is_dir():
+                continue  # its .claude/ held only kit state and is gone: no folder made for a note
             names = ", ".join(d["name"] for d in done if d["checkout"] == str(checkout))
-            kitlib.exclude(checkout, f"{LEGACY}/{NOTE}")
-            (checkout / LEGACY / NOTE).write_text(
-                f"kit: this checkout's working state ({names}) moved to {checkout / STATE}/ on "
-                f"{time.strftime('%Y-%m-%d')}, out of the folder Claude Code protects.\n"
-                f"undo: python3 {SCRIPT} undo --root {main}\n", encoding="utf-8")
+            try:
+                (checkout / LEGACY / NOTE).write_text(
+                    f"kit: this checkout's working state ({names}) moved to {checkout / STATE}/ on "
+                    f"{time.strftime('%Y-%m-%d')}, out of the folder Claude Code protects.\n"
+                    f"undo: python3 {SCRIPT} undo --root {main}\n", encoding="utf-8")
+            except OSError:
+                pass
+    for src, exc in failed:
+        out(f"not moved: {src} ({exc}); it is read where it is, and the next run tries again")
     if conflicts:
         out("left in both places, nothing overwritten:")
         for line in conflict_lines(conflicts):
             out(line)
-    if done or not conflicts:
+    if done or not (conflicts or failed):
         out(f"moved {len(done)} entr{'y' if len(done) == 1 else 'ies'} to {STATE}/" if done
             else "nothing to move" + (f": the state is in {STATE}/" if (main / STATE).is_dir() else ""))
     try:
@@ -311,7 +387,7 @@ def migrate(main, dry=False, force=False, out=print):
             out(f"note: .gitignore names {LEGACY}/ state paths; add the {STATE}/ ones there if the team shares it")
     except OSError:
         pass
-    return (3 if conflicts else 0), done, conflicts
+    return (1 if failed else 3 if conflicts else 0), done, conflicts, failed
 
 
 def undo(main, dry=False, force=False, out=print):
@@ -347,47 +423,43 @@ def undo(main, dry=False, force=False, out=print):
         for line in conflict_lines(conflicts):
             out(line)
     out(f"moved {back} entr{'y' if back == 1 else 'ies'} back to {LEGACY}/; the session start leaves them "
-        f"there until `python3 {SCRIPT} migrate` is run")
+        f"there until you run `python3 {SCRIPT} migrate --again`")
     return 3 if conflicts else 0
 
 
 def auto(root):
-    """session_start.py's call. Returns the lines to print: one when entries moved, one with the
-    reason when the move waits, and the conflicts and tracked entries, said once."""
+    """session_start.py's call. Returns the lines to print: the "moved" line whenever entries
+    moved, and what needs the owner (why the move waits, conflicts, entries left in place), said
+    once and again only when it changes."""
     main = Path(kitlib.main_checkout(root) or root)
     if kitlib.lead_local(main, "state") == LEGACY:  # the owner ran undo
         return []
     moves, skipped, conflicts = plan(main, LEGACY, STATE)
-    if not moves and not skipped and not conflicts and not read_manifest(main).get("reported"):
+    said = kitlib.git_common_path(main, SAID)
+    if not moves and not skipped and not conflicts and not (said and said.exists()):
         return []  # the common case, nothing to do: no file is written
-    lines = []
+    lines, told, done, failed = [], [], [], []
     if moves:
         try:
-            _, done, conflicts = migrate(main, out=lambda _line: None)
+            _, done, conflicts, failed = migrate(main, out=lambda _line: None)
         except Refused as exc:
             why = "; ".join(line.strip().lstrip("- ") for line in exc.lines[1:]) or exc.lines[0]
-            done = []
-            lines.append(f"kit: the kit's state waits to move from {LEGACY}/ to {STATE}/ ({why}); it moves at a "
-                         f"session start when nothing is at work, or: python3 {SCRIPT} migrate")
+            told.append(f"kit: the kit's state waits to move from {LEGACY}/ to {STATE}/ ({why}); it moves at a "
+                        f"session start when nothing is at work, or: python3 {SCRIPT} migrate")
         except OSError as exc:
-            done = []
-            lines.append(f"kit: moving the kit's state to {STATE}/ stopped part-way ({exc}); each entry is read "
-                         f"from wherever it is now, and the next session start carries on")
-        if done:  # nothing here when another session moved them first
-            names = ", ".join(sorted({d["name"] for d in done}))
-            lines.append(f"kit: moved this project's kit state ({names}) from {LEGACY}/ to {STATE}/, out of the "
-                         f"folder Claude Code protects; undo: python3 {SCRIPT} undo")
-    # what needs the owner, said when it changes rather than at every start
-    told = [f"kit: {src} was not moved to {STATE}/: {reason}" for src, reason in skipped] + \
-           [f"kit: {src} and {dst} both exist, so neither was moved or changed; merge what you need into "
-            f"{dst} and delete {src} (`python3 {SCRIPT} status` lists them)" for src, dst in conflicts]
-    record = read_manifest(main)
-    if sorted(told) == record.get("reported", []):
-        return lines
-    record["reported"] = sorted(told)
-    kitlib.exclude(main, f"{STATE}/{MANIFEST}")
-    write_manifest(main, record)
-    return lines + told
+            failed = [(main / LEGACY, exc)]
+    if done:  # nothing here when another session moved them first
+        names = ", ".join(sorted({d["name"] for d in done}))
+        lines.append(f"kit: moved this project's kit state ({names}) from {LEGACY}/ to {STATE}/, out of the "
+                     f"folder Claude Code protects; undo: python3 {SCRIPT} undo")
+    for src, exc in failed:
+        lines.append(f"kit: {src} did not move to {STATE}/ ({exc}); it is read where it is, and the next "
+                     f"session start tries again")
+    conflicts = [(src, dst) for src, dst in conflicts if present(src) and present(dst)]
+    told += [f"kit: {src} was not moved to {STATE}/: {reason}" for src, reason in skipped] + \
+            [f"kit: {src} and {dst} both exist, so neither was moved or changed; merge what you need into "
+             f"{dst} and delete {src} (`python3 {SCRIPT} status` lists them)" for src, dst in conflicts]
+    return lines + tell_once(main, told)
 
 
 def status(main, out=print):
@@ -395,7 +467,7 @@ def status(main, out=print):
     out(f"main checkout: {main}")
     out(f"state folder:  {kitlib.state_dir(main)}")
     if kitlib.lead_local(main, "state") == LEGACY:
-        out(f"  kept in {LEGACY}/ by `undo` (kit.local.json lead.state); `migrate` moves it again")
+        out(f"  kept in {LEGACY}/ by `undo` (kit.local.json lead.state); `migrate --again` moves it again")
     for checkout in checkouts(main):
         for name in names_for(checkout, main):
             for folder in (STATE, LEGACY, OLD_STAGING):
@@ -421,6 +493,7 @@ def main(argv=None):
     ap.add_argument("--root", default=os.getcwd())
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--force", action="store_true", help="move even if work looks in progress")
+    ap.add_argument("--again", action="store_true", help="migrate: move the state again after `undo`")
     args = ap.parse_args(argv)
     root = kitlib.main_checkout(args.root)
     if not root:
@@ -431,9 +504,7 @@ def main(argv=None):
             return status(root)
         if args.command == "undo":
             return undo(root, args.dry_run, args.force)
-        if not args.dry_run:
-            kitlib.save_lead_local(root, "state", None)  # by hand: the owner wants it moved again
-        return migrate(root, args.dry_run, args.force)[0]
+        return migrate(root, args.dry_run, args.force, again=args.again)[0]
     except Refused as exc:
         print("kit migrate: " + "\n".join(exc.lines), file=sys.stderr)
         return exc.code

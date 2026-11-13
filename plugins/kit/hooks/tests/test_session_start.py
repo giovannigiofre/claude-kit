@@ -119,10 +119,11 @@ def main():
         # a kit.json that exists is the opt-in, even `{}`: the header line always prints
         (repo / ".claude" / "kit.json").write_text("{}")
         out = run({"cwd": str(repo), "source": "startup"})
-        # this project's legacy board still has A1 working, so its state waits in .claude/, saying why
+        # this project's legacy board still has A1 working, so its state waits in .claude/; why was
+        # said at an earlier start in this repo, and is not said again while the reason is the same
         coordinator, *waiting, header = out.strip().splitlines()
         assert header == "kit harness active for this project (.claude/kit.json):", out
-        assert len(waiting) == 1 and "waits to move from .claude/ to .kit/ (board row A1 is working" in waiting[0], out
+        assert waiting == [], out
         # the coordinator line: on every interactive start and after a compaction, routed without the mod
         assert coordinator.startswith("kit: this session coordinates this project") and "kit:lead" in coordinator, out
         assert "PushNotification" in coordinator and "none for progress" in coordinator, coordinator
@@ -232,6 +233,13 @@ def main():
         out = run({"cwd": str(repo), "source": "startup"})
         assert "waits to move from .claude/ to .kit/ (item A1 is working" in out and "stays in" not in out, out
         assert (repo / ".claude" / "lead" / "board.md").exists() and not (repo / ".kit").exists(), "nothing moved"
+        assert "waits to move" not in run({"cwd": str(repo), "source": "startup"}), "said once while the reason stays"
+        (repo / ".claude" / "lead" / "board.md").write_text("A1 | ship | a | DONE WHEN x | queued | - | - | -\n"
+                                                            "A2 | ship | b | DONE WHEN y | landing | - | - | -\n")
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert "waits to move" in out and "board row A2 is landing" in out, f"a new reason is said: {out}"
+        (repo / ".claude" / "lead" / "board.md").write_text("A1 | ship | a | DONE WHEN x | queued | - | - | -\n")
+        assert not (repo / ".kit").exists(), "saying it wrote nothing into the project"
         assert "moved this project" not in run({"cwd": str(repo), "source": "compact"}), "never mid-session"
         log.write_text(log.read_text() + "- 2026-11-01 11:00 | done | merged\n")
         out = run({"cwd": str(repo), "source": "startup"})
@@ -257,8 +265,12 @@ def main():
         assert undo.returncode == 0 and (repo / ".claude" / "lead" / "board.md").exists(), undo.stdout + undo.stderr
         out = run({"cwd": str(repo), "source": "startup"})
         assert "kit:" not in "\n".join(l for l in out.splitlines() if "state" in l) and not (repo / ".kit" / "lead").exists(), out
-        again = subprocess.run([sys.executable, str(script), "migrate", "--root", str(repo)], capture_output=True, text=True)
-        assert (repo / ".kit" / "lead" / "board.md").exists(), "migrate by hand moves it again: " + again.stdout + again.stderr
+        bare = subprocess.run([sys.executable, str(script), "migrate", "--root", str(repo)], capture_output=True, text=True)
+        assert bare.returncode == 2 and "migrate --again" in bare.stderr and not (repo / ".kit" / "lead").exists(), \
+            "a bare migrate (it runs unasked) does not reverse the owner's undo: " + bare.stdout + bare.stderr
+        again = subprocess.run([sys.executable, str(script), "migrate", "--again", "--root", str(repo)],
+                               capture_output=True, text=True)
+        assert (repo / ".kit" / "lead" / "board.md").exists(), "migrate --again moves it again: " + again.stdout + again.stderr
         # a fresh project has nothing to move and makes no .kit/ by starting a session
         fresh = Path(tmp) / "fresh"
         (fresh / ".claude").mkdir(parents=True)

@@ -118,7 +118,13 @@ def main():
         check(sh(repo, "status", "--porcelain") == before, "git status unchanged after undo")
         check(migrate_state.auto(repo) == [] and not (repo / ".kit").exists(), "a session start after undo: silent, nothing moved")
         code, out = run(repo, "migrate")
-        check(code == 0 and (repo / ".kit/lead/board.md").exists(), f"migrate by hand moves it again: {out}")
+        check(code == 2 and "migrate --again" in out and not (repo / ".kit").exists(),
+              f"a bare migrate, which runs unasked, refuses after undo and names --again: {code} {out}")
+        check(kitlib.lead_local(repo, "state") == ".claude", "and leaves lead.state")
+        code, out = run(repo, "migrate", "--again", "--dry-run")
+        check(code == 0 and kitlib.lead_local(repo, "state") == ".claude", f"a dry --again changes nothing: {out}")
+        code, out = run(repo, "migrate", "--again")
+        check(code == 0 and (repo / ".kit/lead/board.md").exists(), f"migrate --again moves it again: {out}")
         check(kitlib.lead_local(repo, "state") is None, "and clears lead.state")
         check(json.loads((repo / ".claude/kit.local.json").read_text()) == {"lead": {}}, "kit.local.json kept as JSON")
 
@@ -164,8 +170,12 @@ def main():
         repo = project(tmp)
         sh(repo, "add", "-f", ".claude/evidence")
         sh(repo, "commit", "-qm", "evidence in git")
+        before = exclude_lines(repo)
         code, out = run(repo, "migrate")
         check(code == 0 and "git mv .claude/evidence .kit/evidence" in out, f"tracked entry: the command to run: {out}")
+        added = [l for l in exclude_lines(repo) if l not in before]
+        check("/.kit/lead/" in added and not any("evidence" in l for l in added),
+              f"a tracked entry gets no exclude line in either layout: {added}")
         check((repo / ".claude/evidence/main/notes.txt").exists(), "the tracked entry stayed")
         check((repo / ".kit/lead/board.md").exists(), "the untracked entries moved")
         check(kitlib.state_entry(repo, "evidence") == repo / ".claude" / "evidence", "kitlib still finds it")
@@ -277,7 +287,7 @@ def main():
             os.rename = real
         check(how == "moved" and (dst / "items/x.md").read_text() == "x\n" and not src.exists(), f"copied then deleted: {how}")
         check(not dst.with_name("lead.copying").exists(), "no copy left beside it")
-        check(migrate_state.move(src, dst) in ("gone", "conflict"), "a source already gone is not an error")
+        check(migrate_state.move(src, dst) == "gone", "a source already gone was moved by someone else: no conflict")
 
     # the custom board path inside .claude/lead follows the move
     with tempfile.TemporaryDirectory() as tmp:
@@ -323,6 +333,83 @@ def main():
         code, out = run(repo, "migrate")
         check(code == 0 and "nothing to move" in out and not (repo / ".kit").exists(), f"fresh: {out}")
         check(migrate_state.auto(repo) == [] and not (repo / ".kit").exists(), "auto: silent, nothing made")
+
+    # a project already on .kit/ with evidence tracked there: no exclude line hides it
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / "new"
+        repo.mkdir()
+        sh(repo, "init", "-q", "-b", "main")
+        (repo / ".kit/evidence/main").mkdir(parents=True)
+        (repo / ".kit/evidence/main/proof.txt").write_text("pass\n")
+        (repo / ".kit/lead").mkdir()
+        (repo / ".kit/lead/board.md").write_text("")
+        sh(repo, "add", ".kit/evidence")
+        sh(repo, "commit", "-qm", "evidence in git")
+        wanted = migrate_state.exclude_wanted(repo, with_files=False)
+        check("/.kit/lead/" in wanted and not any("evidence" in l for l in wanted), f"new layout, tracked: {wanted}")
+
+    # a .claude/ that holds only kit state: it goes, no note is written, the moved line is said
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / "only"
+        repo.mkdir()
+        sh(repo, "init", "-q", "-b", "main")
+        (repo / "README.md").write_text("x\n")
+        sh(repo, "add", "README.md")
+        sh(repo, "commit", "-qm", "init")
+        (repo / ".claude/evidence/main").mkdir(parents=True)
+        (repo / ".claude/evidence/main/notes.txt").write_text("pass\n")
+        lines = migrate_state.auto(repo)
+        check(any("moved this project's kit state (evidence)" in l for l in lines), f"moved line: {lines}")
+        check(not any("did not move" in l for l in lines), f"no false failure: {lines}")
+        check((repo / ".kit/evidence/main/notes.txt").exists() and not (repo / ".claude").exists(),
+              "the emptied .claude/ is gone and not made again for a note")
+        check(sh(repo, "status", "--porcelain") == "", f"git clean: {sh(repo, 'status', '--porcelain')}")
+
+    # .kit is a symlink: nothing moves into it, said once
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = project(tmp)
+        elsewhere = Path(tmp) / "elsewhere"
+        elsewhere.mkdir()
+        (repo / ".kit").symlink_to(elsewhere)
+        before = exclude_lines(repo)
+        first = migrate_state.auto(repo)
+        check(len(first) == 1 and "is a symlink" in first[0], f"said why: {first}")
+        check(list(elsewhere.iterdir()) == [] and (repo / ".claude/lead/board.md").exists(), "nothing moved")
+        check(exclude_lines(repo) == before, "no exclude lines for a checkout that does not move")
+        check(migrate_state.auto(repo) == [], "said once")
+        code, out = run(repo, "migrate")
+        check(code == 0 and "is a symlink" in out and list(elsewhere.iterdir()) == [], f"by hand too: {out}")
+
+    # two session starts at once, many times: the owner's lines stay, no line is cut, no false
+    # conflict, and the runs log keeps the winner's entry
+    session_start = SCRIPTS / "session_start.py"
+    lost, cut, false_conflict, no_run, dirty = 0, 0, 0, 0, 0
+    with tempfile.TemporaryDirectory() as tmp:
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
+        env.update(HOME=tmp, KIT_HEADLESS="1")
+        for i in range(20):
+            repo = project(tmp, f"race{i}")
+            (repo / ".claude/kit.json").write_text('{"verify": "true"}\n')
+            ex = repo / ".git/info/exclude"
+            with ex.open("a") as f:
+                f.write("/owner-secret.env\n/notes-private/\n")
+            (repo / "owner-secret.env").write_text("k\n")
+            before = ex.read_text().splitlines()
+            payload = json.dumps({"cwd": str(repo), "source": "startup", "session_id": "s", "hook_event_name": "SessionStart"})
+            procs = [subprocess.Popen([sys.executable, str(session_start)], cwd=str(repo), stdin=subprocess.PIPE,
+                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+                     for _ in range(2)]
+            outs = [p.communicate(payload, timeout=60)[0] for p in procs]
+            text = ex.read_text()
+            after = text.splitlines()
+            lost += any(l not in after for l in before)
+            cut += not text.endswith("\n") or any(l and not (l.startswith(("/", "#"))) for l in after)
+            false_conflict += any("both exist" in o for o in outs)
+            runs = json.loads((repo / ".kit/migration.json").read_text()).get("runs", [])
+            no_run += not any(r.get("moved") for r in runs)
+            dirty += sh(repo, "status", "--porcelain") != ""
+    check((lost, cut, false_conflict, no_run, dirty) == (0, 0, 0, 0, 0),
+          f"of 20 races: lost {lost}, cut {cut}, false conflict {false_conflict}, no run logged {no_run}, dirty {dirty}")
 
     print("migrate_state: all checks passed" if not failed else f"migrate_state: {failed} failures")
     return 1 if failed else 0
