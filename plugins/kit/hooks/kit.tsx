@@ -59,6 +59,15 @@ const LOOP_CONTEXT =
   'The kit mod notifies the user when the board gains a ready or needs-you row; do not send ' +
   'PushNotification for that yourself.'
 
+// Over Remote Control the person is on a phone: no status line, and the mod's notification shows
+// on the computer they are away from. There the coordinator's own push is the only one that
+// reaches them.
+const REMOTE_CONTEXT =
+  ' Except now: this message came over Remote Control, so the user is on their phone and sees ' +
+  'neither the status line nor that notification. While they are remote, send one ' +
+  'PushNotification yourself when an item becomes ready or needs them, naming the item and the ' +
+  'question, and none for progress.'
+
 const ASK_CONTEXT =
   'Kit ask mode: this session is a discussion about the repository. Explore, explain, reason and ' +
   'propose; change no code. Documentation files (Markdown, docs/) may be edited when the user asks. ' +
@@ -252,52 +261,85 @@ async function setUnattended($: $, root: string, on: boolean): Promise<string> {
   return 'Unattended off: a tool call that needs permission asks you again (permissions.denyInsteadOfPrompting removed from .claude/settings.local.json).'
 }
 
-// What the coordinator's board says is queued, ready for review and what needs the person.
-type BoardCounts = { ready: number; needs: number; queued: number }
+// What the coordinator's board says, by item id: what needs the person (with the question when
+// the NEEDS YOU line gives one), what is ready for review, at work and queued. Ids, not counts:
+// "1 ready · 2 need you" told the person nothing they could act on, and the counts did not add up
+// with the engine's "running" (which also counts a verifier, an Explore agent, another plugin's).
+type Board = { needs: string[]; ready: string[]; working: string[]; queued: string[]; questions: Record<string, string> }
 
-const BOARD_STATUS = /^(queued|working|review|needs-you|landing|done|parked)\b/
+const STATUS_WORDS = 'queued|working|review|needs-you|landing|done|parked'
+const STATUS_CELL = new RegExp(`^(${STATUS_WORDS})$`)      // a cell that is a status and nothing else
+const STATUS_START = new RegExp(`^(${STATUS_WORDS})\\b`)   // the status cell itself may add a note
 
-// The status of one board row. The reference puts it in the fifth cell, but a model renders the
-// board readily as a Markdown table (outer pipes, a header and a separator row), capitalises a
-// word or drops a cell, so: outer pipes stripped, emphasis stripped, any case, the fifth cell
-// first and else the only cell that is a status word.
-function rowStatus(line: string): string | undefined {
+// One board row as [id, status]. The reference puts the status in the fifth cell, but a model
+// renders the board readily as a Markdown table (outer pipes, a header and a separator row),
+// capitalises a word or drops a cell, so: outer pipes stripped, emphasis stripped, any case, the
+// fifth cell first and else the only cell that is exactly a status word ("DONE WHEN e2e" is not
+// `done`: read as one, it made a row with a dropped cell count as nothing).
+function boardRow(line: string): [string, string] | undefined {
   const cells = line.replace(/^\|/, '').replace(/\|$/, '').split('|')
-    .map(c => c.trim().replace(/[*_`]/g, '').toLowerCase())
+    .map(c => c.trim().replace(/[*_`]/g, ''))
   if (cells.length < 2) return undefined
-  if (cells.every(c => c === '' || /^:?-+:?$/.test(c))) return undefined // a table's separator row
-  if (cells.includes('status') || cells[0] === 'id') return undefined // its header row
-  const status = (c: string | undefined) => (c && BOARD_STATUS.exec(c)?.[1]) || undefined
-  const found = cells.map(status).filter(Boolean) as string[]
-  return status(cells[4]) ?? (found.length === 1 ? found[0] : undefined)
+  const lower = cells.map(c => c.toLowerCase())
+  if (lower.every(c => c === '' || /^:?-+:?$/.test(c))) return undefined // a table's separator row
+  if (lower.includes('status') || lower[0] === 'id') return undefined // its header row
+  const fifth = lower[4] && STATUS_START.exec(lower[4])?.[1]
+  const exact = lower.filter(c => STATUS_CELL.test(c))
+  const status = fifth || (exact.length === 1 ? exact[0] : undefined)
+  return status && cells[0] ? [cells[0], status] : undefined
 }
 
-function countBoard(text: string): BoardCounts {
+function readBoardText(text: string): Board {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean).filter(l => !l.startsWith('```'))
+  const board: Board = { needs: [], ready: [], working: [], queued: [], questions: {} }
+  const add = (list: string[], id: string) => {
+    if (!list.some(x => x.toLowerCase() === id.toLowerCase())) list.push(id)
+  }
   const needsLine = lines.find(l => /^NEEDS YOU:/i.test(l))
-  let needs = 0
   if (needsLine) {
     const rest = needsLine.slice('NEEDS YOU:'.length).trim()
-    if (rest && !/^(empty|none|-)$/i.test(rest)) needs = rest.split(/;\s*/).filter(Boolean).length
+    if (rest && !/^(empty|none|-)$/i.test(rest)) {
+      // entries are `<id>: <question>`; a `;` inside a question starts no new entry
+      const entries = rest.split(/;\s*(?=[A-Za-z0-9][\w.-]*\s*:)/).map(x => x.trim()).filter(Boolean)
+      entries.forEach((entry, i) => {
+        const m = /^([A-Za-z0-9][\w.-]*)\s*:\s*(.*)$/.exec(entry)
+        const id = m ? m[1] : `question ${i + 1}`
+        add(board.needs, id)
+        board.questions[id.toLowerCase()] = (m ? m[2] : entry).replace(/;+$/, '').trim()
+      })
+    }
   }
-  const statuses = lines
-    .filter(l => l.includes('|') && !/^(SHIP|RULES|NEEDS YOU):/i.test(l) && !l.startsWith('<'))
-    .map(rowStatus)
-  const count = (s: string) => statuses.filter(x => x === s).length
-  // a needs-you row with no NEEDS YOU line still needs the person; with both, the larger count
-  return { ready: count('review'), needs: Math.max(needs, count('needs-you')), queued: count('queued') }
+  for (const line of lines) {
+    if (!line.includes('|') || /^(SHIP|RULES|NEEDS YOU):/i.test(line) || line.startsWith('<')) continue
+    const row = boardRow(line)
+    if (!row) continue
+    const [id, status] = row
+    if (status === 'needs-you') add(board.needs, id) // also on the NEEDS YOU line: once
+    else if (status === 'review') add(board.ready, id)
+    else if (status === 'working' || status === 'landing') add(board.working, id)
+    else if (status === 'queued') add(board.queued, id)
+  }
+  return board
+}
+
+// `needs you 2: a2-region, pr-328`: the count, then the first ids (a long id cut), then `+n`.
+const SHOWN_IDS = 2
+function named(label: string, ids: string[]): string {
+  const cut = (id: string) => (id.length > 22 ? `${id.slice(0, 21)}…` : id)
+  const more = ids.length > SHOWN_IDS ? ` +${ids.length - SHOWN_IDS}` : ''
+  return `${label} ${ids.length}: ${ids.slice(0, SHOWN_IDS).map(cut).join(', ')}${more}`
 }
 
 // The board from kit.json `lead.board` or the default path: null when there is no board,
 // undefined when it (or kit.json) exists but could not be read this time.
-async function readBoard($: $, root: string): Promise<BoardCounts | null | undefined> {
+async function readBoard($: $, root: string): Promise<Board | null | undefined> {
   const kitJson = await readJsonForWrite($, await kitJsonPath($, root))
   if (kitJson.isBroken) return undefined
   const lead = kitJson.value.lead
   const boardPath = (lead && lead.board) || '.claude/lead/board.md'
   const path = boardPath.startsWith('/') ? boardPath : `${root}/${boardPath}`
   try {
-    return countBoard(await $.fs.read(path))
+    return readBoardText(await $.fs.read(path))
   } catch {
     try {
       return (await $.fs.exists(path)) ? undefined : null
@@ -356,16 +398,22 @@ async function agentCounts($: $): Promise<{ running: number; waiting: number }> 
 const PERSON_HERE_MS = 60_000
 let personAt = 0 // when the person last typed a prompt here (terminal or Remote Control)
 
-async function notifyBoardChange($: $, before: BoardCounts | null, after: BoardCounts): Promise<void> {
+async function notifyBoardChange($: $, before: Board | null, after: Board): Promise<void> {
   if (!before) return
-  const ready = after.ready - before.ready
-  const needs = after.needs - before.needs
-  if (ready <= 0 && needs <= 0) return
+  // by id, not by count: one item leaving review as another enters is news, a count of 1 and 1 is not
+  const gained = (now: string[], then: string[]) => now.filter(id => !then.some(x => x.toLowerCase() === id.toLowerCase()))
+  const needs = gained(after.needs, before.needs)
+  const ready = gained(after.ready, before.ready)
+  if (!needs.length && !ready.length) return
   if (personAt && (await $.clock.now()) - personAt < PERSON_HERE_MS) return
   const parts: string[] = []
-  if (ready > 0) parts.push(`${ready} ready for review`)
-  if (needs > 0) parts.push(`${needs} need${needs === 1 ? 's' : ''} you`)
-  await notify($, `kit: ${parts.join(', ')}. See the board (.claude/lead/board.md) or ask the coordinator.`)
+  if (needs.length) {
+    const q = after.questions[needs[0].toLowerCase()]
+    const first = q ? `${needs[0]} (${q.length > 70 ? `${q.slice(0, 69)}…` : q})` : needs[0]
+    parts.push(`needs you: ${[first, ...needs.slice(1)].join(', ')}`)
+  }
+  if (ready.length) parts.push(`ready for review: ${ready.join(', ')}`)
+  await notify($, `kit: ${parts.join(' · ')}`)
 }
 
 async function notify($: $, text: string): Promise<void> {
@@ -377,7 +425,7 @@ async function notify($: $, text: string): Promise<void> {
   }
 }
 
-let lastBoard: BoardCounts | null = null
+let lastBoard: Board | null = null
 
 // Everything on the line is read again on each call: the board is one small file, a board that
 // could not be read keeps the last counts, a board that is gone clears them.
@@ -403,12 +451,16 @@ async function refreshStatus($: $): Promise<void> {
   // a forgotten `unattended on` shows here the next morning (project file, else merged settings)
   if ((await getUnattended($, root)).on) parts.push('unattended')
   if (costUsd !== null) parts.push(`$${costUsd.toFixed(2)}`)
-  if (running) parts.push(`${running} running`)
-  if (waiting) parts.push(`${waiting} waiting`)
+  // what needs the person first, by name; the board's own rows for work in hand, so the numbers
+  // are the ones the coordinator reports. Without a board, the engine's threads.
+  const b = lastBoard
+  if (b && b.needs.length) parts.push(named('needs you', b.needs))
+  if (b && b.ready.length) parts.push(named('ready', b.ready))
+  if (b && b.working.length) parts.push(named('working', b.working))
+  else if (running) parts.push(`${running} running`)
+  if (waiting) parts.push(`${waiting} waiting on a prompt`)
+  if (b && b.queued.length) parts.push(`queued ${b.queued.length}`)
   if (live) parts.push(`${live} overnight`)
-  if (lastBoard && lastBoard.queued) parts.push(`${lastBoard.queued} queued`)
-  if (lastBoard && lastBoard.ready) parts.push(`${lastBoard.ready} ready`)
-  if (lastBoard && lastBoard.needs) parts.push(`${lastBoard.needs} need you`)
   const status = parts.join(' · ')
   if (status === lastStatus) return
   lastStatus = status
@@ -771,7 +823,7 @@ export const register: Register = on => {
         await $.store.delete(`loopOff:${root}`)
       }
       const mode = await getMode($, root)
-      if (mode === 'loop') extra.push(LOOP_CONTEXT)
+      if (mode === 'loop') extra.push(kind === 'bridge' ? LOOP_CONTEXT + REMOTE_CONTEXT : LOOP_CONTEXT)
       if (mode === 'ask') extra.push(ASK_CONTEXT)
       if (extra.length) return next({ ...e, context: [...(e.context ?? []), ...extra] })
     } catch {

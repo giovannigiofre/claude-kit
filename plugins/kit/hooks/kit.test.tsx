@@ -52,6 +52,12 @@ test('light mode adds nothing; loop mode hands every prompt to the coordinator; 
   expect((seen.at(-1) ?? []).join(' ')).toContain('coordinator')
   // the mod is the one that pings the person about the board: the coordinator is told so
   expect((seen.at(-1) ?? []).join(' ')).toContain('The kit mod notifies the user when the board gains a ready or needs-you row; do not send PushNotification for that yourself.')
+  expect((seen.at(-1) ?? []).join(' ')).not.toContain('Remote Control')
+  // over Remote Control the person is on a phone, where neither the line nor that ping shows:
+  // there the coordinator pushes itself
+  await $.prompt.submit({ text: 'and a logout', origin: { kind: 'bridge' } } as any)
+  expect((seen.at(-1) ?? []).join(' ')).toContain('this message came over Remote Control')
+  expect((seen.at(-1) ?? []).join(' ')).toContain('send one PushNotification yourself when an item becomes ready or needs them')
 
   await $.command.run({ command: 'kit-mode', args: 'light' } as any)
   await $.prompt.submit({ text: 'what changed?' } as any)
@@ -213,15 +219,14 @@ test('the status line follows the board on every tick', async ($, on) => {
     return { value: undefined }
   })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  expect(lines.at(-1)).toBe('light · host · $1.50 · 1 ready · 1 need you')
+  expect(lines.at(-1)).toBe('light · host · $1.50 · needs you 1: A1 · ready 1: A1')
 
   files['/repo/.claude/lead/board.md'] = [
     'NEEDS YOU: none',
     'A1 | ship | login | DONE WHEN e2e passes | done | agent A1 | PR #3 | merged',
   ].join('\n')
   await clock.advance(15000)
-  expect(lines.at(-1)).not.toContain('ready')
-  expect(lines.at(-1)).not.toContain('need you')
+  expect(lines.at(-1)).toBe('light · host · $1.50')
 })
 
 test('a thread waiting for an answer counts on the line; a board that gains work for the person keeps the line right', async ($, on) => {
@@ -240,7 +245,8 @@ test('a thread waiting for an answer counts on the line; a board that gains work
     return { value: { isSent: true, channel: 'terminal' } }
   })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  expect(lines.at(-1)).toBe('light · host · $1.50 · 1 running · 1 waiting')
+  // the board's own row, by name, not the engine's count of every subagent
+  expect(lines.at(-1)).toBe('light · host · $1.50 · working 1: A1 · 1 waiting on a prompt')
   expect(notices).toEqual([])
 
   files['/repo/.claude/lead/board.md'] = [
@@ -248,14 +254,25 @@ test('a thread waiting for an answer counts on the line; a board that gains work
     'A1 | ship | login | DONE WHEN e2e | review | agent A1 | PR #3 | CI green',
   ].join('\n')
   await clock.advance(15000)
-  expect(lines.at(-1)).toContain('1 ready · 1 need you')
-  // one native notification for the gain, with both counts
+  expect(lines.at(-1)).toContain('needs you 1: A1 · ready 1: A1')
+  // one native notification for the gain, naming the item and its question
   expect(notices.length).toBe(1)
-  expect(notices[0].text).toBe('kit: 1 ready for review, 1 needs you. See the board (.claude/lead/board.md) or ask the coordinator.')
+  expect(notices[0].text).toBe('kit: needs you: A1 (which region?) · ready for review: A1')
 
   await clock.advance(15000)
-  expect(lines.at(-1)).toContain('1 ready · 1 need you')
+  expect(lines.at(-1)).toContain('needs you 1: A1 · ready 1: A1')
   expect(notices.length).toBe(1) // the same board again: nothing new to say
+
+  // one item leaves review as another enters: the counts are the same, the news is not
+  files['/repo/.claude/lead/board.md'] = [
+    'NEEDS YOU: A1: which region?',
+    'A1 | ship | login | DONE WHEN e2e | done | agent A1 | PR #3 | merged',
+    'A2 | ship | export | DONE WHEN csv | review | agent A2 | PR #4 | CI green',
+  ].join('\n')
+  await clock.advance(15000)
+  expect(lines.at(-1)).toContain('needs you 1: A1 · ready 1: A2')
+  expect(notices.length).toBe(2)
+  expect(notices[1].text).toBe('kit: ready for review: A2')
 })
 
 test('the board may be a Markdown table, capitalise a status or drop a cell; needs-you and queued rows count', async ($, on) => {
@@ -278,7 +295,7 @@ test('the board may be a Markdown table, capitalise a status or drop a cell; nee
   })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   // no NEEDS YOU line: the needs-you row still counts
-  expect(lines.at(-1)).toBe('light · host · $1.50 · 2 queued · 1 ready · 1 need you')
+  expect(lines.at(-1)).toBe('light · host · $1.50 · needs you 1: A2 · ready 1: A1 · queued 2')
 
   // plain rows: one without its DONE WHEN cell and a bold status, one whose question is both a
   // NEEDS YOU entry and a needs-you row (counted once)
@@ -289,7 +306,17 @@ test('the board may be a Markdown table, capitalise a status or drop a cell; nee
     'A3 | scout | search | DONE WHEN cards | working | agent A3 | - | started',
   ].join('\n')
   await clock.advance(15000)
-  expect(lines.at(-1)).toBe('light · host · $1.50 · 1 ready · 1 need you')
+  expect(lines.at(-1)).toBe('light · host · $1.50 · needs you 1: A2 · ready 1: A1 · working 1: A3')
+
+  // a row that dropped its agent cell keeps its status ("DONE WHEN ..." is not `done`); a `;` inside a
+  // question starts no second question; more than two ids are cut to a count; a long id is shortened
+  files['/repo/.claude/lead/board.md'] = [
+    'NEEDS YOU: A2: eu-west; or us-east?; pr-328: merge now?; a-very-long-item-identifier-here: ok?',
+    'A1 | ship | login | DONE WHEN e2e passes | review | PR #3 | CI green',
+    'A5 | ship | chart | DONE WHEN snapshot | landing | agent A5 | PR #9 | merging',
+  ].join('\n')
+  await clock.advance(15000)
+  expect(lines.at(-1)).toBe('light · host · $1.50 · needs you 3: A2, pr-328 +1 · ready 1: A1 · working 1: A5')
 })
 
 test('no notification for a board change while the person is typing here; one once they have been quiet a minute', async ($, on) => {
@@ -314,7 +341,7 @@ test('no notification for a board change while the person is typing here; one on
   await clock.advance(60_000)
   files['/repo/.claude/lead/board.md'] = 'NEEDS YOU: A1: which region?\nA1 | ship | login | DONE WHEN e2e | review | agent A1 | PR #3 | CI green'
   await clock.advance(15000)
-  expect(notices).toEqual(['kit: 1 needs you. See the board (.claude/lead/board.md) or ask the coordinator.'])
+  expect(notices).toEqual(['kit: needs you: A1 (which region?)'])
 })
 
 test('a pane an older kit left open is closed on session start', async ($, on) => {

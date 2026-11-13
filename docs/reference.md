@@ -96,8 +96,8 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
 - `lead` configures the coordinator. `ship`: `local` (verified branches, you merge), `pr` (threads
   push and open PRs), `pr+fix` (they also keep CI green). `merge`: `user` (you review and merge
   every PR) or `agent` (the coordinator merges a PR once CI is green, the review has nothing open
-  and the risk is not high; a high-risk PR still waits for you); unset, the coordinator asks when
-  the first PR is ready and writes your answer here. Setting `pr` or `pr+fix` here is a
+  and the risk is not high; a high-risk PR still waits for you); unset means `user`: threads open
+  PRs on their own, and the coordinator merges one only when you ask for it. Setting `pr` or `pr+fix` here is a
   standing go-ahead to push; without it the coordinator asks once per session. `parallel`:
   threads working at once (default 3). `budget`: `{"items": N}` or `"none"`. `loops`: standing
   loops the coordinator schedules (session-only, they expire after 7 days).
@@ -595,14 +595,18 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
   ```
 
   Status: `queued`, `working`, `review`, `needs-you`, `landing`, `done`, `parked`. The status line
-  counts the `review` items (`N ready`), the NEEDS YOU questions and `needs-you` rows (`N need
-  you`) and the `queued` rows, re-reading the board every 15 seconds (a board written as a
-  Markdown table, or with capitalised statuses, counts the same), and the threads stopped on a
-  question or a permission (`N waiting`, from the engine's agent list). When a tick finds more
-  ready items or questions than the last one, the mod sends one native notification
-  (`$.ui.notify`, Claude Code 2.1.295+; silently skipped where the engine lacks it), unless you
+  names the items, most urgent first: `needs you 2: a2-region, pr-328` (the NEEDS YOU entries and
+  the `needs-you` rows, each id once), `ready 1: login-page` (`review`), `working 2: chart, cleanup`
+  (`working` and `landing`; without a board, the engine's `N running`), `queued 3`. It shows two
+  ids and then `+n`, re-reads the board every 15 seconds (a Markdown table, a capitalised status, a
+  dropped cell or a `;` inside a question read the same), and adds `N waiting on a prompt` for
+  threads stopped on a question or a permission (the engine's agent list). When a tick finds an id
+  newly ready or newly needing you, the mod sends one native notification naming it, with its
+  question (`$.ui.notify`, Claude Code 2.1.295+; silently skipped where the engine lacks it), unless you
   were active in the terminal within the last minute; in loop mode the coordinator is told the
-  mod notifies, so you get one notice per event, not two.
+  mod notifies, so you get one notice per event, not two. A prompt that arrives over Remote Control
+  says the opposite for as long as you are remote: on a phone neither the line nor that notification
+  shows, so the coordinator sends one PushNotification itself when an item becomes ready or needs you.
 - **Safety**: `/kit-safety host|sandbox`. Sandbox writes the kit's block into
   `.claude/settings.local.json`; check it with `/sandbox`, add hosts under
   `sandbox.network.allowedDomains`. Where the sandbox can't start, commands run unsandboxed with

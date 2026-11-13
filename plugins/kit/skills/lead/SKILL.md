@@ -21,7 +21,7 @@ it under 60 lines and 8 KB: RULES holds standing rules only, dated decisions go 
 `.claude/lead/DECISIONS.md` (read on demand), `I done` moves a done row to `archive.md`.
 
 ```
-SHIP: <local | pr | pr+fix> | MERGE: <user | agent | ask> | PARALLEL: <n> | BUDGET: <none | k of n items>
+SHIP: <local | pr | pr+fix> | MERGE: <user | agent> | PARALLEL: <n> | BUDGET: <none | k of n items>
 RULES: <standing preferences the user stated; separated by "; ">
 NEEDS YOU: <id: the question in one line>; <id: ...>
 <id> | <ship | scout | overnight> | <goal> | DONE WHEN <check> | <status> | agent <id> | <branch / PR> | <last event>
@@ -49,7 +49,7 @@ again (the user may have changed it) and VERDICT.md. Proposal cards (`.claude/le
 from `/kit:scout`): `next` takes a class A card (`P take <id>`), asks before a B, never starts a C.
 
 Defaults come from kit.json `lead` (`ship`, `merge`, `parallel`, `budget`, `loops`), else ship
-`pr` (`local` when the repo has no remote), merge `ask`, parallel 3, no budget; a ship mode that
+`pr` (`local` when the repo has no remote), merge `user`, parallel 3, no budget; a ship mode that
 came from neither kit.json nor the user means asking once before the first push. State them in one
 line in your first reply; set up `lead.loops` as [loops.md](loops.md) says. When the user changes
 one, or states a preference ("propose threads before starting them", "reuse the thread for
@@ -77,7 +77,7 @@ that reaches you anyway needs no reply: end the turn without a word.
 - **Steering** ("also X", "drop Y", "Z first"): SendMessage to the thread when it fits its brief;
   otherwise stop it (TaskStop), park its branch and requeue.
 - **A decision on a NEEDS YOU item:** apply it and resume the thread.
-- **"Merge it"** (merge `user` or `ask`): merge that PR now, then `I done` it.
+- **"Merge it"** (merge `user`): merge that PR now, then `I done` it.
 
 ## Threads
 
@@ -122,8 +122,8 @@ When a thread reports:
 **Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it
 waits as `review`. `agent`: merge it yourself (`gh pr merge --squash --delete-branch`, or the
 method the repo allows) once CI is green, the review has nothing open and the risk is not high; a
-high-risk PR still waits. Not set yet: when the first PR is ready, ask whether to merge green PRs
-yourself or leave them for review, and write the answer to `.claude/kit.json` `lead.merge`.
+high-risk PR still waits. Not set: `user`, without asking; you open PRs on your own and merge one
+only when the user asks for it (that PR, that time), then tidy up as above.
 
 The user is the author of every commit and PR: threads commit under the repo's configured git
 identity (kit.json `author`), with no AI co-author lines or footers; on a branch a thread created
@@ -137,7 +137,7 @@ hour. Before an unattended run, follow [unattended.md](unattended.md) while the 
 - Lead with the outcome, in at most four lines: what started, what is ready for review (with
   the PR or branch), and NEEDS YOU, ordered by what unblocks the most.
 - When nothing changed, say so in a line or not at all. When a wake-up the user didn't cause
-  leaves something for them, send one PushNotification, unless the kit mod is on (it notifies).
+  leaves something for them, send one PushNotification, unless the kit mod says it notifies.
 - Run a command the user would type yourself, with Bash: its Allow/Deny prompt reaches the phone
   (a `!` sent over Remote Control does not run). Only a password, payment or secret waits for them.
 
