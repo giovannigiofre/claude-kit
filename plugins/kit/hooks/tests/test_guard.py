@@ -740,8 +740,26 @@ def main():
         (f"python3 {items} sandbox status", thread, "allow"),
         (f"python3 {items} unattended", thread, "allow"),
         (f"python3 {items} list", thread, "allow"),
-        # from a thread the text rule fails safe: any items.py with the owner words, the repo's own too
+        # what runs is judged, not the text: any items.py run with the owner words, the repo's own too
         ("python3 items.py away on", thread, "block"),
+        (f"python3 {items} 'aw'ay on", thread, "block"),
+        (f'eval "python3 {items} away on"', thread, "block"),
+        (f"env X=1 python3 {items} away on", thread, "block"),
+        (f"find . -name x -exec python3 {items} sandbox on \\;", thread, "block"),
+        (f"P={items}; python3 $P away on", thread, "block"),
+        (f"function I {{ python3 {items} \"$@\"; }}; I away on", thread, "block"),
+        (f'I="python3 {items}"; ${{I}} sandbox off', thread, "block"),
+        # a thread's ordinary work that only mentions the scripts passes
+        ('git commit -m "fix: migrate_state.py undo restores the exclude lines"', thread, "allow"),
+        ('git commit -m "guard: refuse items.py away on from a subagent"', thread, "allow"),
+        ('gh pr create --title t --body "... items.py away on ..."', thread, "allow"),
+        ('gh pr comment 12 --body "the coordinator runs python3 items.py sandbox on"', thread, "allow"),
+        (f'grep -rn "undo" {SCRIPT.parent / "migrate_state.py"}', thread, "allow"),
+        (f'grep -n -- "--apply" {SCRIPT.parent / "machine_setup.py"}', thread, "allow"),
+        (f"git log --oneline -- {SCRIPT.parent / 'migrate_state.py'} | grep -i undo", thread, "allow"),
+        ('echo "items.py away on" >> notes.md', thread, "allow"),
+        (f"python3 {items} sandbox status | grep -q on && echo sandbox on", thread, "allow"),
+        (f'python3 {items} log a1 "moved on" && echo away on', thread, "allow"),
         ("python3 items.py log a1 'turned away on for the night'", thread, "allow"),  # quoted message text
         (f"cat <<EOF\nI away on\nEOF\npython3 {items} list", thread, "allow"),  # a here-document body
         (f"{items} away on", thread, "block"),

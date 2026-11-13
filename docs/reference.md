@@ -99,10 +99,14 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
   the permission system. Also from a subagent, the kit's `items.py` commands that change the
   owner's settings (`away on|off`, `sandbox on|off`, `unattended` with any choice),
   `machine_setup.py --apply|--decline`, and `migrate_state.py undo` or `migrate --again|--force`
-  are refused: by the script's real path, and on the text in any spelling, a shell function
-  (`I(){ python3 …/items.py "$@"; }; I away on`) or a variable included, when the command names
-  the script and its code (not quoted message text or a here-document body) holds those words;
-  `away status`, `sandbox status`, a bare `unattended`, the board commands, a bare `migrate` and
+  are refused. The guard judges what runs, one simple command at a time: a command that runs
+  the script (by its path, `python3 -m items`, through `env`, `eval`, `bash -c` or `find -exec`)
+  with those words as its own arguments, or a shell function or variable bound in the same command
+  to one that runs it (`I(){ python3 …/items.py "$@"; }; I away on`, `I="python3 …/items.py"; $I
+  away on`). A commit message, a PR body, a grep pattern or an echo that only mentions them passes;
+  deliberate evasions (a word held in a variable, `xargs`, a script fed to `sh`, `python3 -c`) are
+  left to Claude Code's permission layer. `away status`, `sandbox status`, a bare `unattended`,
+  the board commands, a bare `migrate` and
   `status` pass. permission.py never auto-allows those forms from a subagent.
   One rule holds in every repo, with or without `kit.json` and with the guard off:
   a `kit:verifier` subagent (that agent type only, not another plugin's verifier) may write a
