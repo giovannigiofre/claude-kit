@@ -257,6 +257,15 @@ def main():
         (repo / ".kit").symlink_to(repo / "shared")
         check(kitlib.state_dir_name(repo) == ".claude", "a symlinked .kit is not the kit's folder")
         (repo / ".kit").unlink()
+        with tempfile.TemporaryDirectory() as t2:
+            t2 = Path(t2)
+            (t2 / "shared/kit-verifier").mkdir(parents=True)
+            (t2 / ".claude").mkdir()
+            (t2 / ".claude/agent-memory").symlink_to(t2 / "shared")
+            check(kitlib.linked_part(t2, ".claude/agent-memory/kit-verifier") == t2 / ".claude/agent-memory",
+                  "a linked parent is found")
+            check(kitlib.linked_part(t2, ".claude/lead") is None, "no link on the way: None")
+            check(kitlib.linked_part(t2, ".claude/agent-memory") == t2 / ".claude/agent-memory", "the entry itself")
 
     print("kitlib: all checks passed" if not failed else f"kitlib: {failed} failures")
     return 1 if failed else 0

@@ -32,7 +32,9 @@ How, one entry at a time, so a run that dies half-way leaves nothing unreadable:
     is, and the next run carries on. Two session starts at once: the one that finds the source
     gone says nothing about it; `.kit/migration.json` (the log of runs) is merged under a lock;
   - an entry with files tracked in git stays where it is and the `git mv` to run is printed;
-    a symlinked entry is left where it is and gets no exclude line of its own; a checkout
+    an entry that is a symlink, or is reached through one (`.claude` itself, or a linked
+    `.claude/agent-memory` shared by several checkouts), is left where it is, said once, and
+    gets no exclude line of its own; a checkout
     whose `.kit` is a symlink is not moved, nothing is written through the link (no log, no
     note), and only `/.kit` is excluded, so the link stays out of `git status`;
   - an entry in both places is a conflict: both stay, the other entries move anyway, and
@@ -235,8 +237,12 @@ def plan(main, src_dir, dst_dir):
                 if not present(src):
                     continue
                 rel = src.relative_to(checkout).as_posix()
-                if src.is_symlink():
+                link = kitlib.linked_part(checkout, rel) or kitlib.linked_part(checkout, dst.relative_to(checkout))
+                if link == src:
                     skipped.append((src, "a symlink: move what it points to by hand"))
+                elif link:
+                    skipped.append((src, f"{link} is a symlink (to {os.readlink(link)}), maybe shared with other "
+                                    f"checkouts, so what is under it is not the kit's to move; it is read where it is"))
                 elif tracked(checkout, rel):
                     skipped.append((src, f"tracked in git: run `git mv {rel} {dst_dir}/{name}` and commit"))
                 elif present(dst):
@@ -299,7 +305,8 @@ def tell_once(main, lines):
 def exclude_wanted(main, with_files):
     """Every exclude line the move needs, computed once: `/.kit/<entry>/` and `/.claude/<entry>/`
     for each entry found in either place, except one tracked in git (it is not the kit's to hide)
-    and an entry that is a symlink (never probed: it is the owner's, and left in place). A
+    and an entry that is a symlink or under one (never probed: it is the owner's, and left in
+    place). A
     checkout whose `.kit` is a symlink gets only `/.kit`, so the link does not show in `git
     status`. With `with_files`, the manifest's, the note's and kit.local.json's too (undo writes
     it later)."""
@@ -314,7 +321,7 @@ def exclude_wanted(main, with_files):
         for name in names_for(checkout, main):
             paths = [(folder, checkout / folder / name) for folder in (STATE, LEGACY, OLD_STAGING)]
             found = [f"{folder}/{name}" for folder, path in paths if present(path)]
-            if any(path.is_symlink() for _, path in paths):
+            if any(kitlib.linked_part(checkout, f"{folder}/{name}") for folder, _ in paths):
                 continue
             if found and not any(tracked(checkout, rel) for rel in found):
                 dirs += [f"{STATE}/{name}", f"{LEGACY}/{name}"]
@@ -322,6 +329,16 @@ def exclude_wanted(main, with_files):
             files.append(f"{STATE}/{MANIFEST}")
         lines += kitlib.exclude_lines(checkout, files=files, dirs=dirs)
     return list(dict.fromkeys(lines))
+
+
+def nothing_to_move(main, skipped):
+    """The line for a run that moved nothing: where the state is, and why it stays there."""
+    if kitlib.kit_dir_linked(main):
+        return (f"nothing to move: the state stays in {LEGACY}/, because {main / STATE} is a symlink "
+                f"(to {os.readlink(main / STATE)}) and nothing is written through it")
+    if skipped:
+        return f"nothing to move: what is left in place above stays in {LEGACY}/, read where it is"
+    return "nothing to move" + (f": the state is in {STATE}/" if (main / STATE).is_dir() else "")
 
 
 def migrate(main, dry=False, force=False, out=print, again=False):
@@ -396,7 +413,7 @@ def migrate(main, dry=False, force=False, out=print, again=False):
             out(line)
     if done or not (conflicts or failed):
         out(f"moved {len(done)} entr{'y' if len(done) == 1 else 'ies'} to {STATE}/" if done
-            else "nothing to move" + (f": the state is in {STATE}/" if (main / STATE).is_dir() else ""))
+            else nothing_to_move(main, skipped))
     try:
         text = (main / ".gitignore").read_text(encoding="utf-8")
         if done and (f"{LEGACY}/lead" in text or f"{LEGACY}/evidence" in text):

@@ -615,6 +615,18 @@ def kit_dir_linked(base):
     return (Path(base) / STATE_DIR).is_symlink()
 
 
+def linked_part(base, rel):
+    """The first symlink on the way from the folder `base` to `base/rel`, `rel` itself included
+    (`.claude`, `.claude/agent-memory`, then the entry), or None. An entry reached through a link
+    is the owner's, maybe shared by other checkouts: the kit reads it there but never moves it."""
+    path = Path(base)
+    for part in Path(rel).parts:
+        path = path / part
+        if path.is_symlink():
+            return path
+    return None
+
+
 def state_dir_name(base):
     """`.kit` when it is a folder in the checkout `base` (pass the main checkout), `.claude` when
     that still holds kit state or `.kit` is a symlink, else `.kit`: a new project starts there."""
