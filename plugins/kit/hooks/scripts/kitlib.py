@@ -39,6 +39,18 @@ def read_input():
         return {}
 
 
+# Inside a git hook, git exports these to the hook's processes; a kit script started from one would
+# hand them on, and every git call would then answer for the repository that ran the hook, not for
+# the folder it was asked about (`git -C <dir>` does not override GIT_DIR).
+GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX")
+
+
+def git_env():
+    """The environment for a git subprocess: this one, without the variables that point git at a
+    particular repository, so `git -C <dir>` answers for <dir>."""
+    return {k: v for k, v in os.environ.items() if k not in GIT_LOCATION_VARS}
+
+
 def git_root(start):
     """Top level of the git checkout containing `start` (a worktree has its own), else None."""
     start = Path(start)
@@ -49,7 +61,7 @@ def git_root(start):
     try:
         out = subprocess.run(
             ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, env=git_env(),
         )
     except Exception:
         return None
@@ -393,7 +405,7 @@ def unattended_proposal(cwd):
         try:
             rel = f.relative_to(root)
             committed = subprocess.run(["git", "-C", str(root), "ls-files", "--error-unmatch", str(rel)],
-                                       capture_output=True, timeout=10).returncode == 0
+                                       capture_output=True, timeout=10, env=git_env()).returncode == 0
         except (ValueError, OSError, subprocess.SubprocessError):
             pass
         broad = [r for _, r in changes[f]["remove"] if any(bash_rule_matches(r, c) for c in OTHER_COMMANDS)]
@@ -408,7 +420,7 @@ def exclude(root, rel):
     root = Path(root)
     try:
         if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", rel], capture_output=True,
-                          timeout=10).returncode == 0:
+                          timeout=10, env=git_env()).returncode == 0:
             return
     except Exception:
         return
@@ -528,7 +540,8 @@ def git_out(cwd, *args, timeout=30, strip=True):
     """stdout of a git command, stripped unless strip=False (a porcelain status starts with a
     space that matters); "" on any failure."""
     try:
-        out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=timeout)
+        out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=timeout,
+                             env=git_env())
         if out.returncode != 0:
             return ""
         return out.stdout.strip() if strip else out.stdout

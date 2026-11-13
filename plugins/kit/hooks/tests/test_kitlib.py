@@ -7,6 +7,7 @@ Run: python3 plugins/kit/hooks/tests/test_kitlib.py   (exit 0 = all good)
 """
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -117,6 +118,30 @@ def main():
         (repo / ".claude" / "kit.json").unlink()
         check(kitlib.load_config(tree) == (None, None), "no kit.json in the worktree or the main checkout: off")
         check(kitlib.config_file(Path(tmp)) == Path(tmp) / ".claude" / "kit.json", "outside git: its own path")
+
+    # hermetic git: inside a git hook GIT_DIR and friends point at the hook's repository; the helpers
+    # still answer for the folder they were asked about
+    with tempfile.TemporaryDirectory() as tmp:
+        one, two = Path(tmp) / "one", Path(tmp) / "two"
+        for repo, branch in ((one, "main"), (two, "other")):
+            repo.mkdir()
+            sh(repo, "init", "-q", "-b", branch)
+            sh(repo, "commit", "-q", "--allow-empty", "-m", "init")
+        check(set(kitlib.GIT_LOCATION_VARS) == {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                                                "GIT_PREFIX"}, kitlib.GIT_LOCATION_VARS)
+        saved = {k: os.environ.get(k) for k in kitlib.GIT_LOCATION_VARS}
+        os.environ.update(GIT_DIR=str(two / ".git"), GIT_WORK_TREE=str(two), GIT_INDEX_FILE=str(two / ".git" / "index"),
+                          GIT_PREFIX="sub/")
+        try:
+            check(not set(kitlib.git_env()) & set(kitlib.GIT_LOCATION_VARS), "git_env drops the location variables")
+            check(kitlib.git_env().get("PATH") == os.environ.get("PATH"), "git_env keeps the rest")
+            branch = kitlib.git_out(one, "rev-parse", "--abbrev-ref", "HEAD")
+            check(branch == "main", f"git_out answers for its folder, not GIT_DIR: {branch!r}")
+            root = kitlib.git_root(one)
+            check(root is not None and root.resolve() == one.resolve(), f"git_root answers for its folder: {root}")
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
     print("kitlib: all checks passed" if not failed else f"kitlib: {failed} failures")
     return 1 if failed else 0

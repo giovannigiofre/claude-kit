@@ -13,14 +13,21 @@ Checks, over every plugin in plugins/:
   - the core plugin has no hook that runs on every prompt or every tool call;
   - the lessons the SubagentStart hook hands a thread stay within SUBAGENT_LESSONS chars, and the
     ones SessionStart adds (with the kit's news lines) within SESSION_LESSONS;
-  - every `kit:x`, `kit-ui:x`, `kit-llm:x` reference names a skill or agent that exists.
+  - every `kit:x`, `kit-ui:x`, `kit-llm:x` reference names a skill or agent that exists;
+  - packaging: every script a hooks.json command names under ${CLAUDE_PLUGIN_ROOT} exists; no file
+    under plugins/ holds a personal absolute path; no SKILL.md, agent or reference file holds
+    invisible or bidirectional-control characters (see packaging() for the precise rules). These
+    checks also run once on a temp copy with a planted mistake each, so a check that stops seeing
+    its mistake fails too.
 
 Run: python3 tests/test_budget.py   (exit 0 = all good; standard library only)
 """
 
 import json
 import re
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -56,6 +63,84 @@ def frontmatter(path):
             key, _, value = line.partition(":")
             fields[key.strip()] = value.strip()
     return fields, text
+
+
+HOOK_SCRIPT = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([^\"'\s]+)")
+# a home folder with a real-looking user name: /Users/<name>/ or /home/<name>/ where <name> is a
+# literal word. Placeholders pass: a name in PLACEHOLDER_USERS (the tests' /home/u/, a docstring's
+# /Users/me/), or one written as <name>, $USER or ${USER} (never matched: the name may not start
+# with <, $ or {).
+PERSONAL_PATH = re.compile(r"/(?:Users|home)/([A-Za-z0-9._-]+)/")
+PLACEHOLDER_USERS = {"u", "me", "user", "you", "name", "example"}
+# zero-width space, non-joiner, joiner, word joiner, byte order mark (anywhere: a leading one also
+# hides the frontmatter), the bidirectional embeddings and overrides U+202A-U+202E and the
+# isolates U+2066-U+2069: they change what a reader sees without changing what the model reads
+HIDDEN = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u202a-\u202e\u2066-\u2069]")
+
+
+def packaging(root):
+    """Packaging mistakes under root/plugins, as failure lines: a hooks.json command naming a script
+    that is not there, a personal absolute path, hidden Unicode in a file the model reads."""
+    problems, plugins = [], root / "plugins"
+    for hooks in sorted(plugins.glob("*/hooks/hooks.json")):
+        plugin = hooks.parent.parent
+        try:
+            entries = json.loads(hooks.read_text(encoding="utf-8")).get("hooks", {})
+        except ValueError as error:
+            problems.append(f"{hooks.relative_to(root)}: not valid JSON ({error})")
+            continue
+        for event, groups in entries.items():
+            for group in groups:
+                for hook in group.get("hooks", []):
+                    for rel in HOOK_SCRIPT.findall(str(hook.get("command") or "")):
+                        if not (plugin / rel).is_file():
+                            problems.append(f"{hooks.relative_to(root)}: {event} runs ${{CLAUDE_PLUGIN_ROOT}}/{rel}, "
+                                            "which does not exist")
+    for path in sorted(plugins.rglob("*")):
+        if not path.is_file() or "__pycache__" in path.parts or "node_modules" in path.parts:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue  # an image or other binary file
+        rel = path.relative_to(root)
+        for m in PERSONAL_PATH.finditer(text):
+            if m.group(1) not in PLACEHOLDER_USERS:
+                line = text.count("\n", 0, m.start()) + 1
+                problems.append(f"{rel}:{line}: personal path '{m.group(0)}'; use ~ or a placeholder such as /home/u/")
+    readable = sorted(plugins.glob("*/skills/*/*.md")) + sorted(plugins.glob("*/skills/*/references/*.md")) \
+        + sorted(plugins.glob("*/agents/*.md"))
+    for path in readable:
+        text = path.read_text(encoding="utf-8")
+        for m in HIDDEN.finditer(text):
+            line = text.count("\n", 0, m.start()) + 1
+            problems.append(f"{path.relative_to(root)}:{line}: hidden character U+{ord(m.group(0)):04X}")
+    return problems
+
+
+def packaging_self_test():
+    """Each packaging check, on a temp copy of plugins/ with one planted mistake, reports it."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        copy = Path(tmp)
+        shutil.copytree(PLUGINS, copy / "plugins", ignore=shutil.ignore_patterns("__pycache__", "node_modules"))
+        hooks = copy / "plugins" / "kit" / "hooks" / "hooks.json"
+        data = json.loads(hooks.read_text(encoding="utf-8"))
+        data["hooks"].setdefault("Stop", []).append({"hooks": [{"type": "command",
+                                                     "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/gone.py"'}]})
+        hooks.write_text(json.dumps(data), encoding="utf-8")
+        (copy / "plugins" / "kit" / "hooks" / "scripts" / "note.py").write_text("# see /Users/" + "jane/code/app\n")
+        skill = next((copy / "plugins").glob("*/skills/*/SKILL.md"))
+        skill.write_text(skill.read_text(encoding="utf-8") + "\nrun the gate\u202e first\u200b\n", encoding="utf-8")
+        found = packaging(copy)
+        for want in ("hooks/scripts/gone.py, which does not exist", "personal path '/Users/jane/'",
+                     "hidden character U+202E", "hidden character U+200B"):
+            if not any(want in line for line in found):
+                problems.append(f"packaging self-test: a planted mistake went unseen ({want}); got {found}")
+        personal = [line for line in found if "personal path" in line]
+        if len(personal) != 1:  # only the planted one: the placeholders (/home/u/, /Users/me/) pass
+            problems.append(f"packaging self-test: one personal path expected, got {personal}")
+    return problems
 
 
 def without_code(text):
@@ -131,6 +216,8 @@ def main():
             plugin, name = m.group(1), m.group(2)
             if name not in names.get(plugin, set()):
                 problems.append(f"{rel}: '{plugin}:{name}' names no skill or agent")
+
+    problems += packaging(ROOT) + packaging_self_test()
 
     for p in problems:
         print("FAIL " + p)

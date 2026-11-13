@@ -81,7 +81,14 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
   the rule off. The `retry` rule refuses the same push, rebase or PR merge (the same command text, in
   the same folder, at the same commit) a fourth time within 30 minutes, per session and thread, and tells
   the thread to hand the step back; a new commit or another command starts afresh, and
-  `"retries": false` turns it off. One rule holds in every repo, with or without `kit.json` and with the guard off:
+  `"retries": false` turns it off. The `hook-bypass` rule refuses a git commit, push, merge,
+  rebase, cherry-pick or am that skips the repository's hooks: `--no-verify`, `-n` on commit and am
+  (on push `-n` is a dry run, on merge and rebase no diffstat, and those pass), `-c
+  core.hooksPath=…` pointing elsewhere, `HUSKY=0` or `HUSKY_SKIP_HOOKS=1` set for the command,
+  and `git config core.hooksPath` (or `--unset`) leaving the repository's hooks; its current
+  hooks folder and an existing folder in its work tree (`.husky`, `.githooks`) are its own. The
+  refusal says to fix what the hook reports, or hand the step back with the hook's output;
+  `allowCommands` can let a specific command through. One rule holds in every repo, with or without `kit.json` and with the guard off:
   a `kit:verifier` subagent (that agent type only, not another plugin's verifier) may write a
   memory file (a `MEMORY.md` in any case, anything in an `agent-memory` folder) only inside
   `<main checkout>/.claude/agent-memory/kit-verifier`, so its pitfalls outlive the worktree. The
@@ -686,7 +693,7 @@ makes it the kit's gate for the kit.
 The self-checks one by one (no tokens):
 
 ```bash
-python3 tests/test_budget.py
+python3 tests/test_budget.py                 # text budgets, calm words, hooks.json script paths, no personal paths or hidden Unicode
 python3 plugins/kit/hooks/tests/test_guard.py
 python3 plugins/kit/hooks/tests/test_gate.py
 python3 plugins/kit/hooks/tests/test_stop_check.py
