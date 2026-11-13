@@ -175,8 +175,13 @@ An entry in both places is left alone in both, the others move anyway, and the s
 so once (and again only if the set changes); a source another session already moved is not a
 conflict. `status` always lists them with both paths. What the session start said is kept in the
 git dir (`kit-migration-said.json`), not in the project. An entry tracked in git is not moved and
-gets no exclude line in either layout: the `git mv` to run is printed. A `.kit` that is a symlink
-moves nothing for that checkout, and the session start says so once. `undo` moves the known entries
+gets no exclude line in either layout: the `git mv` to run is printed. An entry that is a symlink
+(`.claude/lead` pointing at a shared folder) is left where it is, gets no exclude line of its own
+and is said once; the other entries move anyway. When git cannot check a path, the exclude line is
+added anyway, and an entry whose line git still does not see stays put and is reported as not
+moved (`migrate` exits 1, `status` lists it to move). A `.kit` that is a symlink is not the kit's
+folder: that checkout stays on `.claude/`, nothing is written through the link (no log, no note),
+`/.kit` is excluded so the link stays out of `git status`, and the session start says so once. `undo` moves the known entries
 back and sets kit.local.json `lead.state` to `".claude"`; from then on the session start and a bare
 `migrate` (which runs unasked) leave them there, and the owner moves them again with
 `migrate --again`. A move leaves `.kit/migration.json` (a log of each run, merged under a lock,
