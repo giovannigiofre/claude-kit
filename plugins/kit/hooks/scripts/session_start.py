@@ -9,6 +9,11 @@ line that the lesson review is due (lessons.py), move an older project's kit sta
 the reason when it waits), and after a compaction put the coordinator's board back into context
 (stdout is added to context).
 
+In a kit project every interactive start, and every compaction, also prints COORDINATOR: this
+session is the project's coordinator (kit:lead), routed by this hook rather than by the kit mod,
+which a cloud session or Remote Control may not load. `"mode": "light"` in the personal kit.json
+(~/.claude/kit.json) is the one off switch; a headless run (KIT_HEADLESS) and a subagent get none.
+
 A kit.json that exists is the opt-in, even `{}`: the "kit harness active" line is always printed
 then, with one line per key the kit does not know (and the closest known key), one per key of
 the wrong type, and one when items on disk are still `queued`."""
@@ -40,6 +45,16 @@ KNOWN_KEYS = {
 TYPED_KEYS = {"check": (str, "a string (the shell command)"), "verify": (str, "a string (the shell command)"),
               "protect": (list, "a list of rules"), "onEdit": (list, "a list of rules")}
 MAX_NOTES = 8
+# The one routing line. Until 2026-11 the kit mod added it to every prompt in "loop mode"; a cloud
+# session without the mod then had no coordinator, no threads and no push. Printed at start and
+# after a compaction (when the skill's rules may be gone), within the session-start budget: the
+# lessons get what it leaves of SESSION_LESSONS.
+COORDINATOR = (
+    "kit: this session coordinates this project. Handle each message with the kit:lead skill (load it "
+    "before your first answer, and again after a compaction): answer a question in place, make a change "
+    "of a handful of tool calls yourself, start background threads for the rest. Send one "
+    "PushNotification when an item becomes ready for review or needs the user, and when an unattended "
+    "run ends; none for progress.")
 
 
 def config_notes(config):
@@ -107,6 +122,13 @@ def queued_line(root):
         return ""
     script = Path(__file__).resolve().parent / "items.py"
     return f"- {len(queued)} queued item(s) on disk: python3 \"{script}\" list --status queued"
+
+
+def coordinator_line(data):
+    """COORDINATOR, or "" in a headless run, a subagent, or with the personal `"mode": "light"`."""
+    if os.environ.get("KIT_HEADLESS") or data.get("agent_id") or kitlib.personal_mode() == "light":
+        return ""
+    return COORDINATOR
 
 
 def as_list(config, key):
@@ -247,6 +269,9 @@ def main():
         return 0
     if config is None:
         return 0  # project has not opted in: stay silent
+    coordinator = coordinator_line(data)
+    if coordinator:
+        print(coordinator)
     if data.get("source") != "compact":  # not mid-session: the coordinator may be using the board
         try:  # an older project's state leaves .claude/, where every write by a thread asked the owner
             import migrate_state
@@ -291,21 +316,22 @@ def main():
         lines.append(queued)
     print("\n".join(lines))  # the header always: a kit.json of only unknown keys must not look like silence
     sys.stdout.flush()  # the gate lines stand even if the lessons run out of time
-    for line in learned(root):
+    for line in learned(root, len(coordinator)):
         print(line)
     return 0
 
 
-def learned(root):
+def learned(root, reserved=0):
     """Import new memories into the ledger; then what the kit changed and this repo's lessons for
-    the main session, together within SESSION_LESSONS."""
+    the main session, together with the `reserved` chars of the coordinator line within
+    SESSION_LESSONS."""
     try:
         import lessons
         lessons.LOCK_WAIT = 1.0  # within the hook's timeout, with the gate lines already printed
         lessons.harvest(root)
         news = lessons.take_news(root)
         block = "\n".join(t for t in (news_block(news), lessons.review_due(root)) if t)
-        text = lessons.deliver(root, "lead", SESSION_LESSONS - len(block))
+        text = lessons.deliver(root, "lead", SESSION_LESSONS - reserved - len(block))
     except Exception:
         return []  # lessons are a help, never a reason for a session not to start
     return [t for t in (text, block) if t]

@@ -33,7 +33,7 @@ def main():
         (repo / ".claude" / "lead").mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
 
-        assert run({"cwd": str(repo), "source": "startup"}) == "", "no kit.json, no board: silent"
+        assert run({"cwd": str(repo), "source": "startup"}) == "", "no kit.json, no board: silent, no coordinator"
 
         board = "SHIP: pr | PARALLEL: 3 | BUDGET: none\nA1 | ship | login | DONE WHEN e2e | working | agent A1 | feat/login | -\n"
         (repo / ".claude" / "lead" / "board.md").write_text(board)
@@ -114,9 +114,22 @@ def main():
         (repo / ".claude" / "kit.json").write_text("{}")
         out = run({"cwd": str(repo), "source": "startup"})
         # this project's legacy board still has A1 working, so its state waits in .claude/, saying why
-        *waiting, header = out.strip().splitlines()
+        coordinator, *waiting, header = out.strip().splitlines()
         assert header == "kit harness active for this project (.claude/kit.json):", out
         assert len(waiting) == 1 and "stays in .claude/ for now (board row A1 is working" in waiting[0], out
+        # the coordinator line: on every interactive start and after a compaction, routed without the mod
+        assert coordinator.startswith("kit: this session coordinates this project") and "kit:lead" in coordinator, out
+        assert "PushNotification" in coordinator and "none for progress" in coordinator, coordinator
+        assert coordinator in run({"cwd": str(repo), "source": "compact"}).splitlines(), "back after a compaction"
+        assert coordinator in run({"cwd": str(repo), "source": "resume"}).splitlines()
+        assert "coordinates" not in run({"cwd": str(repo), "source": "startup"}, KIT_HEADLESS="1"), "not headless"
+        assert "coordinates" not in run({"cwd": str(repo), "source": "startup", "agent_id": "a1"}), "not a subagent"
+        light = Path(tmp) / "light-home"
+        (light / ".claude").mkdir(parents=True)
+        (light / ".claude" / "kit.json").write_text(json.dumps({"machineSetup": "declined", "mode": "Light"}))
+        out = run({"cwd": str(repo), "source": "startup"}, home=light)
+        assert "coordinates" not in out and "kit harness active" in out, "the personal light mode is the off switch"
+        assert "coordinates" not in run({"cwd": str(repo), "source": "compact"}, home=light)
         # a typo is named with the closest known key, at the top level and inside a section
         (repo / ".claude" / "kit.json").write_text(json.dumps({"chek": "make lint", "verfy": "make test",
                                                                "lead": {"baord": "docs/b.md", "notes": "n"},

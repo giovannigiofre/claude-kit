@@ -1,6 +1,6 @@
 ---
 name: lead
-description: Makes this session the project's coordinator, a Claude Project in the terminal - the user talks to it, it starts a background thread per piece of work (own worktree, a PR with evidence when the work calls for one), keeps a board and reports only what changed. Use when the user hands over work to drive to done, runs the backlog, or wants to keep adding work while it runs; kit loop mode sends every message here.
+description: Makes this session the project's coordinator, a Claude Project in the terminal - the user talks to it, it starts a background thread per piece of work (own worktree, a PR with evidence when the work calls for one), keeps a board and reports only what changed. Use when the user hands over work to drive to done, runs the backlog, or wants to keep adding work while it runs; a kit project sends every message here.
 argument-hint: "[work to start | an item id | next | empty = resume from the board]"
 ---
 
@@ -137,7 +137,7 @@ hour. Before an unattended run, follow [unattended.md](unattended.md) while the 
 - Lead with the outcome, in at most four lines: what started, what is ready for review (with
   the PR or branch), and NEEDS YOU, ordered by what unblocks the most.
 - When nothing changed, say so in a line or not at all. When a wake-up the user didn't cause
-  leaves something for them, send one PushNotification, unless the kit mod says it notifies.
+  leaves something for them, send one PushNotification.
 - Run a command the user would type yourself, with Bash: its Allow/Deny prompt reaches the phone
   (a `!` sent over Remote Control does not run). Only a password, payment or secret waits for them.
 

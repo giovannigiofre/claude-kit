@@ -17,9 +17,9 @@ the model can't do alone, re-checked when a new model lands.
 | When | Type | What happens |
 |---|---|---|
 | Once per project | `/kit:init` | writes `.claude/kit.json` (check, verify, formatters, protected paths), a `verify` skill that says how to exercise the app, a `loop.md` that tells the native `/loop` how to tend a PR (never merging), and proposes safety and permissions |
-| All day | just talk | in a project with `kit.json`, loop mode is on by default: every message goes to the coordinator (`kit:lead`), which answers, starts a thread or steers one, in at most four lines |
+| All day | just talk | in a project with `kit.json`, every message goes to the coordinator (`kit:lead`), which answers, starts a thread or steers one, in at most four lines; it works the same in a cloud session and over Remote Control |
 | A messy idea | just write it | the coordinator (or `kit:shape`) asks 2-3 multiple-choice rounds and writes a brief with a checkable DONE WHEN |
-| Thinking it through first | `/kit-mode ask` | a discussion about the repo: Claude reads and reasons, changes no code (docs may be edited); `/kit:handoff` turns the conclusion into a brief and sends it to the coordinator, another open session or a new background session |
+| Thinking it through first | say so | Claude reads and reasons and changes nothing until you ask; `/kit:handoff` turns the conclusion into a brief and sends it to the coordinator, another open session or a new background session |
 | Finding work | `/kit:scout` | read-only explorers write deduplicated proposal cards (A mechanical, B needs judgment, C human-only) into `.kit/lead/proposals/`; `next` takes the A cards |
 | Something broke | describe it | `kit:investigate`: evidence (asks you once, with exact export steps), reproduction, hypotheses, a regression-tested fix |
 | UI or LLM work | describe it | the kit asks "Use Kit UI / Kit LLM for this?" and installs that plugin for the project on yes |
@@ -48,13 +48,10 @@ reviewed, not-high-risk PRs. Medium- or high-risk work gets a review by
 `kit:verifier` in a fresh context before it reaches you. When a thread finishes while you're away,
 the kit sends one notification (desktop, or phone with Remote Control).
 
-**The status line.** `loop · host · $1.20 · needs you 1: a2-region · ready 1: login-page ·
+**The status line.** `$1.20 · needs you 1: a2-region · ready 1: login-page ·
 working 2: chart, cleanup · 1 waiting on a prompt · queued 2`, read again every 15 seconds (it names the
-board's items; `waiting on a prompt`: a thread stopped on a question or a permission; `unattended` appears after the safety profile while that is on). When the board gains a ready item or a question, the kit sends one native
-notification where Claude Code offers one, unless you were just typing in that terminal. Mode
-per project (`/kit-mode`): **Light** (a normal session), **Loop** (every typed message goes to
-the coordinator; the default in a project with `kit.json`) or **Ask** (a discussion: read and
-reason, no code changes, docs may be edited). Safety per project (`/kit-safety`): **Host** or
+board's items; `waiting on a prompt`: a thread stopped on a question or a permission; `unattended` appears after the safety profile while that is on). When the board gains a ready item or a question, the coordinator sends one
+PushNotification (desktop, or phone with Remote Control). Safety per project (`/kit-safety`): **Host** or
 **Sandbox**, plus `unattended on` for an evening nobody watches (a permission prompt becomes a
 denial and the thread goes on).
 
@@ -63,7 +60,7 @@ denial and the thread goes on).
 ## How it works
 
 ```
- you ── message ──► COORDINATOR (kit:lead, loop mode)
+ you ── message ──► COORDINATOR (kit:lead, routed at session start)
                      │ answers in place, or
                      │ starts / steers a thread ──► kit:implementer (background, own worktree)
                      │                                 change → `verify` gate → exercise it →
@@ -158,8 +155,8 @@ a repo can add to it ([reference](docs/reference.md#auto-mode-environment-per-re
 
 Also worth having in `~/.claude/settings.json` (auto mode is already the default on Pro and Max):
 system notifications on; `"env": {"CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "4"}` if you want a
-hard cap on parallel threads. To change the mode default everywhere, put `{"mode": "light"}`
-(or `"loop"`) in `~/.claude/kit.json`; `/kit-mode` sets it per project.
+hard cap on parallel threads. To turn the coordinator off everywhere, put `{"mode": "light"}`
+in `~/.claude/kit.json`.
 
 Two lines worth having in your personal `~/.claude/CLAUDE.md`, because models trained on human
 estimates otherwise pick the cheap, brittle option and test only in units:

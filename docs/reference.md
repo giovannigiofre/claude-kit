@@ -667,22 +667,22 @@ python3 <kit>/hooks/scripts/lessons.py promoted ID VERSION PR_URL [DIR]
 git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
 ```
 
-## Modes and the status line
+## Routing and the status line
 
-- **Light**: a normal session. `/kit:lead <work>` starts the coordinator when you want it.
-- **Loop**: every message you type (terminal or Remote Control) gets one line of context sending
-  it to the coordinator; headless runs, scheduled prompts and notifications never do. `/kit-mode
-  loop|light|ask`. Without a choice for the project, the personal default in
-  `~/.claude/kit.json` (`{"mode": "light"}` or `"loop"`) applies, else loop in a project with
-  `.claude/kit.json` and light elsewhere.
-- **Ask**: a discussion about the repository. Every typed message gets one line of context:
-  explore, explain, reason and propose; change no code; documentation (Markdown, `docs/`) may be
-  edited when you ask; offer `/kit:handoff` when something worth doing emerges. It is an
-  instruction, not a block: the guard keeps protecting the irreversible things, nothing else is
-  refused. `/kit:handoff [lead | session <name> | bg | save | card]` writes the brief
+- **One mode**: in a project with `.claude/kit.json`, session start (and the start after a
+  compaction) prints one line that makes the session the coordinator: every message is handled with
+  `kit:lead`, which answers a question in place, makes a small change itself and starts background
+  threads for the rest. It is a hook, not the mod, so it works in a cloud session and over Remote
+  Control as well. Not printed in a headless run (`KIT_HEADLESS`), in a subagent, or when
+  `~/.claude/kit.json` says `{"mode": "light"}` (the personal off switch: a normal session, with
+  `/kit:lead <work>` when you want the coordinator). Until 2026-11 the mod added this line per
+  prompt in a "loop" mode and had light and ask modes beside it; they were removed because the
+  routing must not depend on the mod loading.
+- **Discussion and handoff**: to think a change through first, say so; nothing changes until you
+  ask. `/kit:handoff [lead | session <name> | bg | save | card]` writes the brief
   (`kit:shape`'s format plus PLACES and DECISIONS), saves it as an item
-  (`.kit/lead/items/<id>/BRIEF.md`) and sends it: to this session's coordinator (queued; it
-  starts at the next message in loop mode), to another open session on this machine
+  (`.kit/lead/items/<id>/BRIEF.md`) and sends it: to this session's coordinator (queued and
+  started), to another open session on this machine
   (cross-session `SendMessage`; it arrives as a message from a peer and that session confirms with
   you first; the receiving session's `crossSessionInbound` setting must accept), to a new
   background session (`claude --bg --name <id>`, then `claude attach <id>` or `claude agents`),
@@ -702,13 +702,9 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
   (`working` and `landing`; without a board, the engine's `N running`), `queued 3`. It shows two
   ids and then `+n`, re-reads the board every 15 seconds (a Markdown table, a capitalised status, a
   dropped cell or a `;` inside a question read the same), and adds `N waiting on a prompt` for
-  threads stopped on a question or a permission (the engine's agent list). When a tick finds an id
-  newly ready or newly needing you, the mod sends one native notification naming it, with its
-  question (`$.ui.notify`, Claude Code 2.1.295+; silently skipped where the engine lacks it), unless you
-  were active in the terminal within the last minute; in loop mode the coordinator is told the
-  mod notifies, so you get one notice per event, not two. A prompt that arrives over Remote Control
-  says the opposite for as long as you are remote: on a phone neither the line nor that notification
-  shows, so the coordinator sends one PushNotification itself when an item becomes ready or needs you.
+  threads stopped on a question or a permission (the engine's agent list). The coordinator sends
+  one PushNotification when an item becomes ready or needs you and when an unattended run ends
+  (it reaches the phone over Remote Control); the mod sends none of its own for board changes.
 - **Safety**: `/kit-safety host|sandbox`. Sandbox writes the kit's block into
   `.claude/settings.local.json`; check it with `/sandbox`, add hosts under
   `sandbox.network.allowedDomains`. Where the sandbox can't start, commands run unsandboxed with
@@ -720,8 +716,8 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
   the next morning. `permissions.blockWritesOutsideWorkingDirectories` (2.1.314) is not for a kit
   project: it refuses a thread's edits in another repo and removes the worktree tools.
 
-The mod needs Claude Code with mods (2.1.287+). Without it, the skills and hooks still work; use
-`/kit:lead` directly instead of loop mode.
+The mod needs Claude Code with mods (2.1.287+). Without it, the skills, hooks and the routing
+line still work; only the status line, the watchdog and the interim-notice drop are missing.
 
 ## Overnight runner
 

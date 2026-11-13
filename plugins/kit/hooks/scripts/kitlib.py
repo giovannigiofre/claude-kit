@@ -563,6 +563,20 @@ def config_dir():
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
 
+def personal_config():
+    """The person's own kit.json, ~/.claude/kit.json: one per machine user, shared by every Claude
+    Code account on it (a second account's CLAUDE_CONFIG_DIR does not move it). `"mode": "light"`
+    there turns the coordinator line off; machine_setup.py records its answer there."""
+    return Path.home() / ".claude" / "kit.json"
+
+
+def personal_mode():
+    """`light` when the personal kit.json says so, else `` (the coordinator, in a kit project)."""
+    value, _ = read_json(personal_config())
+    mode = (value or {}).get("mode")
+    return "light" if isinstance(mode, str) and mode.strip().lower() == "light" else ""
+
+
 SECRET = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY"
     r"|\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}"

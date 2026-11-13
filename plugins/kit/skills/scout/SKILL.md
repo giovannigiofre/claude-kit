@@ -14,7 +14,7 @@ orchestrator never reads the scanned files, cards are fingerprinted and immutabl
 
 - **`list`**: `P list` (or `--class A`); show it and stop.
 - **`take <id>`**: `P take <id>` makes a queued item from the card; say the item id and that
-  the coordinator picks it up with `/kit-mode loop` or `kit:lead <id>`.
+  the coordinator picks it up at the next message (or `kit:lead <id>`).
 - **`retire`**: `P retire` archives cards older than 30 days or whose origin is gone.
 - **Otherwise, a scan** of the area or lens given (empty: the whole project):
 
