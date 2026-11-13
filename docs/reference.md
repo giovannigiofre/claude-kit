@@ -213,7 +213,12 @@ trusted, whatever it commits.
 - A new list starts with `"$defaults"` (`environment` supports it, as `allow` does), so the
   built-in entries stay current; a list without it is left that way, and a non-list
   `environment` is left alone with a one-line warning.
-- Writes happen under a lock (`kit-auto-mode.lock`, waited on for at most 2 seconds: a busy lock skips the sync at session start with one line, and `--set`/`--remove` store the block, exit 1 and leave it for the next session start), atomically, only when the result changes,
+- Writes go through the kit's one settings writer, `kitlib.update_settings`. It holds
+  `~/.claude/kit-settings.lock`, which every kit write to a settings file shares, waiting at most
+  2 seconds (a busy lock skips the sync at session start with one line, and `--set`/`--remove`
+  store the block, exit 1 and leave it for the next session start). It re-reads the file under the
+  lock, writes atomically only when the result changes, and replaces the target of a symlinked
+  settings.json, keeping its mode bits,
   after a backup to `settings.json.kit-auto-mode-backup`; the first backup ever is also kept as
   `settings.json.kit-auto-mode-backup.orig`. If another program writes settings.json during a
   rebuild, the rebuild starts again from that version. A settings file that is not valid JSON,
@@ -250,7 +255,7 @@ python3 <kit>/hooks/scripts/items.py done <id> [--force]   # refuses an open or 
 python3 <kit>/hooks/scripts/items.py status [--json]        # one read-only snapshot of the open items
 python3 <kit>/hooks/scripts/items.py conflicts [<id> ...]   # exit 0 clean, 1 conflict, 2 unknown
 python3 <kit>/hooks/scripts/worktrees.py [--json]           # classify linked worktrees, print a plan
-python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow] [--proposal]
+python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask] [--proposal]
 ```
 
 `unattended`: the owner's git preferences for unattended runs in this repo, in the main
@@ -259,7 +264,8 @@ checkout's `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "allow", 
 repo, never global, never committed. Without arguments it prints the brief line `UNATTENDED:
 push=.. rebase=.. merge=..` and whether it is set; a missing, broken or misspelt value takes the
 default, push and rebase `allow` and merge `ask` (`kitlib.UNATTENDED_DEFAULTS`). The coordinator
-does not ask: it saves a choice only when the owner states one, and briefs every thread of the run
+does not ask: it saves a choice only when the owner states one (push and rebase; `merge=allow` is
+refused, the owner merges and writes that value into the file himself), and briefs every thread of the run
 with that line ([unattended.md](../plugins/kit/skills/lead/unattended.md)). Until 2026-11 an unset
 step was `ask` and the coordinator asked before the first run; the owner gave the same answer
 each time, which is now the default.
@@ -734,16 +740,20 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
     `permissions.denyInsteadOfPrompting` (2.1.319) in the account's own `settings.json` (backup
     `settings.json.kit-away-backup`, other keys kept, a file that does not parse left alone): a
     tool call that would wait on a permission prompt is denied and the turn goes on. The kit notes
-    that it set it (`kit-away.json` beside settings.json) and takes it away at the next interactive
-    session start (not a headless run, not a compaction) or on `away off`; a value you set yourself
-    is never removed. The status line shows `away` while it is on. Until 2026-11 the mod's
-    `/kit-safety unattended` wrote it into the project's `settings.local.json`; session start
-    removes it from there once and says so.
+    that it set it (`kit-away.json` beside settings.json: the time, the file and a hash of the
+    value written). You are back when you write: the coordinator runs `away off` at your next
+    message, before anything else, and the next interactive session start (not a headless run,
+    not a compaction) does it too. While it is on, the coordinator line at a session start, after a
+    compaction or a `/clear` says since when, and `away status` does too. The key counts as the
+    kit's only while the marker matches it: a marker whose key you removed is dropped the first time
+    the kit reads the state, and a value you set yourself is never removed. The status line shows
+    `away` while it is on.
   - "Use the sandbox": `items.py sandbox on` writes the kit's block into
     `.claude/settings.local.json` (a block of your own is left alone): the registries' and GitHub's
-    hosts, no read of `~/.aws`, `~/.docker`, `~/.kube`, `~/.gnupg`, Bash without a prompt inside it
-    (`autoAllowBashIfSandboxed`), and `git push`, `fetch` and `pull` outside it, so they keep their
-    credentials. Check it with `/sandbox`; add hosts under `sandbox.network.allowedDomains`. Where
+    hosts, no read of `~/.aws`, `~/.docker`, `~/.kube`, `~/.gnupg`, `~/.ssh`, `~/.config/gh` and
+    `~/.netrc`, Bash without a prompt inside it (`autoAllowBashIfSandboxed`), and `git push`, `fetch`
+    and `pull` (bare and with arguments) outside it, so they keep their credentials while a command
+    inside cannot read them. Check it with `/sandbox`; add hosts under `sandbox.network.allowedDomains`. Where
     the sandbox can't start, commands run unsandboxed with a warning rather than all failing. The
     status line shows `sandbox` while it is on. `sandbox off` changes nothing and prints the edit:
     loosening a setting is yours to approve.

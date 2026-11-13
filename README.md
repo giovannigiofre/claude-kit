@@ -56,7 +56,7 @@ the kit sends one notification (desktop, or phone with Remote Control).
 working 2: chart, cleanup · 1 waiting on a prompt · queued 2`, read again every 15 seconds (it names the
 board's items; `waiting on a prompt`: a thread stopped on a question or a permission; `sandbox` and `away` lead the line while they are on). When the board gains a ready item or a question, the coordinator sends one
 PushNotification (desktop, or phone with Remote Control). Safety in plain words: "I'm off to bed" and the coordinator runs `away on`
-(a permission prompt becomes a denial and the thread goes on, until your next session start);
+(a permission prompt becomes a denial and the thread goes on, until you write again);
 "use the sandbox" and it writes the kit's sandbox block for the project.
 
 ---
@@ -213,7 +213,7 @@ project.
   its own rules (`guard.denyCommands` / `askCommands`: a regex over the command and the reason);
   it has no deploy rule of its own. It reads shell text, so it is best effort.
   Saying you are leaving makes the coordinator add Claude Code's `permissions.denyInsteadOfPrompting`
-  (`items.py away on`): a permission prompt becomes a denial and the work goes on, until your next session start. While you are
+  (`items.py away on`): a permission prompt becomes a denial and the work goes on, until you write again (the coordinator then runs `away off` first). While you are
   away, threads push and rebase their own branches and leave merging to you, unless you tell the
   coordinator otherwise for a repo (it keeps that in the repo's gitignored `.claude/kit.local.json`).
   For an allowed step, the kit names the permission rule to add, and

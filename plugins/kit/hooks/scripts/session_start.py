@@ -219,6 +219,9 @@ def offer_machine_setup():
         return
     todo = machine_setup.pending()
     if not todo:
+        broken = machine_setup.unreadable()
+        if broken:
+            print(broken + " Tell the user this line once; nothing waits on it.")
         return
     script = Path(__file__).resolve().parent / "machine_setup.py"
     print("kit: this machine's ~/.claude/settings.json is missing the kit's settings:\n"
@@ -245,21 +248,16 @@ def away_back(data):
     return "kit: away is off again (it was on while the user was away): permission prompts ask again."
 
 
-def old_unattended(root):
-    """The mod's `/kit-safety unattended on` (until 2026-11) left denyInsteadOfPrompting in the
-    project's settings.local.json, where it outlived the evening it was for. Remove it, once."""
-    path = Path(root) / ".claude" / "settings.local.json"
-    settings, ok = kitlib.read_json(path)
-    perms = (settings or {}).get("permissions") if ok else None
-    if not isinstance(perms, dict) or kitlib.AWAY_KEY not in perms:
+def away_line():
+    """While the kit's away is on (a session that started before it, a compaction, a /clear): the
+    owner is back when he writes, and the coordinator turns it off then."""
+    try:
+        if kitlib.away_state()[0] != "kit":
+            return None
+        since = kitlib.away_since() or "an unknown time"
+    except Exception:
         return None
-    perms.pop(kitlib.AWAY_KEY)
-    if not perms:
-        settings.pop("permissions")
-    kitlib.write_json_atomic(path, settings)
-    return (f"kit: removed permissions.{kitlib.AWAY_KEY} from {path}, left there by the old "
-            "/kit-safety unattended. Away is now `items.py away on`, which the next session start undoes. "
-            "Tell the user this once.")
+    return f"kit: away is on since {since}: turn it off with `I away off` when the user writes."
 
 
 def version_key(version):
@@ -311,6 +309,9 @@ def main():
     coordinator = coordinator_line(data)
     if coordinator:
         print(coordinator)
+        still = away_line()
+        if still:
+            print(still)
     if data.get("source") != "compact":  # not mid-session: the coordinator may be using the board
         try:  # an older project's state leaves .claude/, where every write by a thread asked the owner
             import migrate_state
@@ -318,12 +319,6 @@ def main():
                 print(line)
         except Exception as exc:
             print(f"kit: moving the kit's state to .kit/ skipped: {exc}")
-        try:
-            migrated = old_unattended(root)
-        except Exception as exc:
-            migrated = f"kit: could not tidy settings.local.json: {exc}"
-        if migrated:
-            print(migrated)
     if data.get("source") != "compact":  # after a compaction print_board says it
         warning = board_warning(read_board(root, config)[1])
         if warning:

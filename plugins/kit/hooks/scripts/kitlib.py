@@ -626,32 +626,121 @@ def personal_mode():
 
 
 def write_json_atomic(path, value, backup=None):
-    """Write `value` to `path` through a temporary file in the same folder, so a reader never sees half
-    a file; with `backup`, the old file is copied to that name beside it first."""
+    """Write `value` to `path` through a temporary file beside its target, so a reader never sees
+    half a file and a symlinked file stays a symlink; with `backup`, the old file is copied to that
+    name beside `path` first. For a settings file another writer may change, use update_settings."""
     import shutil
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if backup and path.exists():
-        shutil.copy2(path, path.with_name(backup))
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    target = path.resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if backup and target.exists():
+        shutil.copy2(target, path.with_name(backup))
+    fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
-        if path.exists():
-            shutil.copymode(path, tmp)
-        os.replace(tmp, path)
+        if target.exists():
+            shutil.copymode(target, tmp)
+        os.replace(tmp, target)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
 
 
+# The one writer for Claude Code settings files (settings.json, settings.local.json) and the personal
+# kit.json. Every kit write takes one lock, re-reads the file under it and merges into what is on
+# disk at that moment, so two kit writers never lose each other's change. The lock is one file in
+# the home folder, shared by every account on the machine; within one process it is reentrant, so
+# a writer may call another (away_on writes the marker under the same lock). Claude Code does not
+# take this lock, so the file's size and mtime are compared again before the replace, and a change
+# made meanwhile is merged once more.
+SETTINGS_LOCK = "kit-settings.lock"
+SETTINGS_LOCK_WAIT = 2.0  # seconds; a stuck holder must not stall a session start
+SETTINGS_RETRIES = 5
+_settings_held = {"depth": 0, "fh": None}
+
+
+class SettingsBusy(OSError):
+    """Another process held the settings lock for longer than SETTINGS_LOCK_WAIT."""
+
+
+def settings_lock_file():
+    return Path.home() / ".claude" / SETTINGS_LOCK
+
+
+class settings_lock:
+    """`with kitlib.settings_lock():` holds the settings lock; nested uses in one process share it."""
+
+    def __enter__(self):
+        held = _settings_held
+        if held["depth"] == 0:
+            import fcntl  # here, so a platform without it cannot break importing this module
+            import time
+            path = settings_lock_file()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fh = open(path, "w")
+            deadline = time.monotonic() + SETTINGS_LOCK_WAIT
+            while True:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() > deadline:
+                        fh.close()
+                        raise SettingsBusy(f"{path} is held by another process") from None
+                    time.sleep(0.05)
+            held["fh"] = fh
+        held["depth"] += 1
+        return self
+
+    def __exit__(self, *exc):
+        held = _settings_held
+        held["depth"] -= 1
+        if held["depth"] == 0:
+            held["fh"].close()  # closing releases the flock
+            held["fh"] = None
+        return False
+
+
+def _signature(path):
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return None
+    return (st.st_size, st.st_mtime_ns, st.st_ino)
+
+
+def update_settings(path, change, backup=None):
+    """Change one settings file in place: resolve a symlink to its target, take the settings lock,
+    read the file as it is now, call `change(settings)` (edit the dict in place; return False when
+    there is nothing to write), copy the old file to `backup` beside `path`, then replace the target
+    in one step, keeping its mode bits. Returns `written`, `same`, `broken` (not a JSON object; the
+    file is left alone) or `busy` (it kept changing). Raises SettingsBusy when the lock is held."""
+    path = Path(path)
+    with settings_lock():
+        for _ in range(SETTINGS_RETRIES):
+            target = path.resolve()
+            before = _signature(target)
+            settings, ok = read_json(target)
+            if not ok:
+                return "broken"
+            if change(settings) is False:
+                return "same"
+            if _signature(path.resolve()) != before:
+                continue  # Claude Code or the owner wrote it meanwhile: merge again from theirs
+            write_json_atomic(path, settings, backup=backup)
+            return "written"
+    return "busy"
+
+
 # Away: Claude Code's permissions.denyInsteadOfPrompting (2.1.319) in the account's own settings.json.
 # A tool call that would wait on a permission prompt is denied and the turn goes on, so a run nobody
-# watches does not stall on a prompt. `items.py away on` sets it when the owner leaves; the kit
-# notes that it did (AWAY_MARKER beside settings.json) and takes it away again at the next
-# interactive session start or on `away off`. A value the owner set himself has no marker and is
-# never removed. Until 2026-11 the mod's `/kit-safety unattended` wrote it to the project's
-# settings.local.json instead, where it was easy to forget; session_start removes that one.
+# watches does not stall on a prompt. `items.py away on` sets it when the owner leaves and notes that
+# it did in AWAY_MARKER beside settings.json: the time, the file and a hash of the value written.
+# The key counts as the kit's only while that marker matches it; the kit removes it on `away off`
+# (the coordinator runs it at the owner's next message) or at the next interactive session start.
+# A marker whose key is gone is dropped the first time the kit reads the state, so a value the owner
+# sets later is his, and the kit never removes it.
 AWAY_KEY = "denyInsteadOfPrompting"
 AWAY_MARKER = "kit-away.json"
 AWAY_BACKUP = "settings.json.kit-away-backup"
@@ -661,54 +750,103 @@ def user_settings():
     return config_dir() / "settings.json"
 
 
+def away_hash(path, value):
+    import hashlib
+    text = json.dumps({"settings": str(path), "key": AWAY_KEY, "value": value}, sort_keys=True)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def away_marker():
+    """The marker as away_on wrote it, or None."""
+    value, ok = read_json(config_dir() / AWAY_MARKER)
+    return value if ok and value else None
+
+
 def away_state():
     """(state, path): `kit` (on, set by the kit), `own` (on, set by the owner), `off`, or `broken`
-    (settings.json is not a JSON object, or its permissions are not one)."""
+    (settings.json is not a JSON object, or its permissions are not one). A marker left without its
+    key (the owner removed it, or restored a backup) is dropped here."""
     path = user_settings()
     settings, ok = read_json(path)
     perms = (settings or {}).get("permissions", {})
     if not ok or not isinstance(perms, dict):
         return "broken", path
-    if perms.get(AWAY_KEY) is not True:
+    marker = config_dir() / AWAY_MARKER
+    if AWAY_KEY not in perms:
+        if marker.exists():
+            with settings_lock():
+                again, ok = read_json(path)
+                if ok and AWAY_KEY not in ((again or {}).get("permissions") or {}):
+                    marker.unlink(missing_ok=True)
         return "off", path
-    return ("kit" if (config_dir() / AWAY_MARKER).exists() else "own"), path
+    if perms[AWAY_KEY] is not True:
+        return "off", path
+    mark = away_marker()
+    if mark and mark.get("settings") == str(path) and mark.get("hash") == away_hash(path, perms[AWAY_KEY]):
+        return "kit", path
+    return "own", path
+
+
+def away_since():
+    """When the kit turned away on, as local `YYYY-MM-DD HH:MM`, or None."""
+    import time
+    since = (away_marker() or {}).get("since")
+    if not isinstance(since, (int, float)):
+        return None
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(since))
 
 
 def away_on():
     """Turn away on; returns (exit code, message)."""
-    state, path = away_state()
-    if state == "broken":
-        return 1, f"{path} is not a valid JSON object; nothing was changed. Fix it, then run away on again."
-    if state == "own":
-        return 0, f"Away is already on: you set permissions.{AWAY_KEY} in {path} yourself; the kit leaves it."
-    if state == "kit":
-        return 0, "Away is already on; the next interactive session start turns it off."
-    settings, _ = read_json(path)
-    settings.setdefault("permissions", {})[AWAY_KEY] = True
-    write_json_atomic(path, settings, backup=AWAY_BACKUP)
-    write_json_atomic(config_dir() / AWAY_MARKER, {"settings": str(path), "since": int(time_now())})
+    with settings_lock():
+        state, path = away_state()
+        if state == "broken":
+            return 1, f"{path} is not a valid JSON object; nothing was changed. Fix it, then run away on again."
+        if state == "own":
+            return 0, f"Away is already on: you set permissions.{AWAY_KEY} in {path} yourself; the kit leaves it."
+        if state == "kit":
+            return 0, (f"Away is already on (since {away_since()}). The coordinator runs `I away off` at the "
+                       "user's next message.")
+
+        def turn_on(settings):
+            perms = settings.setdefault("permissions", {})
+            if not isinstance(perms, dict) or perms.get(AWAY_KEY) is True:
+                return False
+            perms[AWAY_KEY] = True
+
+        if update_settings(path, turn_on, backup=AWAY_BACKUP) != "written":
+            return 1, f"{path} changed while the kit wrote it; nothing was changed. Run away on again."
+        write_json_atomic(config_dir() / AWAY_MARKER, {"settings": str(path), "since": int(time_now()),
+                                                       "hash": away_hash(path, True)})
     return 0, (f"Away on: permissions.{AWAY_KEY} is true in {path} (backup {AWAY_BACKUP}). A tool call that "
                "would wait on a permission prompt is denied instead and the turn goes on. The next "
-               "interactive session start, or `away off`, turns it off.")
+               "interactive session start turns it off.\n"
+               "The owner is back when he writes: the coordinator runs `I away off` at the user's next "
+               "message, before anything else.")
 
 
 def away_off():
     """Turn away off if the kit turned it on; returns (exit code, message)."""
-    state, path = away_state()
     marker = config_dir() / AWAY_MARKER
-    if state == "broken":
-        return 1, f"{path} is not a valid JSON object; nothing was changed."
-    if state == "own":
-        return 0, (f"Away stays on: you set permissions.{AWAY_KEY} in {path} yourself, so the kit leaves it. "
-                   "To turn it off, remove that key from the file.")
-    if state == "kit":
-        settings, _ = read_json(path)
-        settings["permissions"].pop(AWAY_KEY, None)
-        if not settings["permissions"]:
-            settings.pop("permissions")
-        write_json_atomic(path, settings, backup=AWAY_BACKUP)
-    if marker.exists():
-        marker.unlink()
+    with settings_lock():
+        state, path = away_state()
+        if state == "broken":
+            return 1, f"{path} is not a valid JSON object; nothing was changed."
+        if state == "own":
+            return 0, (f"Away stays on: you set permissions.{AWAY_KEY} in {path} yourself, so the kit leaves it. "
+                       "To turn it off, remove that key from the file.")
+        if state == "kit":
+            def turn_off(settings):
+                perms = settings.get("permissions")
+                if not isinstance(perms, dict) or perms.get(AWAY_KEY) is not True:
+                    return False
+                perms.pop(AWAY_KEY)
+                if not perms:
+                    settings.pop("permissions")
+
+            if update_settings(path, turn_off, backup=AWAY_BACKUP) not in ("written", "same"):
+                return 1, f"{path} kept changing; away is still on. Run away off again."
+        marker.unlink(missing_ok=True)
     return 0, ("Away off: permission prompts ask again." if state == "kit" else "Away is off.")
 
 

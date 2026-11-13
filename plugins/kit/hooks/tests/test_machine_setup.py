@@ -104,6 +104,66 @@ def main():
     assert auto(declined, declined / "other") is None and not (declined / "other").exists(), "declined: nothing"
     nobody = Path(tempfile.mkdtemp())
     assert auto(nobody, nobody / "acct") is None, "never answered: asked, not applied"
+
+    def within(home, config, fn):
+        saved = {k: os.environ.get(k) for k in ("HOME", "CLAUDE_CONFIG_DIR")}
+        os.environ.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(config))
+        try:
+            return fn()
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+    # an account whose settings.json is not JSON gets one line: the file was left alone, and why
+    bad = two / "bad-account"
+    bad.mkdir()
+    (bad / "settings.json").write_text("{bad")
+    line = within(two, bad, machine_setup.unreadable)
+    assert line and "not valid JSON" in line and "left alone" in line, line
+    assert within(two, bad, machine_setup.auto_apply) is None and (bad / "settings.json").read_text() == "{bad"
+    assert within(two, third, machine_setup.unreadable) is None, "a readable file: no line"
+    assert within(declined, declined / "x", machine_setup.unreadable) is None, "declined: silent"
+
+    # a symlinked settings.json (dotfiles): the link stays a link, its target gets the settings
+    linked = Path(tempfile.mkdtemp())
+    (linked / "dotfiles").mkdir()
+    target = linked / "dotfiles" / "settings.json"
+    target.write_text(json.dumps({"model": "opus"}))
+    target.chmod(0o640)
+    (linked / ".claude").mkdir()
+    (linked / ".claude" / "settings.json").symlink_to(target)
+    code, out = run(linked, "--apply")
+    link = linked / ".claude" / "settings.json"
+    assert code == 0 and link.is_symlink() and link.resolve() == target, out
+    assert json.loads(target.read_text())["model"] == "opus" and "attribution" in json.loads(target.read_text())
+    assert (target.stat().st_mode & 0o777) == 0o640, "the target keeps its mode bits"
+    assert not list((linked / "dotfiles").glob(".settings.json.*")), "no temporary file left beside the target"
+
+    # two kit writers interleaved: away off writes settings.json after merge read it and before merge
+    # writes. merge reads again under the lock and keeps away off's change, as it keeps its own.
+    import kitlib
+    race = Path(tempfile.mkdtemp())
+    (race / ".claude").mkdir()
+    (race / ".claude" / "settings.json").write_text(json.dumps({"model": "opus"}))
+
+    def interleaved():
+        assert kitlib.away_on()[0] == 0 and kitlib.away_state()[0] == "kit"
+        real, calls = machine_setup.missing, []
+
+        def late(settings):
+            if not calls:
+                calls.append(kitlib.away_off())
+            return real(settings)
+        machine_setup.missing = late
+        try:
+            return machine_setup.merge(), calls
+        finally:
+            machine_setup.missing = real
+    (code, lines), calls = within(race, race / ".claude", interleaved)
+    final = json.loads((race / ".claude" / "settings.json").read_text())
+    assert code == 0 and calls and calls[0][0] == 0, (lines, calls)
+    assert "permissions" not in final, f"away off's change is not lost: {final}"
+    assert final["model"] == "opus" and machine_setup.missing(final) == [], f"merge's change is kept too: {final}"
     print("machine_setup: all checks passed")
 
 

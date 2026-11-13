@@ -5,6 +5,7 @@ Run: python3 plugins/kit/hooks/tests/test_items.py   (exit 0 = all good)
 """
 
 import json
+import re
 import os
 import subprocess
 import sys
@@ -266,7 +267,10 @@ def away_checks(tmp, check):
           and saved["permissions"]["allow"] == ["Bash(npm test)"] and saved["model"] == "opus",
           f"away on sets the key beside the others: {out} {saved}")
     check((cfg / "settings.json.kit-away-backup").exists() and (cfg / "kit-away.json").exists(), "backup and marker")
-    check("set by the kit" in run(repo, "away", "status", env=env)[1], "away status says the kit set it")
+    status = run(repo, "away", "status", env=env)[1]
+    check("set by the kit" in status and re.search(r"on since \d{4}-\d\d-\d\d \d\d:\d\d", status), f"away status says since when: {status}")
+    check(out.splitlines()[-1] == "The owner is back when he writes: the coordinator runs `I away off` at the user's "
+          "next message, before anything else.", f"away on ends with who turns it off: {out}")
 
     # a compaction, a headless run and a subagent are not the owner coming back
     for source, extra in (("compact", {}), ("startup", {"KIT_HEADLESS": "1"})):
@@ -278,6 +282,45 @@ def away_checks(tmp, check):
     check("away is off again" in out and "denyInsteadOfPrompting" not in saved["permissions"]
           and saved["permissions"]["allow"] == ["Bash(npm test)"] and not (cfg / "kit-away.json").exists(),
           f"the next interactive start clears it: {out} {saved}")
+
+    # a stale marker: the owner takes the key out by hand while the marker stays, then sets it again
+    # himself. The first read of the state drops the marker, so his later true is his and stays.
+    run(repo, "away", "on", env=env)
+    marker = cfg / "kit-away.json"
+    check({"settings", "since", "hash"} <= set(json.loads(marker.read_text())), f"the marker: {marker.read_text()}")
+    mine = json.loads(settings.read_text())
+    mine["permissions"].pop("denyInsteadOfPrompting")
+    settings.write_text(json.dumps(mine))
+    check(run(repo, "away", "status", env=env)[1] == "Away: off." and not marker.exists(), "status drops a marker without its key")
+    mine["permissions"]["denyInsteadOfPrompting"] = True
+    settings.write_text(json.dumps(mine))
+    code, out, _ = run(repo, "away", "off", env=env)
+    start("startup")
+    check("stays on" in out and json.loads(settings.read_text())["permissions"].get("denyInsteadOfPrompting") is True,
+          f"the owner's value set after a stale marker is kept by off and by session start: {out}")
+    # a marker that does not match the value written (copied in, or for another settings file) is not the kit's
+    marker.write_text(json.dumps({"settings": str(settings), "since": 1, "hash": "0" * 64}))
+    check("you set it" in run(repo, "away", "status", env=env)[1], "a marker whose hash differs: the owner's")
+    run(repo, "away", "off", env=env)
+    check(json.loads(settings.read_text())["permissions"].get("denyInsteadOfPrompting") is True, "and off leaves it")
+    marker.unlink()
+    settings.write_text(json.dumps({"model": "opus", "permissions": {"allow": ["Bash(npm test)"]}}))
+
+    # a symlinked user settings.json: on and off write through the link, which stays a link
+    dot = tmp / "dot-user"
+    dot.mkdir()
+    (dot / "settings.json").write_text(settings.read_text())
+    (dot / "settings.json").chmod(0o640)
+    settings.unlink()
+    settings.symlink_to(dot / "settings.json")
+    run(repo, "away", "on", env=env)
+    check(settings.is_symlink() and json.loads((dot / "settings.json").read_text())["permissions"].get("denyInsteadOfPrompting")
+          and ((dot / "settings.json").stat().st_mode & 0o777) == 0o640, "away on writes the link's target")
+    run(repo, "away", "off", env=env)
+    check(settings.is_symlink() and "denyInsteadOfPrompting" not in json.loads((dot / "settings.json").read_text())["permissions"],
+          "away off too")
+    settings.unlink()
+    settings.write_text((dot / "settings.json").read_text())
 
     # away off after the kit set it; then the owner's own true is never removed
     run(repo, "away", "on", env=env)
@@ -308,9 +351,10 @@ def away_checks(tmp, check):
     sb = block.get("sandbox", {})
     check(code == 0 and out.startswith("Sandbox on") and block["permissions"] == {"allow": ["Bash(make)"]}
           and sb.get("enabled") is True and sb.get("autoAllowBashIfSandboxed") is True
-          and sb.get("excludedCommands") == ["git push *", "git fetch *", "git pull *"], f"sandbox on: {out} {block}")
+          and sb.get("excludedCommands") == ["git push", "git push *", "git fetch", "git fetch *", "git pull", "git pull *"],
+          f"sandbox on: {out} {block}")
     deny = sb.get("filesystem", {}).get("denyRead", [])
-    check(not {"~/.ssh", "~/.config/gh", "~/.netrc"} & set(deny) and "~/.aws" in deny, f"denyRead: {deny}")
+    check({"~/.ssh", "~/.config/gh", "~/.netrc", "~/.aws"} <= set(deny), f"denyRead keeps the git credentials too: {deny}")
     check("already on" in run(repo, "sandbox", "on", env=env)[1], "sandbox on twice")
     check("the kit's block" in run(repo, "sandbox", "status", env=env)[1], "sandbox status")
     before = local.read_text()
@@ -323,6 +367,18 @@ def away_checks(tmp, check):
     check("left it as it is" in out and local.read_text() == before, f"an own sandbox block stays: {out}")
     local.write_text("{ broken")
     check(run(repo, "sandbox", "on", env=env)[0] == 1 and local.read_text() == "{ broken", "broken local file left alone")
+    # a symlinked settings.local.json (kept in a dotfiles folder): the link stays, its target gets the block
+    dot = tmp / "dotfiles"
+    dot.mkdir()
+    (dot / "local.json").write_text(json.dumps({"model": "opus"}))
+    (dot / "local.json").chmod(0o600)
+    local.unlink()
+    local.symlink_to(dot / "local.json")
+    code, out, _ = run(repo, "sandbox", "on", env=env)
+    check(code == 0 and local.is_symlink() and json.loads((dot / "local.json").read_text()).get("sandbox", {}).get("enabled")
+          and json.loads((dot / "local.json").read_text())["model"] == "opus" and ((dot / "local.json").stat().st_mode & 0o777) == 0o600,
+          f"sandbox on writes through the link: {out}")
+    local.unlink()
 
 
 def main():
@@ -558,7 +614,18 @@ def main():
         # the forms the kit prescribes count: an ask rule on just --force-with-lease or --delete-branch blocks the step
         settings.write_text(json.dumps({"permissions": {"allow": ["Bash(git push:*)", "Bash(git rebase:*)", "Bash(gh pr merge:*)",
                                                                   "Bash(git merge:*)"]}}))
-        run(repo, "unattended", "merge=allow", env=env)
+        # merge=allow is the owner's to write: the command refuses it, says where, and changes nothing
+        before = local.read_text()
+        code, _, err = run(repo, "unattended", "merge=allow", env=env)
+        check(code == 2 and "the owner merges" in err and str(local) in err and local.read_text() == before,
+              f"unattended merge=allow is refused: {err}")
+        code, _, err = run(repo, "unattended", "push=ask", "merge=allow", env=env)
+        check(code == 2 and local.read_text() == before, "refused as a whole: push=ask is not saved alongside")
+        owner = json.loads(local.read_text())
+        owner["lead"]["unattended"]["merge"] = "allow"  # the owner writes it himself
+        local.write_text(json.dumps(owner))
+        run(repo, "unattended", "rebase=allow", env=env)
+        check(json.loads(local.read_text())["lead"]["unattended"]["merge"] == "allow", "a later save keeps the owner's merge=allow")
         code, out, _ = run(repo, "unattended", env=env)
         check(out.startswith("UNATTENDED: push=allow rebase=allow merge=allow"), f"all three allowed first: {out}")
         for rules, line in [(["Bash(git push --force*)"], "push=ask rebase=allow merge=allow"),
@@ -607,7 +674,10 @@ def main():
         subprocess.run(["git", "-C", str(repo2), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
                         "commit", "-qm", "settings"], check=True)
         before = committed.read_bytes()
-        code, out, err = run(repo2, "unattended", "push=allow", "rebase=allow", "merge=allow", env=env)
+        # the owner allowed all three himself (merge=allow is his to write)
+        (repo2 / ".claude" / "kit.local.json").write_text(json.dumps(
+            {"lead": {"unattended": {"push": "allow", "rebase": "allow", "merge": "allow"}}}))
+        code, out, err = run(repo2, "unattended", env=env)
         check(code == 0 and "PROPOSAL" not in out, f"without --proposal nothing is proposed: {out}")
         code, out, err = run(repo2, "unattended", "--proposal", env=env)
         r2 = str(committed.resolve())
