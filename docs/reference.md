@@ -117,7 +117,10 @@ they created for their own items, never on the default branch or someone else's.
 blocks history rewrites by default, and `autoMode` is read from user settings only, so the kit
 offers this rule (with `attribution` off) once per machine at session start and merges it into
 the account's `settings.json` on yes (`~/.claude`, or `CLAUDE_CONFIG_DIR` for a second account on the same
-machine, each checked and set up on its own; `hooks/scripts/machine_setup.py`; `--decline` stops the offer):
+machine; `hooks/scripts/machine_setup.py`; `--decline` stops the offer). The answer is kept for the
+machine in `~/.claude/kit.json` (`machineSetup`), so after a yes a second account is set up at its
+next session start without the question, and Claude says so in one line; an account whose own
+`settings.json` sets a different `attribution` is asked instead:
 
 ```json
 {"autoMode": {"allow": ["$defaults", "On a branch an agent created for its own task (not the default branch, not one someone else pushed to), rewriting its commits (amend, rebase, setting the user's authorship) and pushing it with --force-with-lease"]}}

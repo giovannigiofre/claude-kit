@@ -211,7 +211,12 @@ def quote(text):
 
 
 def offer_machine_setup():
-    """Until the user says yes or no on this machine, ask Claude to offer the kit's user settings."""
+    """Until the user says yes or no on this machine, ask Claude to offer the kit's user settings.
+    After a yes, another account here (CLAUDE_CONFIG_DIR) gets them without the question."""
+    done = machine_setup.auto_apply()
+    if done:
+        print(done + " Tell the user this line once; nothing waits on it.")
+        return
     todo = machine_setup.pending()
     if not todo:
         return

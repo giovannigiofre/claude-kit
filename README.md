@@ -148,7 +148,8 @@ file can set: `"attribution": {"commit": "", "pr": "", "sessionUrl": false}` (no
 footer or session link: you are the only author) and an `autoMode.allow` rule that lets agents
 rewrite and force-push, with lease, the branches they created. On yes it merges them in (with a
 backup, other keys kept); on no it never asks again on that machine
-(`hooks/scripts/machine_setup.py --apply | --decline | --check`).
+(`hooks/scripts/machine_setup.py --apply | --decline | --check`). A second account on the same
+machine (`CLAUDE_CONFIG_DIR`) is then set up without the question, and Claude tells you in one line.
 Each repo's own auto mode environment (org, cloud, secrets, protected branches) is approved once
 in `/kit:init`, kept in your Claude config, and added to that list scoped to the repo; nothing in
 a repo can add to it ([reference](docs/reference.md#auto-mode-environment-per-repo)).

@@ -109,6 +109,12 @@ def main():
         subprocess.run([sys.executable, str(script), "--apply"], env={**os.environ, "HOME": str(fresh)},
                        capture_output=True, check=True)
         assert "Kit setup" not in run({"cwd": str(repo), "source": "startup"}, home=fresh, **local), "applied: silent"
+        second = Path(tmp) / "second-account"  # another CLAUDE_CONFIG_DIR on the machine that said yes
+        out = run({"cwd": str(repo), "source": "startup"}, home=fresh, CLAUDE_CONFIG_DIR=str(second), **local)
+        assert "kit: applied the kit's machine settings" in out and "Kit setup" not in out, out
+        assert json.loads((second / "settings.json").read_text())["attribution"]["commit"] == "", "written"
+        assert "applied the kit" not in run({"cwd": str(repo), "source": "startup"}, home=fresh,
+                                            CLAUDE_CONFIG_DIR=str(second), **local), "said once"
 
         # a kit.json that exists is the opt-in, even `{}`: the header line always prints
         (repo / ".claude" / "kit.json").write_text("{}")
