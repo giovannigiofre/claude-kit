@@ -727,37 +727,48 @@ def write_json_atomic(path, value, backup=None):
 
 
 # The one writer for Claude Code settings files (settings.json, settings.local.json) and the personal
-# kit.json. Every kit write takes one lock, re-reads the file under it and merges into what is on
-# disk at that moment, so two kit writers never lose each other's change. The lock is one file in
-# the home folder, shared by every account on the machine; within one process it is reentrant, so
-# a writer may call another (away_on writes the marker under the same lock). Claude Code does not
-# take this lock, so the file's size and mtime are compared again before the replace, and a change
-# made meanwhile is merged once more.
+# kit.json. Every kit write takes a lock, re-reads the file under it and merges into what is on disk
+# at that moment, so two kit writers never lose each other's change. The lock file sits beside the
+# file being written (the config dir for the account's settings, the project's .claude/ for
+# settings.local.json), so a read-only home folder does not stop a write elsewhere. Within one
+# process each lock is reentrant, so a writer may call another (away_on writes the marker under the
+# same lock). Claude Code does not take this lock, so the file's size and mtime are compared again
+# before the replace, and a change made meanwhile is merged once more.
 SETTINGS_LOCK = "kit-settings.lock"
 SETTINGS_LOCK_WAIT = 2.0  # seconds; a stuck holder must not stall a session start
 SETTINGS_RETRIES = 5
-_settings_held = {"depth": 0, "fh": None}
+_settings_held = {}  # lock file -> [depth, open file]
 
 
 class SettingsBusy(OSError):
     """Another process held the settings lock for longer than SETTINGS_LOCK_WAIT."""
 
+    def __init__(self, path):
+        super().__init__(f"{path} is held by another process")
+        self.lock = path
 
-def settings_lock_file():
-    return Path.home() / ".claude" / SETTINGS_LOCK
+
+def settings_lock_file(where=None):
+    """The lock for files in folder `where` (default: the config dir). The folder is resolved, so one
+    folder reached by two spellings is one lock (a second flock on it in one process would wait)."""
+    return Path(where or config_dir()).resolve() / SETTINGS_LOCK
 
 
 class settings_lock:
-    """`with kitlib.settings_lock():` holds the settings lock; nested uses in one process share it."""
+    """`with kitlib.settings_lock(folder):` holds the lock for the files in `folder` (default: the
+    config dir); nested uses of one lock in one process share it. Raises SettingsBusy after
+    SETTINGS_LOCK_WAIT, or OSError when the folder cannot be created."""
+
+    def __init__(self, where=None):
+        self.path = settings_lock_file(where)
 
     def __enter__(self):
-        held = _settings_held
-        if held["depth"] == 0:
+        held = _settings_held.get(self.path)
+        if held is None:
             import fcntl  # here, so a platform without it cannot break importing this module
             import time
-            path = settings_lock_file()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            fh = open(path, "w")
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fh = open(self.path, "w")
             deadline = time.monotonic() + SETTINGS_LOCK_WAIT
             while True:
                 try:
@@ -766,19 +777,29 @@ class settings_lock:
                 except BlockingIOError:
                     if time.monotonic() > deadline:
                         fh.close()
-                        raise SettingsBusy(f"{path} is held by another process") from None
+                        raise SettingsBusy(self.path) from None
                     time.sleep(0.05)
-            held["fh"] = fh
-        held["depth"] += 1
+            held = _settings_held[self.path] = [0, fh]
+        held[0] += 1
         return self
 
     def __exit__(self, *exc):
-        held = _settings_held
-        held["depth"] -= 1
-        if held["depth"] == 0:
-            held["fh"].close()  # closing releases the flock
-            held["fh"] = None
+        held = _settings_held[self.path]
+        held[0] -= 1
+        if held[0] == 0:
+            held[1].close()  # closing releases the flock
+            del _settings_held[self.path]
         return False
+
+
+def write_failed(exc, what):
+    """One line for an owner command whose settings write failed: what was not changed and what to
+    do. `exc` is SettingsBusy (try again) or another OSError (the path that cannot be written)."""
+    if isinstance(exc, SettingsBusy):
+        return (f"{what} was not changed: another kit process held {exc.lock} for more than "
+                f"{SETTINGS_LOCK_WAIT:g} s. Try again in a moment.")
+    where = exc.filename or "the settings folder"
+    return f"{what} was not changed: {where} cannot be written ({exc.strerror or exc}). Make it writable, then try again."
 
 
 def _signature(path):
@@ -794,9 +815,10 @@ def update_settings(path, change, backup=None):
     read the file as it is now, call `change(settings)` (edit the dict in place; return False when
     there is nothing to write), copy the old file to `backup` beside `path`, then replace the target
     in one step, keeping its mode bits. Returns `written`, `same`, `broken` (not a JSON object; the
-    file is left alone) or `busy` (it kept changing). Raises SettingsBusy when the lock is held."""
+    file is left alone) or `busy` (it kept changing). Raises SettingsBusy when the lock beside the
+    file is held, and OSError when the folder cannot be written."""
     path = Path(path)
-    with settings_lock():
+    with settings_lock(path.resolve().parent):
         for _ in range(SETTINGS_RETRIES):
             target = path.resolve()
             before = _signature(target)

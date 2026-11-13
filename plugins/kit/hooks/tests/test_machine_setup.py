@@ -164,6 +164,31 @@ def main():
     assert code == 0 and calls and calls[0][0] == 0, (lines, calls)
     assert "permissions" not in final, f"away off's change is not lost: {final}"
     assert final["model"] == "opus" and machine_setup.missing(final) == [], f"merge's change is kept too: {final}"
+
+    # a busy settings lock, or a home folder where ~/.claude cannot be made: one line, exit 1, no traceback
+    busy = Path(tempfile.mkdtemp())
+    (busy / ".claude").mkdir()
+    holder = subprocess.Popen([sys.executable, "-c", "import fcntl, sys, time\n"
+                               "f = open(sys.argv[1], 'w'); fcntl.flock(f, fcntl.LOCK_EX)\n"
+                               "print('held', flush=True); time.sleep(10)", str(busy / ".claude" / "kit-settings.lock")],
+                              stdout=subprocess.PIPE, text=True)
+    holder.stdout.readline()
+    try:
+        for flag in ("--apply", "--decline"):
+            code, out = run(busy, flag)
+            assert code == 1 and len(out.strip().splitlines()) == 1 and "Try again" in out, (flag, out)
+    finally:
+        holder.kill()
+        holder.wait()
+    assert not (busy / ".claude" / "settings.json").exists() and not (busy / ".claude" / "kit.json").exists()
+    ro = Path(tempfile.mkdtemp()) / "account"
+    code, out = run(Path("/proc/self"), "--apply", config=ro)
+    assert code == 1 and "Traceback" not in out and "kit.json was not changed" in out and "are applied" in out, out
+    assert machine_setup.missing(json.loads((ro / "settings.json").read_text())) == [], \
+        "the account's settings are written beside their own lock"
+    for flag in ("--apply", "--decline"):
+        code, out = run(Path("/proc/self"), flag)
+        assert code == 1 and len(out.strip().splitlines()) == 1 and "cannot be written" in out, (flag, out)
     print("machine_setup: all checks passed")
 
 

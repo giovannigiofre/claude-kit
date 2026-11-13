@@ -17,7 +17,7 @@ it is written into the line the classifier reads.
 Every run rebuilds `autoMode.environment` in settings.json: the user's own lines stay as they are,
 the kit's lines (its exact scoped form, ending in MARKER) are replaced, each scoped to its repo by origin and paths. A new
 list starts with "$defaults" so the built-in entries stay current; a non-list is left alone.
-Writes go through kitlib.update_settings (the kit's one lock, a re-read under it, an atomic replace
+Writes go through kitlib.update_settings (the lock beside the file, a re-read under it, an atomic replace
 of a symlink's target), only when something changed, after a backup
 (settings.json.kit-auto-mode-backup; the first one ever is also kept as .orig). A read-only
 settings.json is never replaced. Standard library only.
@@ -87,7 +87,7 @@ def settings_file():
 
 @contextlib.contextmanager
 def locked():
-    """The kit's one settings lock (kitlib.settings_lock), shared with every other kit writer."""
+    """The settings lock in the config dir (kitlib.settings_lock), shared with every other kit writer there."""
     try:
         lock = kitlib.settings_lock()
         lock.__enter__()

@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from kitlib import config_dir, read_json, update_settings  # noqa: E402
+from kitlib import config_dir, read_json, update_settings, write_failed  # noqa: E402
 
 ATTRIBUTION = {"commit": "", "pr": "", "sessionUrl": False}
 BACKUP = "settings.json.kit-backup"
@@ -130,7 +130,12 @@ def apply():
     code, lines = merge()
     print("\n".join(lines))
     if code == 0:
-        if remember("applied"):
+        try:
+            noted = remember("applied")
+        except OSError as exc:  # the settings above were written; only the note for other accounts is missing
+            print(write_failed(exc, f"The note in {kit_path()}") + " The settings above are applied.")
+            return 1
+        if noted:
             print(f"Noted in {kit_path()}: another account on this machine gets these settings without being asked.")
         print("New sessions pick it up; in a running one, settings reload on their own.")
     return code
@@ -168,10 +173,12 @@ def decline():
 
 
 def main(argv):
-    if argv[:1] == ["--apply"]:
-        return apply()
-    if argv[:1] == ["--decline"]:
-        return decline()
+    if argv[:1] in (["--apply"], ["--decline"]):
+        try:
+            return apply() if argv[0] == "--apply" else decline()
+        except OSError as exc:  # kitlib.SettingsBusy, or a folder that cannot be written
+            print(write_failed(exc, f"{settings_path()}" if argv[0] == "--apply" else f"The answer in {kit_path()}"))
+            return 1
     todo = pending()
     for line in todo:
         print(f"- {line}")

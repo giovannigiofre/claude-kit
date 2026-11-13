@@ -381,6 +381,75 @@ def away_checks(tmp, check):
     local.unlink()
 
 
+def hold_lock(lock, seconds=10):
+    """Another process holding the kit's settings lock file `lock`; returns it once it holds."""
+    holder = subprocess.Popen([sys.executable, "-c", "import fcntl, sys, time\n"
+                               "f = open(sys.argv[1], 'w'); fcntl.flock(f, fcntl.LOCK_EX)\n"
+                               "print('held', flush=True); time.sleep(float(sys.argv[2]))", str(lock), str(seconds)],
+                              stdout=subprocess.PIPE, text=True)
+    holder.stdout.readline()
+    return holder
+
+
+def lock_checks(tmp, check):
+    """A busy or unwritable settings lock ends an owner command in one line and exit 1, never a
+    traceback; the lock sits beside the file written, so a read-only home does not stop a write
+    in the config dir or the project."""
+    cfg = tmp / "cfg"
+    cfg.mkdir()
+    settings = cfg / "settings.json"
+    settings.write_text(json.dumps({"model": "opus"}))
+    repo = tmp / "lockrepo"
+    (repo / ".claude").mkdir(parents=True)
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    local = repo / ".claude" / "settings.local.json"
+    env = dict(os.environ, HOME=str(tmp / "home"), CLAUDE_CONFIG_DIR=str(cfg), TMPDIR=str(tmp))
+    env.pop("KIT_HEADLESS", None)
+
+    def one_line(code, out, err, want):
+        text = out + err
+        return code == 1 and "Traceback" not in text and len(text.strip().splitlines()) == 1 and want in text
+
+    # the lock beside settings.json held for longer than the wait: away on and off say so and change nothing
+    holder = hold_lock(cfg / "kit-settings.lock")
+    for action in ("on", "off"):
+        code, out, err = run(repo, "away", action, env=env)
+        check(one_line(code, out, err, "Try again") and "was not changed" in out, f"away {action} busy: {code} {out} {err}")
+    check(json.loads(settings.read_text()) == {"model": "opus"}, "busy: settings.json untouched")
+    # the project's lock is another file: sandbox on goes ahead while the config dir's is held
+    code, out, _ = run(repo, "sandbox", "on", env=env)
+    check(code == 0 and json.loads(local.read_text())["sandbox"]["enabled"], f"sandbox's lock is in .claude/: {out}")
+    holder.kill()
+    holder.wait()
+    local.unlink()
+    holder = hold_lock(repo / ".claude" / "kit-settings.lock")
+    code, out, err = run(repo, "sandbox", "on", env=env)
+    check(one_line(code, out, err, "Try again") and not local.exists(), f"sandbox on busy: {code} {out} {err}")
+    holder.kill()
+    holder.wait()
+
+    # a home folder where ~/.claude cannot be made: the config dir and the project are written all the same
+    ro = dict(env, HOME="/proc/self")
+    code, out, err = run(repo, "away", "on", env=ro)
+    check(code == 0 and json.loads(settings.read_text())["permissions"]["denyInsteadOfPrompting"] is True,
+          f"read-only home, writable config dir: away on: {out} {err}")
+    code, out, err = run(repo, "away", "off", env=ro)
+    check(code == 0 and "permissions" not in json.loads(settings.read_text()), f"away off: {out} {err}")
+    code, out, err = run(repo, "sandbox", "on", env=ro)
+    check(code == 0 and local.exists(), f"read-only home: sandbox on: {out} {err}")
+    # no config dir of its own either: one line naming the folder that cannot be written
+    bare = {k: v for k, v in ro.items() if k != "CLAUDE_CONFIG_DIR"}
+    for action in ("on", "off"):
+        code, out, err = run(repo, "away", action, env=bare)
+        check(one_line(code, out, err, "/.claude cannot be written"), f"away {action}, no ~/.claude: {code} {out} {err}")
+    # a lock file that cannot be opened (a folder in its place): one line naming it, the settings untouched
+    local.unlink()
+    (repo / ".claude" / "kit-settings.lock").unlink()
+    (repo / ".claude" / "kit-settings.lock").mkdir()
+    code, out, err = run(repo, "sandbox", "on", env=env)
+    check(one_line(code, out, err, "kit-settings.lock cannot be written") and not local.exists(), f"sandbox on, lock cannot be opened: {code} {out} {err}")
+
+
 def main():
     failed = 0
 
@@ -744,6 +813,8 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmp:
         away_checks(Path(os.path.realpath(tmp)), check)
+    with tempfile.TemporaryDirectory() as tmp:
+        lock_checks(Path(os.path.realpath(tmp)), check)
 
     with tempfile.TemporaryDirectory() as tmp:
         fresh_project_checks(Path(os.path.realpath(tmp)), check)
