@@ -39,8 +39,9 @@ If the objective is vague, use `kit:shape` first.
 
 Do not ask. Unless the user named caps, use `--max-iterations 40 --max-usd 25`, and say so in
 your reply in one line, with how to change them. When the user says no budget, leave the caps
-out: the run then ends only on the stop condition, 3 failed iterations in a row, or Ctrl-C, and
-the reply says plainly that nothing caps it.
+out and pass `--no-caps`: the run then ends only on the stop condition, 3 failed iterations in a
+row, or Ctrl-C, and the reply says plainly that nothing caps it. A `--detach` run given no caps and
+no `--no-caps` takes 40 iterations and USD 25 by itself.
 
 Other knobs: `--max-tokens` (input + cache-write + output), `--iteration-usd` (cap per
 iteration), `--max-turns` (per iteration), `--max-failures` (default 3), `--effort` (`medium` is a
@@ -70,11 +71,13 @@ runs from the system prompt, to measure whether the model still needs it.
 
 It runs for hours, so start it yourself where it survives the session. First run
 `python3 ${CLAUDE_SKILL_DIR}/../../hooks/scripts/items.py away on` (a permission prompt becomes a
-denial until the user's next session start). Then launch with `--detach`: the runner starts again
+denial until the user writes again). Then launch with `--detach`: the runner starts again
 in its own process session, output in a log under the runs folder, and the Bash call returns
 within about 5 seconds with the pid and the log path, or with the error and exit code of a run
 that stopped at once. Add `--push` unless the user said not to push in this repo: when the run
-ends with commits it pushes the branch once, so the result can be read from a phone. Do not use
+ends with commits it pushes the branch once, so the result can be read from a phone; with
+`push=ask` in the unattended settings it leaves the branch local and the log says so. The runner
+refuses a protected `--branch` (main, master, the guard's `protectedBranches`, origin's default). Do not use
 Bash `run_in_background` for it: that run ends with the session. A user who wants it in their own
 terminal or tmux window gets the same line without `--detach`. Example:
 

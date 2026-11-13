@@ -778,7 +778,7 @@ line still work; only the status line, the watchdog and the interim-notice drop 
 ```
 python3 <kit>/skills/overnight/scripts/overnight.py "<objective>" --stop-when "<condition>" \
   --worktree ../app-overnight --max-iterations 40 --max-usd 25 --effort medium [--fallback-model sonnet] [--max-turns 60] \
-  [--push] [--detach]
+  [--push] [--detach] [--no-caps]
 ```
 
 The coordinator starts a night itself, without an OK round or a budget question: `items.py away
@@ -790,6 +790,12 @@ log and exit code instead. It is not a Bash `run_in_background` command, which e
 session, and the guard's wait rule does not apply to it. `--push`: when the run ends with commits,
 the runner pushes its branch to `origin` once (`git push -u`), so the morning result can be read
 from a phone; `end-state.json` `pushed` says what happened, and a failed push never fails the run.
+With `push=ask` under `lead.unattended` in the main checkout's `.claude/kit.local.json`, read when
+the run ends, it does not push: `pushed` and `notes.md` say the branch stayed local, with the
+command to push it. A `--detach` run given no caps takes `--max-iterations 40 --max-usd 25` and
+prints that line; `--no-caps` runs it without. The runner refuses a `--branch` the guard protects
+(`guard.protectedBranches` in `.claude/kit.json`, else in `~/.claude/kit.json`, else `main` and
+`master`, plus `origin`'s default branch), since a run commits on a branch of its own.
 
 Each iteration runs `claude -p` in permission mode `auto` unless `--permission-mode` says
 otherwise, with `--permission-prompts none` (a headless session cannot answer a prompt: anything
