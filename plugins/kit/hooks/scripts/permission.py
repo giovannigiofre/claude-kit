@@ -6,7 +6,9 @@ already run them unasked; a prompt before Claude runs one by hand is a click for
 same for the kit's own scripts that read, record or tidy (gate.py, lessons.py, compact_logs.py)
 and the coordinator's board tools (items.py, proposals.py), which write only under the
 kit's lead/ folder (.kit/lead/, or .claude/lead/ in a project not moved yet). migrate_state.py
-moves that state folder itself and refuses while a thread is at work. Only an exact `check` or
+moves that state folder itself and refuses while a thread is at work, so only `status` and a bare
+`migrate` run unasked: `undo`, `--force` (moves past a thread at work) and `--root` (another
+repo) are the owner's to approve. Only an exact `check` or
 `verify`, or one of those scripts by its real path, is allowed here; anything else stays with
 the permission system (and the guard has already had its say). A command that changes a Claude Code settings file is never allowed here, whatever it
 runs: settings_guard.py has asked the owner about it. Standard library only.
@@ -40,7 +42,9 @@ def own_script(command):
         resolved = script.resolve(strict=True)
     except OSError:
         return False
-    return resolved.name in SCRIPTS and PLUGIN in resolved.parents
+    if resolved.name not in SCRIPTS or PLUGIN not in resolved.parents:
+        return False
+    return resolved.name != "migrate_state.py" or argv[2:] in (["status"], ["migrate"])
 
 
 def allowed(command, config, cwd=None):
