@@ -42,7 +42,7 @@ from urllib.parse import urlsplit
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from kitlib import read_json  # noqa: E402
+from kitlib import git_env, read_json  # noqa: E402
 
 MARKER = "[kit auto-mode]"
 MAX_LINES = 20       # per repo
@@ -126,7 +126,8 @@ def dumps(value):
 
 def git(start, *args):
     try:
-        out = subprocess.run(["git", "-C", str(start), *args], capture_output=True, text=True, timeout=5)
+        out = subprocess.run(["git", "-C", str(start), *args], capture_output=True, text=True, timeout=5,
+                             env=git_env())
     except Exception:
         return None
     return out.stdout.strip() if out.returncode == 0 else None

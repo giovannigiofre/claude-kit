@@ -89,7 +89,7 @@ def ensure_excluded(root):
     ignores it already (the overnight runner does the same for its run files)."""
     root = Path(root)
     probe = subprocess.run(["git", "-C", str(root), "check-ignore", "-q", ".claude/evidence/probe"],
-                           capture_output=True)
+                           capture_output=True, env=kitlib.git_env())
     if probe.returncode == 0:
         return
     exclude = kitlib.git_out(root, "rev-parse", "--git-path", "info/exclude")

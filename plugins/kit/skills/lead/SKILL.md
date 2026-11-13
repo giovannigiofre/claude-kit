@@ -44,7 +44,7 @@ first: `I new "<name>" --brief - --from lead` with the brief on stdin (`--kind s
 something out). Brief a thread with the `ITEM: <id>` line, the absolute BRIEF.md path (`I path
 <id>`; a worktree has no `.claude/lead/`) and only what the file lacks. Log `working` when it
 starts (`I log <id> working "agent <agentId>, effort <level>"`), `review` or `needs-you` when it
-reports, and `I done <id>` when the PR is merged. Before re-briefing a thread, read BRIEF.md
+reports, and `I done <id>` when the PR is merged (more commands: [tools.md](tools.md)). Before re-briefing a thread, read BRIEF.md
 again (the user may have changed it) and VERDICT.md. Proposal cards (`.claude/lead/proposals/`,
 from `/kit:scout`): `next` takes a class A card (`P take <id>`), asks before a B, never starts a C.
 

@@ -229,7 +229,8 @@ def main():
                 import lessons as ledger
                 ledger.LOCK_WAIT = 1.0
                 ledger.harvest(cwd)  # a feedback memory written mid-session reaches the next thread
-                text = ledger.deliver(cwd, agent, budget)
+                # the thread's id lets a later verifier PASS credit the lessons this thread was given
+                text = ledger.deliver(cwd, agent, budget, thread=str(data.get("agent_id") or ""))
             except Exception:
                 text = ""
             text = text or compose_within(lessons(cwd, kitlib.config_dir(), agent), budget)

@@ -67,6 +67,17 @@ def main():
         assert stop(tmp, waiting) == {}, "a thread waiting on its own subagent has not ended"
         assert stop(tmp, waiting + [user("<task-notification><task-id>r1</task-id></task-notification>")]).get("decision") == "block"
         assert stop(tmp, [user("ITEM: B2. brief"), user(REMINDER), user("[Request interrupted by user]")]) == {}, "an interrupted run is the person's"
+    # the verifier's report since 1.16: a QUESTIONS block ends the PROBLEMS block (a question is not a
+    # problem), and a preflight stop carries its reason after CANNOT_VERIFY
+    sys.path.insert(0, str(SCRIPT.parent))
+    import subagent_stop as _ss
+    got = _ss.parse("VERDICT: FAIL scope=local:src/a.py\nREVIEWED: main, abc123\nEVIDENCE: pytest: 3 passed\n"
+                    "PROBLEMS:\n1. src/a.py:10 - empty list - returns None - no test covers it\n"
+                    "QUESTIONS:\n1. is the retry meant to be unbounded?\nNOT CHECKED: none\n")
+    assert got == ("FAIL", ["src/a.py:10 - empty list - returns None - no test covers it"]), got
+    got = _ss.parse("VERDICT: CANNOT_VERIFY: ci-red\nREVIEWED: main, abc\nEVIDENCE: gh pr view: 2 failing\n"
+                    "PROBLEMS:\nQUESTIONS:\nNOT CHECKED: everything\n")
+    assert got == ("CANNOT_VERIFY", []), got
     print("subagent_stop: all checks passed")
 
 

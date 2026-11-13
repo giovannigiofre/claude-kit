@@ -653,12 +653,9 @@ def save_state(session_id, name, value):
 # Variables that point git at another repository. A hook or a script started from inside a git
 # command (a pre-push hook, a rebase's exec step) inherits them, and a `git -C <other repo>` run
 # then reads the wrong repository; the branch and worktree checks clear them first.
-GIT_REPO_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX")
 
 
-def hermetic_env():
-    """os.environ without the variables that point git at another repository."""
-    return {k: v for k, v in os.environ.items() if k not in GIT_REPO_VARS}
+hermetic_env = git_env  # one helper; the older name is kept for its callers
 
 
 def git_run(cwd, *args, timeout=30):

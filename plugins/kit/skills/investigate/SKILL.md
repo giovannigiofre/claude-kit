@@ -24,7 +24,7 @@ or returns malformed output.
 
 - One line in `.debug/NOTES.md`: *expected X, got Y, when Z* (who, where, since when).
 - Name the **failure surface(s)**: local/tests, backend/cloud, frontend/browser, CI/build,
-  data/LLM pipeline, third-party integration, performance. For each, open its section in
+  data/LLM pipeline (an LLM feature that got worse has its own section), third-party integration, performance. For each, open its section in
   [references/evidence-by-surface.md](references/evidence-by-surface.md).
 - **Users affected right now?** Propose mitigation first (rollback, revert, feature flag) and ask
   before touching production. Root cause after.
