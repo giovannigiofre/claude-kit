@@ -383,6 +383,7 @@ def away_checks(tmp, check):
 
 def hold_lock(lock, seconds=10):
     """Another process holding the kit's settings lock file `lock`; returns it once it holds."""
+    lock.parent.mkdir(parents=True, exist_ok=True)
     holder = subprocess.Popen([sys.executable, "-c", "import fcntl, sys, time\n"
                                "f = open(sys.argv[1], 'w'); fcntl.flock(f, fcntl.LOCK_EX)\n"
                                "print('held', flush=True); time.sleep(float(sys.argv[2]))", str(lock), str(seconds)],
@@ -391,10 +392,16 @@ def hold_lock(lock, seconds=10):
     return holder
 
 
+def lock_of(target, tmp):
+    """The settings lock items.py takes for `target` with TMPDIR=tmp: the kit's temp state folder."""
+    import kitlib
+    return tmp / "claude-kit" / kitlib.settings_lock_file(target).name
+
+
 def lock_checks(tmp, check):
     """A busy or unwritable settings lock ends an owner command in one line and exit 1, never a
-    traceback; the lock sits beside the file written, so a read-only home does not stop a write
-    in the config dir or the project."""
+    traceback. Each file has its own lock in the kit's temp state folder, so a read-only home does
+    not stop a write in the config dir or the project, and nothing is left in either."""
     cfg = tmp / "cfg"
     cfg.mkdir()
     settings = cfg / "settings.json"
@@ -410,19 +417,19 @@ def lock_checks(tmp, check):
         text = out + err
         return code == 1 and "Traceback" not in text and len(text.strip().splitlines()) == 1 and want in text
 
-    # the lock beside settings.json held for longer than the wait: away on and off say so and change nothing
-    holder = hold_lock(cfg / "kit-settings.lock")
+    # settings.json's lock held for longer than the wait: away on and off say so and change nothing
+    holder = hold_lock(lock_of(settings, tmp))
     for action in ("on", "off"):
         code, out, err = run(repo, "away", action, env=env)
         check(one_line(code, out, err, "Try again") and "was not changed" in out, f"away {action} busy: {code} {out} {err}")
     check(json.loads(settings.read_text()) == {"model": "opus"}, "busy: settings.json untouched")
-    # the project's lock is another file: sandbox on goes ahead while the config dir's is held
+    # settings.local.json has a lock of its own: sandbox on goes ahead while settings.json's is held
     code, out, _ = run(repo, "sandbox", "on", env=env)
-    check(code == 0 and json.loads(local.read_text())["sandbox"]["enabled"], f"sandbox's lock is in .claude/: {out}")
+    check(code == 0 and json.loads(local.read_text())["sandbox"]["enabled"], f"sandbox's lock is its own: {out}")
     holder.kill()
     holder.wait()
     local.unlink()
-    holder = hold_lock(repo / ".claude" / "kit-settings.lock")
+    holder = hold_lock(lock_of(local, tmp))
     code, out, err = run(repo, "sandbox", "on", env=env)
     check(one_line(code, out, err, "Try again") and not local.exists(), f"sandbox on busy: {code} {out} {err}")
     holder.kill()
@@ -439,15 +446,84 @@ def lock_checks(tmp, check):
     check(code == 0 and local.exists(), f"read-only home: sandbox on: {out} {err}")
     # no config dir of its own either: one line naming the folder that cannot be written
     bare = {k: v for k, v in ro.items() if k != "CLAUDE_CONFIG_DIR"}
-    for action in ("on", "off"):
-        code, out, err = run(repo, "away", action, env=bare)
-        check(one_line(code, out, err, "/.claude cannot be written"), f"away {action}, no ~/.claude: {code} {out} {err}")
+    code, out, err = run(repo, "away", "on", env=bare)
+    check(one_line(code, out, err, "/.claude cannot be written"), f"away on, no ~/.claude: {code} {out} {err}")
+    code, out, err = run(repo, "away", "off", env=bare)
+    check(code == 0 and "Away is off" in out, f"away off, no ~/.claude: nothing to change, nothing written: {code} {out} {err}")
     # a lock file that cannot be opened (a folder in its place): one line naming it, the settings untouched
     local.unlink()
-    (repo / ".claude" / "kit-settings.lock").unlink()
-    (repo / ".claude" / "kit-settings.lock").mkdir()
+    lock = lock_of(local, tmp)
+    lock.unlink()
+    lock.mkdir()
     code, out, err = run(repo, "sandbox", "on", env=env)
-    check(one_line(code, out, err, "kit-settings.lock cannot be written") and not local.exists(), f"sandbox on, lock cannot be opened: {code} {out} {err}")
+    check(one_line(code, out, err, f"{lock} cannot be written") and not local.exists(),
+          f"sandbox on, lock cannot be opened: {code} {out} {err}")
+    lock.rmdir()
+    # a temp state folder that cannot be made (a file in its place): the same one line
+    odd = tmp / "oddtmp"
+    odd.mkdir()
+    (odd / "claude-kit").write_text("")
+    code, out, err = run(repo, "sandbox", "on", env=dict(env, TMPDIR=str(odd)))
+    check(one_line(code, out, err, "claude-kit cannot be written") and not local.exists(),
+          f"sandbox on, temp state folder cannot be made: {code} {out} {err}")
+    # nothing is written beside the files for locking: not in the project, not in the config dir
+    check(not list(cfg.glob("*.lock")) and not list((repo / ".claude").glob("*.lock")), "no lock beside the settings")
+
+
+def lock_place_checks(tmp, check):
+    """sandbox on leaves the checkout clean, so an overnight run starts after it; a symlinked
+    settings file leaves nothing new in its target's folder; a lock an earlier version left beside
+    a settings file goes when the kit next writes that file."""
+    repo = tmp / "clean"
+    (repo / ".claude").mkdir(parents=True)
+    git = ["git", "-C", str(repo), "-c", "user.email=a@b.c", "-c", "user.name=A"]
+    subprocess.run(git + ["init", "-q", "-b", "main"], check=True)
+    (repo / ".gitignore").write_text(".claude/settings.local.json\n")
+    (repo / ".claude" / "kit.json").write_text(json.dumps({"check": "true"}))
+    (repo / "f").write_text("x\n")
+    subprocess.run(git + ["add", "-A"], check=True)
+    subprocess.run(git + ["commit", "-qm", "i"], check=True)
+    cfg = tmp / "cfg2"
+    cfg.mkdir()
+    env = dict(os.environ, HOME=str(tmp / "home2"), CLAUDE_CONFIG_DIR=str(cfg), TMPDIR=str(tmp / "t"))
+    env.pop("KIT_HEADLESS", None)
+    (tmp / "t").mkdir()
+    code, out, err = run(repo, "sandbox", "on", env=env)
+    status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--ignored"], capture_output=True, text=True).stdout
+    check(code == 0 and status.strip() == "!! .claude/settings.local.json", f"git status after sandbox on: {status!r} {out} {err}")
+    overnight = SCRIPTS.parent.parent / "skills" / "overnight" / "scripts" / "overnight.py"
+    got = subprocess.run([sys.executable, str(overnight), "tidy the readme", "--dry-run"], cwd=str(repo),
+                         capture_output=True, text=True, timeout=60, env=env)
+    check(got.returncode == 0 and "not clean" not in got.stdout + got.stderr,
+          f"overnight --dry-run starts after sandbox on: {got.returncode} {got.stdout[-300:]} {got.stderr[-300:]}")
+
+    # symlinked settings.local.json and settings.json kept in a dotfiles folder: nothing new beside them
+    dot = tmp / "dot2"
+    dot.mkdir()
+    (dot / "local.json").write_text("{}")
+    (dot / "settings.json").write_text("{}")
+    local = repo / ".claude" / "settings.local.json"
+    local.unlink()
+    local.symlink_to(dot / "local.json")
+    (cfg / "settings.json").symlink_to(dot / "settings.json")
+    code, out, _ = run(repo, "sandbox", "on", env=env)
+    check(code == 0, f"sandbox on through the link: {out}")
+    for action in ("on", "off"):
+        code, out, _ = run(repo, "away", action, env=env)
+        check(code == 0, f"away {action} through the link: {out}")
+    left = sorted(p.name for p in dot.iterdir())
+    check(set(left) <= {"local.json", "settings.json", "settings.json.kit-away-backup"} and "local.json" in left,
+          f"only the targets (and away's own backup) in the dotfiles folder: {left}")
+
+    # a kit-settings.lock left beside a file by an earlier version goes at the next write of it
+    local.unlink()
+    for folder in (repo / ".claude", dot):
+        (folder / "kit-settings.lock").write_text("")
+    local.symlink_to(dot / "local.json")
+    (dot / "local.json").write_text("{}")
+    code, out, _ = run(repo, "sandbox", "on", env=env)
+    check(code == 0 and not (repo / ".claude" / "kit-settings.lock").exists() and not (dot / "kit-settings.lock").exists(),
+          f"the old lock beside the file and beside its target is removed: {out}")
 
 
 def main():
@@ -678,6 +754,14 @@ def main():
         check(out.startswith("UNATTENDED: push=ask rebase=ask") and "does not parse" in out,
               f"a settings file that does not parse keeps it at ask: {out}")
         user.unlink()
+        # a home that is a file: settings.json could not be read, which is not the same as not parsing
+        homefile = home.parent / "homefile"
+        homefile.write_text("")
+        odd = {k: v for k, v in env.items() if k != "CLAUDE_CONFIG_DIR"}
+        code, out, err = run(repo, "unattended", "push=allow", env=dict(odd, HOME=str(homefile)))
+        note = [line for line in out.splitlines() if line.startswith("push:")]
+        check(code == 0 and "Traceback" not in out + err and len(note) == 1 and "could not be read" in note[0]
+              and "does not parse" not in out, f"an unusable home says settings.json could not be read: {out} {err}")
         check(settings.read_text() == local_rules and json.loads(local.read_text())["lead"]["unattended"]["push"] == "allow",
               "the kit changed no permission settings, and the owner's saved answer stands")
         # the forms the kit prescribes count: an ask rule on just --force-with-lease or --delete-branch blocks the step
@@ -815,6 +899,9 @@ def main():
         away_checks(Path(os.path.realpath(tmp)), check)
     with tempfile.TemporaryDirectory() as tmp:
         lock_checks(Path(os.path.realpath(tmp)), check)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        lock_place_checks(Path(os.path.realpath(tmp)), check)
 
     with tempfile.TemporaryDirectory() as tmp:
         fresh_project_checks(Path(os.path.realpath(tmp)), check)

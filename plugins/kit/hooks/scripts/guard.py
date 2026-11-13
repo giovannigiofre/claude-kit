@@ -30,8 +30,8 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
   owner-settings   from a subagent: the kit's items.py commands that change the owner's settings
                    (`away` and `sandbox` with on or off, `unattended` with any argument), and
                    `machine_setup.py --apply|--decline`, `migrate_state.py undo` and `migrate
-                   --again|--force`; found by the script's real path, and on the text in any
-                   spelling (a shell function, a variable); `away status`, `sandbox status`, a
+                   --again|--force`; judged on what a simple command runs (directly, or a
+                   shell function or variable bound to it), never on mentioned text; `away status`, `sandbox status`, a
                    bare `unattended`, a bare `migrate` and `status` only read
   discard-work     git reset --hard, checkout/restore of the whole tree, clean, stash drop/clear
                    while there are uncommitted changes; git clean -x/-X always
@@ -854,78 +854,119 @@ def check_gh(argv, agent):
     return None
 
 
-OWNER_SUBS = {"away", "sandbox", "unattended"}
+# The owner's commands: they change his settings or the kit's state, and the coordinator runs them
+# at his word, never a thread. A segment is one when it RUNS one of these scripts with these words as
+# its own arguments: directly (`python3 .../items.py away on`, `python3 -m items away on`, the path
+# alone), or through a shell function or a variable bound in the same command to a command that runs
+# it (`I(){ python3 .../items.py "$@"; }; I away on`, `I="python3 .../items.py"; $I away on`).
+# Each simple command is judged on its own, so a commit message, a PR body, a grep pattern or words
+# spread over a pipeline never match. Deliberate evasions (a word in a variable, xargs, a script fed
+# to sh, an interpreter importing kitlib) are left to Claude Code's permission layer.
+OWNER_SCRIPTS = ("items", "machine_setup", "migrate_state")
+FUNCTION_DEF = re.compile(r"(?:^|(?<=[\s;&|(){}]))(?:function\s+([A-Za-z_][\w-]*)\s*(?:\(\s*\))?|([A-Za-z_][\w-]*)\s*\(\s*\))\s*\{")
+CALLED = re.compile(r"\$\{?([A-Za-z_]\w*)\}?")
 
 
-def owner_settings(argv, cwd):
-    """`python3 <kit>/hooks/scripts/items.py away on`: the items.py command that changes the
-    owner's settings (away or sandbox with an action other than status, unattended with any
-    argument), else None. The script counts as the kit's when its real path is inside this
-    plugin or beside a kitlib.py (another installed copy), or when its path is only known at run
-    time and its name is items.py."""
-    if not argv or not re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(argv[0]).name):
-        return None
-    args = list(argv[1:])
-    while args and args[0].startswith("-"):
-        if args[0] in ("-c", "-m"):
-            return None
-        args = args[2:] if args[0] in ("-X", "-W") else args[1:]
-    if len(args) < 2 or not args[0].endswith("items.py"):
-        return None
-    path = expand(args[0], cwd)
-    if path is not UNKNOWN:
-        real = Path(os.path.realpath(path))
-        if real.name != "items.py" or not (PLUGIN in real.parents or (real.parent / "kitlib.py").exists()):
-            return None
-    sub, rest = args[1], args[2:]
-    if sub in ("away", "sandbox") and rest not in ([], ["status"]):
-        return f"items.py {sub} {' '.join(rest)}"
-    if sub == "unattended" and rest:
-        return f"items.py unattended {' '.join(rest)}"
+def owner_words(script, args):
+    """The owner words of `script` (items, machine_setup, migrate_state) in `args`, or None."""
+    if script == "items" and len(args) >= 2 and args[0] in ("away", "sandbox") and args[1] in ("on", "off"):
+        return args[:2]
+    if script == "items" and args[:1] == ["unattended"] and any(re.fullmatch(r"[A-Za-z_][\w-]*=.*", a) for a in args[1:]):
+        return args
+    if script == "machine_setup" and args[:1] in (["--apply"], ["--decline"]):
+        return args[:1]
+    if script == "migrate_state" and args[:1] == ["undo"]:
+        return args[:1]
+    if script == "migrate_state" and args[:1] == ["migrate"] and {"--again", "--force"} & set(args[1:]):
+        return ["migrate"] + [a for a in args[1:] if a in ("--again", "--force")]
     return None
 
 
-# From a subagent the owner commands are refused on the text as well, whatever the spelling: the lead
-# skill runs items.py through a shell function (`I(){ python3 .../items.py "$@"; }; I away on`), and
-# a variable (`I="python3 .../items.py"; $I away on`) hides it as well, so argv alone cannot see
-# them. A command that names one of these scripts anywhere and whose code holds its owner words is
-# refused; a thread loses nothing it should be doing by that over-matching.
-OWNER_SCRIPT = re.compile(r"(?<![\w.-])(items|machine_setup|migrate_state)\.py(?![\w.-])")
-OWNER_WORDS = {
-    "items": re.compile(r"(?<![\w-])(?:(?:away|sandbox)\s+(?:on|off)|unattended\s+[A-Za-z_][\w-]*=\S*)(?![\w-])"),
-    "machine_setup": re.compile(r"(?<![\w-])--(?:apply|decline)(?![\w-])"),
-    "migrate_state": re.compile(r"(?<![\w-])(?:undo|migrate(?![\w.-])[^\n;&|]*?\s--(?:again|force))(?![\w-])"),
-}
-
-
-def owner_text(command):
-    """`items.py away on` (or another owner command) when the shell text names one of the kit's
-    owner scripts and its code holds that script's owner words, else None. Code here is the text
-    without comments and here-document bodies, with quoted text that holds a space and no script
-    name dropped (a commit message, a log line), and other quotes removed (`I 'away' on`)."""
-    names = {m.group(1) for m in OWNER_SCRIPT.finditer(command)}
-    if not names:
+def runs_script(argv):
+    """(script, its arguments) when argv runs one of the owner scripts, else None."""
+    argv = strip_wrappers(argv)
+    if not argv:
         return None
+    args = list(argv)
+    if re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(args[0]).name):
+        args = args[1:]
+        while args and args[0].startswith("-") and args[0] != "-m":
+            if args[0] == "-c":
+                return None
+            args = args[2:] if args[0] in ("-X", "-W") else args[1:]
+        if args[:1] == ["-m"]:
+            return (args[1], args[2:]) if len(args) > 1 and args[1] in OWNER_SCRIPTS else None
+    name = Path(args[0]).name if args else ""
+    if name.endswith(".py") and name[:-3] in OWNER_SCRIPTS:
+        return name[:-3], args[1:]
+    return None
+
+
+def function_bodies(command):
+    """{name: body} of the shell functions the command defines (`I(){ ...; }`, `function I { ...; }`)."""
     code = "\n".join(logical_lines(command.replace("\\\n", " ")))
     mask = quote_mask(code)
-    out, i = [], 0
-    while i < len(code):
-        if mask[i] in "'\"":
-            j = i
-            while j < len(code) and mask[j] == mask[i]:
-                j += 1
-            span = code[i:j]
-            if not (re.search(r"\s", span) and not OWNER_SCRIPT.search(span)):
-                out.append(span)
-            i = j
+    out = {}
+    for m in FUNCTION_DEF.finditer(code):
+        if mask[m.start()] != " ":
             continue
-        out.append(code[i])
-        i += 1
-    visible = re.sub(r"[\'\"]", "", "".join(out))
-    for name in sorted(names):
-        m = OWNER_WORDS[name].search(visible)
-        if m:
-            return f"{name}.py {' '.join(m.group(0).split())}"
+        depth, i = 1, m.end()
+        while i < len(code) and depth:
+            if mask[i] == " ":
+                depth += {"{": 1, "}": -1}.get(code[i], 0)
+            i += 1
+        out[m.group(1) or m.group(2)] = code[m.end():i - 1]
+    return out
+
+
+def owner_run(command, cwd=None, bound=None):
+    """`items.py away on` (or another owner command) when a simple command of `command` runs it,
+    else None. `bound` carries the names bound so far ({name: argv prefix}) into an eval."""
+    bound = dict(bound or {})
+    for name, body in function_bodies(command).items():
+        for seg in segments(body):
+            if runs_script(seg["argv"]):
+                argv = seg["argv"]
+                cut = next((i for i, a in enumerate(argv) if a in ("$@", "$*", "${@}", "${*}")), len(argv))
+                bound[name] = argv[:cut]
+                break
+    env = {}
+    for seg in segments(command):
+        if seg.get("assigns"):
+            for var, value in (seg.get("env") or {}).items():
+                env[var] = value
+                try:
+                    words = shlex.split(value)
+                except ValueError:
+                    words = value.split()
+                if runs_script(words):
+                    bound[var] = words
+                else:
+                    bound.pop(var, None)
+            continue
+        argv = list(seg["argv"])
+        if not argv:
+            continue
+        call = CALLED.fullmatch(argv[0])
+        if argv[0] in bound or (call and call.group(1) in bound):
+            argv = bound[argv[0] if argv[0] in bound else call.group(1)] + argv[1:]
+        argv = [with_vars(a, env) for a in argv]
+        if argv and " " in argv[0]:  # a command held in a variable: the shell splits it
+            argv = argv[0].split() + argv[1:]
+        name = Path(argv[0]).name if argv else ""
+        if name == "eval":
+            found = owner_run(" ".join(argv[1:]), cwd, bound)
+            if found:
+                return found
+            continue
+        runs = [argv]
+        if name == "find":
+            runs = [argv[i + 1:] for i, a in enumerate(argv) if a in ("-exec", "-execdir", "-ok", "-okdir")]
+        for run in runs:
+            found = runs_script(run)
+            words = owner_words(*found) if found else None
+            if words:
+                return f"{found[0]}.py {' '.join(words)}"
     return None
 
 
@@ -1308,7 +1349,7 @@ def check_bash(command, cwd, root, opts, agent=False):
                     return (decision, "project", f"{reason} (kit.json guard.{key})")
             except re.error:
                 continue
-    owned = owner_text(command) if agent else None
+    owned = owner_run(command, cwd) if agent else None
     if owned:
         return ("deny", "owner-settings", owned)
     if re.search(r":\(\)\s*\{\s*:\|:&\s*\};\s*:", command):
@@ -1375,8 +1416,7 @@ def check_bash(command, cwd, root, opts, agent=False):
         elif name == "gh":
             checks.append(check_gh(argv, agent))
         elif name in INTERPRETERS or re.fullmatch(r"python3\.\d+", name):
-            owned = owner_settings(argv, cwd) if agent else None
-            checks.append(("deny", "owner-settings", owned) if owned else check_interpreter(argv))
+            checks.append(check_interpreter(argv))
         else:
             checks.append(check_system(argv, cwd, root))
         for found in checks:
