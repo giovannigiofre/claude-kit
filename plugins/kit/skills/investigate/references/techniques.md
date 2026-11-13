@@ -31,6 +31,13 @@ eliminate them one at a time. With log exports, `compact_logs.py bad.json --diff
 lists the signatures that appear only in the failing run, and the steps of the working run that
 never happened in the failing one.
 
+## Reading a result
+A tool or API result answers three questions, in this order: did the transport succeed (HTTP
+status, exit code, no timeout); did the operation itself succeed (its own status or error field,
+which can say "failed" inside a 200); does the payload have the shape the caller expects (fields,
+types, counts). A payload being present is not success: an error object, an empty list or a
+partial page all arrive as a body. Check all three before trusting a value from it.
+
 ## Boundary instrumentation (multi-component systems)
 For each boundary (UI → API → service → DB, job step → external API, CI step → script):
 - log what enters (IDs, sizes, types; never raw secrets or PII)
