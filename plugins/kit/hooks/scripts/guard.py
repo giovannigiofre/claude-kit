@@ -8,7 +8,8 @@ system. It reads shell text, so it is a guardrail, not a boundary: an obfuscated
 slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety profile).
 
   rm-outside       recursive delete (rm -r, find -delete/-exec rm, rmtree in python -c ...) of
-                   /, the home folder, the repo root, .git, or anything outside the repo except
+                   /, the home folder, the repo root, .git, the main checkout's .kit, .kit/lead
+                   or .kit/agent-memory (the board and every item), or anything outside the repo except
                    its other linked worktrees, the temp folders and the cache folders; after
                    `cd <dir> &&` into another work tree, that repository counts as inside too
                    (its root and .git do not). A variable set once by a plain NAME=value
@@ -609,11 +610,26 @@ def delete_target(word, cwd, repos):
             return ("deny", f"delete inside .git ('{word}')")
         if any(t == r or under(r, t) for r in roots):
             return ("deny", f"delete of the repository root ('{word}')")
+        if t in kit_state_roots(repos):
+            return ("deny", f"delete of the kit's state folder ('{word}'): the board, items and memory of every thread")
     # what is allowed is decided on the real path, so a symlink cannot lead the delete elsewhere
     if any(under(real, c) for c in tilde(CACHE_PATHS)) or any(under(real, r) for r in roots) \
             or any(under(real, t) for t in temp_roots()) or any(in_sibling_worktree(real, r) for r in repos):
         return None
     return ("deny", f"delete outside the repository ('{word}' -> {real})")
+
+
+def kit_state_roots(repos):
+    """The main checkout's `.kit`, `.kit/lead` and `.kit/agent-memory`: once the state left the
+    protected `.claude/`, nothing but this stops a thread's `rm -rf .kit` from taking every item
+    with it, from a worktree as well. An item's own folders (its `out/`) stay deletable."""
+    found = set()
+    for r in repos:
+        main = kitlib.main_checkout(r)
+        if main:
+            for base in {Path(main), Path(os.path.realpath(main))}:
+                found.update(base / kitlib.STATE_DIR / rel for rel in ("", "lead", "agent-memory"))
+    return {Path(os.path.normpath(p)) for p in found}
 
 
 def in_sibling_worktree(real, root):
@@ -705,7 +721,8 @@ def check_find(argv, cwd, repos):
         if raw is not UNKNOWN:
             real = resolved(raw)
             whole = reaches_git(args)
-            if any(under(real, r) and not (real == r and whole) for r in roots) and ".git" not in real.parts:
+            if any(under(real, r) and not (real == r and whole) for r in roots) and ".git" not in real.parts \
+                    and not (whole and real in kit_state_roots(repos)):
                 continue  # find deletes what matches below the path; with no name or path test, all of .git
         found = delete_target(word, cwd, repos)
         if found:
