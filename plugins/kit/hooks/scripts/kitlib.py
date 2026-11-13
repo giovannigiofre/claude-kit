@@ -171,6 +171,33 @@ def save_unattended(cwd, changes):
 # comment, a progress file, a diary, a published page): the coordinator finds them in the repo's
 # own guidance once, confirms them with the owner and saves them in the same kit.local.json
 # (`{"lead": {"records": ["...", ...]}}`); `items.py done` prints them as the item's checklist.
+def lead_local(cwd, key):
+    """kit.local.json `lead.<key>` of the repo's main checkout, or None."""
+    value, _ = read_json(Path(main_checkout(cwd) or cwd) / LOCAL_CONFIG)
+    lead = (value or {}).get("lead")
+    return lead.get(key) if isinstance(lead, dict) else None
+
+
+def save_lead_local(cwd, key, value):
+    """Set kit.local.json `lead.<key>` beside the other keys (None removes it); a file that does
+    not parse is never rewritten (ValueError)."""
+    path = Path(main_checkout(cwd) or cwd) / LOCAL_CONFIG
+    data, ok = read_json(path)
+    if not ok:
+        raise ValueError(f"{path} is not a JSON object; fix or remove it first")
+    lead = dict(data.get("lead")) if isinstance(data.get("lead"), dict) else {}
+    if value is None:
+        if key not in lead:
+            return
+        lead.pop(key)
+    else:
+        lead[key] = value
+    data["lead"] = lead
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    exclude(path.parent.parent, LOCAL_CONFIG)
+
+
 def records(cwd):
     """(places, path): the saved record places, [] when not set or unreadable."""
     path = Path(main_checkout(cwd) or cwd) / LOCAL_CONFIG

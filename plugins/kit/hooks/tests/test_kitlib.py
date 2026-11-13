@@ -172,6 +172,20 @@ def main():
         check(kitlib.board_file(repo, absolute) == repo / ".kit" / "lead" / "sub" / "b.md", "an absolute path inside it")
         check(kitlib.board_file(repo, {"lead": {"board": ".claude/boards/b.md"}}) == repo / ".claude" / "boards" / "b.md",
               "a path elsewhere in .claude stays as written")
+        # lead.state in kit.local.json, the helpers undo uses: set, read from a worktree, removed
+        check(kitlib.lead_local(tree, "state") is None, "nothing set")
+        kitlib.save_lead_local(tree, "state", ".claude")
+        check(kitlib.lead_local(repo, "state") == ".claude", "set from a worktree, read in the main checkout")
+        kitlib.save_lead_local(repo, "state", None)
+        check(kitlib.lead_local(repo, "state") is None, "removed")
+        (repo / ".claude" / "kit.local.json").write_text("{broken")
+        try:
+            kitlib.save_lead_local(repo, "state", ".claude")
+            check(False, "an unparseable kit.local.json is never rewritten")
+        except ValueError:
+            pass
+        check((repo / ".claude" / "kit.local.json").read_text() == "{broken", "left as it was")
+        (repo / ".claude" / "kit.local.json").unlink()
         (repo / ".claude" / "evidence").mkdir()
         check(kitlib.state_dir_name(repo) == ".claude", "legacy state keeps the project in .claude")
         check(kitlib.state_entry(tree, "lead") == repo / ".claude" / "lead", "a new entry joins the old layout")
