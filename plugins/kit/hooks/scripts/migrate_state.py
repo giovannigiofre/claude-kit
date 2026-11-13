@@ -381,6 +381,30 @@ def undo(main, dry=False, force=False, out=print):
     return 0
 
 
+def auto(root):
+    """session_start.py's call: move the state when there is some under .claude/ and nothing is
+    at work. Returns the lines to print: one on success, one with the reason when it waits, and
+    the `git mv` for each tracked entry (those are never moved for the owner)."""
+    main = Path(kitlib.main_checkout(root) or root)
+    moves, skipped, conflicts = plan(main, LEGACY, STATE, staged=True)
+    lines = [f"kit: {src} was not moved to {STATE}/: {reason}" for src, reason in skipped]
+    if not moves and not conflicts and not ((main / STAGING).is_dir() and not (main / STATE).exists()):
+        return lines
+    try:
+        with Lock(main):
+            migrate(main, out=lambda _line: None)
+    except Refused as exc:
+        why = "; ".join(line.strip().lstrip("- ") for line in exc.lines[1:]) or exc.lines[0]
+        return lines + [f"kit: the kit's state stays in {LEGACY}/ for now ({why}); it moves to {STATE}/ "
+                        f"at a session start when nothing is at work, or: python3 {Path(__file__).resolve()} migrate"]
+    except OSError as exc:
+        return lines + [f"kit: moving the kit's state to {STATE}/ failed ({exc}); it stays in {LEGACY}/, which still works"]
+    record = read_manifest(main / STATE) or {"runs": [{}]}
+    names = sorted({d["name"] for d in record["runs"][-1].get("moved", [])})
+    return lines + [f"kit: moved this project's kit state ({', '.join(names)}) from {LEGACY}/ to {STATE}/, out of the "
+                    f"folder Claude Code protects; undo: python3 {Path(__file__).resolve()} undo --root {main}"]
+
+
 def status(main, out=print):
     main = Path(main)
     out(f"main checkout: {main}")
