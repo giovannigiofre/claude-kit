@@ -406,6 +406,12 @@ file (below). Nothing else is touched: the guard has already judged the
 command, and the permission system decides the rest. `/fewer-permission-prompts` (built in)
 writes a broader read-only allowlist to project settings if you want one.
 
+`.claude` is one of Claude Code's protected paths: a write inside it (mkdir, a redirection, Write, Edit) asks
+the owner in `default` and `acceptEdits`, goes to the classifier in `auto`, and no allow rule pre-approves it
+(only `.claude/worktrees/` is exempt). The kit keeps the board and the items under `.claude/lead/`, so its own
+scripts write there (they run unasked, above) and a thread is told at start-up, when the project has items, to
+log with `items.py log` as a command on its own and never to write in the main checkout's `.claude` by hand.
+
 An `ask` rule wins over every allow rule and over auto mode, in a compound command too. So when a rule in any
 settings scope (or the guard's `askCommands`) asks before a push, a rebase or a merge as the kit runs them, the
 start-up lines name the rules and their file (`kitlib.asking_rules`), tell Claude to run each such step once

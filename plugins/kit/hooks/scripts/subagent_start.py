@@ -140,6 +140,22 @@ def gate_line(cwd):
             f"as evidence for the PR. Work in another repo: these lines do not apply there.")
 
 
+def item_line(cwd):
+    """How a thread records an event on its item without a prompt. Claude Code asks the owner
+    before any write inside a `.claude` folder (a protected path: mkdir, a redirection, Write,
+    Edit; no allow rule pre-approves it), and a thread that logged by hand with
+    `mkdir -p <main>/.claude/lead/items/<id>/out; echo "- ..." >> .../LOG.md` stopped on the
+    owner's phone (2026-11-13). The kit's own script by its real path runs unasked (permission.py)."""
+    main = enabled(cwd)
+    if not main or not (Path(main) / ".claude" / "lead" / "items").is_dir():  # no items, nothing to log
+        return ""
+    script = Path(__file__).resolve().parent / "items.py"
+    return (f"kit: Claude Code asks the owner before any write inside {main}/.claude (mkdir, a redirection, "
+            f"Write, Edit) and you wait until they answer: never write there yourself. Log an event on your item "
+            f"with `python3 \"{script}\" log <id> <status> \"<note>\"` as a command on its own (no ; && |), "
+            f"which asks nothing. Files you produce go in your worktree or the scratchpad.")
+
+
 def compose_within(text, budget):
     """The fallback reading cut to the budget left after the gate line (whole lines)."""
     if len(text) <= budget:
@@ -205,8 +221,8 @@ def main():
     try:
         text = ""
         if enabled(cwd):
-            gate = gate_line(cwd)
-            budget = MAX_CHARS - (len(gate) + 1 if gate else 0) - len(str(enabled(cwd)))  # gate line, repo name
+            gate = "\n".join(t for t in (gate_line(cwd), item_line(cwd) if agent == "implementer" else "") if t)
+            budget = MAX_CHARS - (len(gate) + 1 if gate else 0) - len(str(enabled(cwd)))  # the kit's lines, repo name
             try:
                 import lessons as ledger
                 ledger.LOCK_WAIT = 1.0
