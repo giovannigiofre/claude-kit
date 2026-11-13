@@ -24,6 +24,9 @@ The kit lives at the marketplace named `claude-kit` (find its directory with
    - every hook config and the scripts they call, every MCP server, every command that runs a
      process: what runs, when, what it writes where, and whether anything leaves the machine
      (network calls, webhooks, telemetry) and if so whether it is opt-in;
+   - how each MCP server or package it runs is selected: only an exact version or a digest is
+     a pin. A bare name, `@latest` or a Docker tag can point at different code tomorrow, and
+     "pin to whatever is latest today" pins nothing until that version is written down;
    - its always-on text: SessionStart/SubagentStart injections, skill descriptions. Estimate
      the per-session context cost (after a trial install, `claude plugin details <name>` gives
      the real figure).

@@ -26,6 +26,12 @@ benchmark score up, no failing e2e scenario) or ones where the user trusts Claud
 - **Gate:** the command that must pass before a step is committed: `.claude/kit.json` `verify`
   by default, else `check`. Without either, the agent only checks itself; say so. A measurable
   objective deserves a gate that checks the measure.
+- **Boundary:** beside the stop condition and the gate, what must not change to reach them: no
+  test deleted, skipped or weakened, no gate or lint config edited, no expected output
+  rewritten. Put it in the objective, since an unattended agent that cannot reach a target
+  can still reach it by moving the target. A check against an outside reference (a golden
+  sample, an upstream total, a diff against a reference file within a stated tolerance) beats
+  one the worker can edit.
 
 If the objective is vague, use `kit:shape` first.
 
