@@ -49,6 +49,11 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    opens a quoted path) outside <main checkout>/.claude/agent-memory/kit-verifier;
                    quoted text and here-document bodies are data, not writes; checked in every
                    repo, kit.json or not, guard off too, since the verifier is the kit's
+  hook-bypass      a git commit, push, merge, rebase, cherry-pick or am that skips the repository's
+                   hooks: --no-verify, -n on commit and am (on push it is --dry-run, on merge and
+                   rebase --no-stat), -c core.hooksPath=<elsewhere>, HUSKY=0 or HUSKY_SKIP_HOOKS=1
+                   set for it; and git config pointing core.hooksPath away from the repository's
+                   hooks (its current folder or an existing folder in its work tree are its own)
   retry            the same push, rebase or PR merge, as the same command text in the same folder at
                    the same commit, a fourth time within 30 minutes: it is refused and the thread
                    hands the step back; guard.retries = false turns this rule off
@@ -498,6 +503,11 @@ def logical_lines(text, bodies=None):
     return [line for line in lines if line.strip()]
 
 
+def assignments(words):
+    """{NAME: value} of the NAME=value words among `words` (as the shell sees them, quotes removed)."""
+    return {m.group(1): w[m.end():] for w in words if (m := ASSIGN.match(w))}
+
+
 OPENERS, CLOSERS = {"if", "for", "while", "until", "case", "select", "{"}, {"fi", "done", "esac", "}"}
 ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\+?=")
 
@@ -532,9 +542,11 @@ def segments(command, inner=False):
                 argv = strip_wrappers(cur)
                 assigns = [ASSIGN.match(w).group(1) for w in words if ASSIGN.match(w)]
                 if words and (len(assigns) == len(words) or (words[0] == "export" and assigns)):
-                    out.append({"argv": argv, "piped_from": None, "assigns": assigns, "plain": plain})
+                    out.append({"argv": argv, "piped_from": None, "assigns": assigns, "plain": plain,
+                                "env": assignments(words)})
                 elif argv:
-                    out.append({"argv": argv, "piped_from": pipe_from, "plain": plain})
+                    out.append({"argv": argv, "piped_from": pipe_from, "plain": plain,
+                                "env": assignments(cur[:len(cur) - len(argv)])})
                 depth += tok.count("(") - tok.count(")")
                 pipe_from = argv if tok == "|" else None
                 prev, cur = tok, []
@@ -771,6 +783,135 @@ def check_git(argv, cwd, opts):
         return ("deny", "discard-work", f"git {sub} of the whole tree would discard uncommitted changes")
     if sub == "stash" and rest[:1] in (["drop"], ["clear"]):
         return ("deny", "discard-work", f"git stash {rest[0]} deletes stashed work")
+    return None
+
+
+HOOK_SUBS = {"commit", "push", "merge", "rebase", "cherry-pick", "am"}
+# -n is --no-verify only on commit and am; on push it is --dry-run, on merge and rebase --no-stat,
+# on cherry-pick --no-commit (git <sub> -h, git 2.43)
+SHORT_NO_VERIFY = {"commit", "am"}
+# short options that take a value: the rest of the cluster (-mfix) or the next word is that value
+SHORT_VALUES = {"commit": "mFcCt", "push": "o", "merge": "mFsX", "rebase": "CsxX", "cherry-pick": "mX",
+                "am": "Cp"}
+SHORT_OPTIONAL = {"commit": "Su", "merge": "S", "rebase": "Sr", "cherry-pick": "S", "am": "S"}  # value only attached
+LONG_VALUES = {"--message", "--file", "--reedit-message", "--reuse-message", "--trailer", "--template", "--author",
+               "--date", "--cleanup", "--fixup", "--squash", "--pathspec-from-file", "--strategy",
+               "--strategy-option", "--into-name", "--exec", "--onto", "--push-option", "--repo", "--receive-pack",
+               "--mainline", "--quoted-cr", "--directory", "--exclude", "--include", "--patch-format",
+               "--resolvemsg"}
+CONFIG_VALUE_FLAGS = {"-f", "--file", "--blob", "--type", "--default", "--comment", "--value"}
+HOOKS_FIX = ("The hooks are the repository's own checks: skipping one hides what it found instead of fixing "
+             "it. Run the step without the bypass and fix what the hook reports; if you cannot, hand the step "
+             "back with the hook's output")
+
+
+def skips_verify(sub, rest):
+    """Whether a git commit/push/merge/rebase/cherry-pick/am argument list asks git to skip the hooks:
+    --no-verify (or an abbreviation git accepts), or -n alone or in a cluster where -n means that.
+    Option values (`-m "--no-verify"`, `-mn`) are text, not flags; the last of --verify/--no-verify wins."""
+    skip, i = False, 0
+    while i < len(rest):
+        a = rest[i]
+        i += 1
+        if a == "--":
+            break
+        if a.startswith("--"):
+            name = a.split("=", 1)[0]
+            if "=" not in a and name in LONG_VALUES:
+                i += 1
+            elif len(name) >= len("--no-ve") and "--no-verify".startswith(name):
+                skip = True
+            elif name == "--verify":
+                skip = False
+        elif a.startswith("-") and len(a) > 1:
+            for k, ch in enumerate(a[1:]):
+                if ch in SHORT_VALUES.get(sub, ""):
+                    i += k == len(a) - 2  # nothing attached: the next word is the value
+                    break
+                if ch in SHORT_OPTIONAL.get(sub, ""):
+                    break
+                if ch == "n" and sub in SHORT_NO_VERIFY:
+                    skip = True
+    return skip
+
+
+def hooks_elsewhere(cwd, value):
+    """Whether core.hooksPath = `value` would run hooks from another folder than the repository's
+    own: its current hooks folder, or an existing folder in its work tree (outside .git), as husky's
+    .husky or a .githooks folder are. An unset value means git's default, <common dir>/hooks."""
+    current = git(cwd, "rev-parse", "--path-format=absolute", "--git-path", "hooks")
+    if not current:
+        return False  # not a repository: no hooks to skip
+    if value is None:
+        common = git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        new = os.path.join(common, "hooks") if common else ""
+    elif "$" in value or "`" in value:
+        return True
+    else:
+        new = git(cwd, "-c", f"core.hooksPath={value}", "rev-parse", "--path-format=absolute", "--git-path", "hooks")
+    if not new:
+        return True
+    new, current = os.path.realpath(new), os.path.realpath(current)
+    if new == current:
+        return False
+    top = git(cwd, "rev-parse", "--show-toplevel")
+    inside = top and under(new, os.path.realpath(top)) and ".git" not in Path(new).relative_to(os.path.realpath(top)).parts
+    return not (inside and os.path.isdir(new) and value is not None)
+
+
+def check_hooks(argv, cwd, env):
+    """hook-bypass: a git step that skips the repository's hooks (--no-verify, commit's or am's -n,
+    core.hooksPath pointed elsewhere for the command or in the config, HUSKY=0 or HUSKY_SKIP_HOOKS=1).
+    A thread that meets a red pre-commit or pre-push hook can turn it green by not running it, and
+    the problem the hook found then reaches the branch unseen."""
+    args, configs = argv[1:], []
+    while args and args[0].startswith("-"):
+        a = args[0]
+        if a in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path") and len(args) > 1:
+            if a == "-C":
+                target = expand(args[1], cwd)
+                cwd = cwd if target is UNKNOWN else target
+            elif a == "-c":
+                configs.append(args[1])
+            args = args[2:]
+            continue
+        if a.startswith("--config-env="):  # the value comes from an environment variable: unknown here
+            key = a.split("=", 1)[1].split("=", 1)[0]
+            configs.append(key + "=$" + key)
+        args = args[1:]
+    if not args:
+        return None
+    sub, rest = args[0], args[1:]
+    if sub == "config":
+        unset, words, i = False, [], 0
+        while i < len(rest):
+            a = rest[i]
+            i += 1
+            if a in ("--unset", "--unset-all"):
+                unset = True
+            elif a in CONFIG_VALUE_FLAGS:
+                i += 1
+            elif not a.startswith("-"):
+                words.append(a)
+        if words[:1] in (["set"], ["unset"]):
+            unset = unset or words[0] == "unset"
+            words = words[1:]
+        if words and words[0].lower() == "core.hookspath" and (unset or len(words) >= 2):
+            if hooks_elsewhere(cwd, None if unset else words[1]):
+                return ("deny", "hook-bypass", "git config points core.hooksPath away from the repository's hooks")
+        return None
+    if sub not in HOOK_SUBS:
+        return None
+    if skips_verify(sub, rest):
+        return ("deny", "hook-bypass", f"git {sub} with --no-verify" + (" (-n)" if sub in SHORT_NO_VERIFY else "")
+                + " skips the repository's hooks")
+    for item in configs:
+        key, _, value = item.partition("=")
+        if key.lower() == "core.hookspath" and hooks_elsewhere(cwd, value):
+            return ("deny", "hook-bypass", f"git -c core.hooksPath={value} {sub} runs no hooks of this repository")
+    if env.get("HUSKY") == "0" or env.get("HUSKY_SKIP_HOOKS", "").lower() in ("1", "true"):
+        name = "HUSKY=0" if env.get("HUSKY") == "0" else "HUSKY_SKIP_HOOKS"
+        return ("deny", "hook-bypass", f"{name} makes git {sub} skip the repository's husky hooks")
     return None
 
 
@@ -1028,7 +1169,7 @@ def check_bash(command, cwd, root, opts):
         return ("deny", "system", "fork bomb")
     if re.search(r">\s*/dev/(sd|disk|nvme|hd)", command):
         return ("deny", "system", "write to a disk device")
-    asked, env, repos, lost_cwd = None, {}, [root], False
+    asked, env, repos, lost_cwd, shell_env = None, {}, [root], False, {}
     code = "\n".join(logical_lines(command.replace("\\\n", " ")))  # no comments, no here-document bodies
     mask = quote_mask(code)
     # a $NAME escaped or in single quotes stays as written: the shell does not put the value in
@@ -1038,6 +1179,8 @@ def check_bash(command, cwd, root, opts):
     unseen = any(seg["argv"] and (seg["argv"][0] == "." or Path(seg["argv"][0]).name in ("eval", "source"))
                  for seg in segs)
     for seg in segs:
+        if seg.get("assigns"):
+            shell_env.update(seg.get("env") or {})  # `export HUSKY=0; git commit`: as the commands after it see it
         for var in seg.get("assigns") or []:
             value = assigned_value(code, var, env) if seg["plain"] and not unseen else None
             if value is not None:
@@ -1082,6 +1225,7 @@ def check_bash(command, cwd, root, opts):
             checks.append(found)
         elif name == "git":
             checks.append(check_git(argv, cwd, opts))
+            checks.append(check_hooks(argv, cwd, {**shell_env, **(seg.get("env") or {})}))
         elif name in INTERPRETERS:
             checks.append(check_interpreter(argv))
         else:
@@ -1428,6 +1572,11 @@ def main():
         print(f"kit guard (retry): {why}; another try will go the same way. Stop retrying: say what the last "
               "attempt printed and hand the step back (`needs push`, `needs rebase`, `needs merge`), or change "
               "what is wrong first. A new commit or a different command is a fresh start.", file=sys.stderr)
+        return 2
+    if rule == "hook-bypass":
+        print(f"kit guard (hook-bypass): {why}. {HOOKS_FIX}. Blocked whatever the "
+              "permission mode; a project can allow a specific command with guard.allowCommands in "
+              ".claude/kit.json.", file=sys.stderr)
         return 2
     if rule == "wait":
         print(f"kit guard (wait): {why} holds this turn with no progress and no alarm if it hangs. "

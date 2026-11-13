@@ -550,6 +550,95 @@ def main():
         failed += 1
         print("FAIL guard.retries false turns the rule off")
 
+    # hook-bypass: a step that skips the repository's hooks is refused with the way out; look-alikes pass
+    home, r19 = setup()
+    (r19 / ".husky").mkdir()
+    for command, expect in [
+        ("git commit --no-verify -m fix", "block"),
+        ("git commit -n -m fix", "block"),
+        ("git commit -an", "block"),
+        ("git commit -nm fix", "block"),
+        ("git commit -anm 'fix it'", "block"),
+        ("git commit --no-verif -m fix", "block"),  # git accepts an unambiguous abbreviation
+        ("git -C . commit -qn -m fix", "block"),
+        ("git push --no-verify origin feat/x", "block"),
+        ("git merge --no-verify feat/y", "block"),
+        ("git rebase --no-verify origin/main", "block"),
+        ("git cherry-pick --no-verify abc123", "block"),
+        ("git am -n < patch.mbox", "block"),
+        ("git am --no-verify 0001.patch", "block"),
+        ("git -c core.hooksPath=/dev/null commit -m fix", "block"),
+        ("git -c core.hookspath=/tmp/none push origin feat/x", "block"),
+        ("git config core.hooksPath /dev/null", "block"),
+        ("git config --local core.hooksPath /tmp/empty", "block"),
+        ("git config set core.hooksPath no-such-folder", "block"),
+        ("HUSKY=0 git commit -m fix", "block"),
+        ("env HUSKY=0 git push origin feat/x", "block"),
+        ("export HUSKY=0; git commit -m fix", "block"),
+        ("HUSKY_SKIP_HOOKS=1 git commit -m fix", "block"),
+        ("sh -c 'git commit --no-verify -m fix'", "block"),
+        ("cd sub && git commit --no-verify -m x", "block"),
+        # look-alikes
+        ("git push -n origin feat/x", "allow"),  # -n is --dry-run on push
+        ("git merge -n feat/y", "allow"),  # --no-stat on merge
+        ("git rebase -n origin/main", "allow"),  # --no-stat on rebase
+        ("git cherry-pick -n abc123", "allow"),  # --no-commit on cherry-pick
+        ("git commit -m \"use --no-verify never\"", "allow"),
+        ("git commit -m --no-verify", "allow"),  # the message is the word after -m
+        ("git commit -mn", "allow"),  # the message is "n"
+        ("git commit --message --no-verify", "allow"),
+        ("git commit -F notes.txt -a", "allow"),
+        ("git commit --no-verify --verify -m fix", "allow"),  # the last one wins
+        ("git merge --no-verify-signatures feat/y", "allow"),
+        ("grep -- --no-verify file", "allow"),
+        ("echo 'git commit --no-verify'", "allow"),
+        ("git log --grep=--no-verify", "allow"),
+        ("git config core.hooksPath", "allow"),  # a read
+        ("git config --get core.hooksPath", "allow"),
+        ("git config core.hooksPath .husky", "allow"),  # a hooks folder of the repository itself
+        ("git -c core.hooksPath=.git/hooks commit -m fix", "allow"),  # where they already are
+        ("git config --unset core.hooksPath", "allow"),  # nothing set: the default stays
+        ("HUSKY=1 git commit -m fix", "allow"),
+        ("HUSKY=0 npm test", "allow"),
+    ]:
+        got = verdict(home, r19, command)
+        if got != expect:
+            failed += 1
+            print(f"FAIL hook-bypass {expect}: {command!r} -> {got}")
+    code, err = bash(home, r19, "git commit --no-verify -m fix")
+    if code != 2 or "kit guard (hook-bypass)" not in err or "fix what the hook reports" not in err \
+            or "hand the step back" not in err:
+        failed += 1
+        print(f"FAIL the hook-bypass refusal says what to do instead: {err}")
+    subprocess.run(["git", "-C", str(r19), "config", "core.hooksPath", ".husky"], check=True)
+    for command, expect in [("git config --unset core.hooksPath", "block"),  # back to the empty default
+                            ("git -c core.hooksPath=.git/hooks commit -m fix", "block"),
+                            ("git -c core.hooksPath=.husky commit -m fix", "allow")]:
+        got = verdict(home, r19, command)
+        if got != expect:
+            failed += 1
+            print(f"FAIL hook-bypass with .husky configured, {expect}: {command!r} -> {got}")
+    home, r20 = setup({"guard": {"allowCommands": ["^git commit --no-verify -m wip$"]}})
+    if verdict(home, r20, "git commit --no-verify -m wip") != "allow":
+        failed += 1
+        print("FAIL guard.allowCommands lets a project allow a specific hook bypass")
+
+    # hermetic git: GIT_DIR inherited from a git hook does not turn guard.git to another repository
+    sys.path.insert(0, str(SCRIPT.parent))
+    import guard  # noqa: E402
+    _, other = setup()
+    subprocess.run(["git", "-C", str(other), "checkout", "-q", "main"], check=True)
+    saved = {k: os.environ.get(k) for k in ("GIT_DIR", "GIT_WORK_TREE")}
+    os.environ.update(GIT_DIR=str(other / ".git"), GIT_WORK_TREE=str(other))
+    try:
+        branch = guard.git(r19, "rev-parse", "--abbrev-ref", "HEAD")
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+    if branch != "feat/x":
+        failed += 1
+        print(f"FAIL guard.git answers for the folder asked, not GIT_DIR: {branch!r}")
+
     print("guard: all good" if not failed else f"guard: {failed} failures")
     return 1 if failed else 0
 
