@@ -356,12 +356,17 @@ kit acts on:
 - **Effort per thread.** `kit:implementer` declares `effort: medium` (Opus 5.5's default): the
   level its threads run at whatever the session's, so an `xhigh` session does not spawn `xhigh`
   threads (and a `low` one still gets `medium` threads; since 2.1.317 a subagent on another
-  model falls back to that model's default anyway). The coordinator passes `effort` on the Agent
-  call: `low` for a brief with a checkable DONE WHEN, a small scope and its PLACES listed,
-  `medium` otherwise, `high` for ambiguous or architectural work; after a `FAIL` that is not
-  `scope=local`, or a `BLOCKED`, it re-dispatches one level higher, never past `high` without
-  asking (Sun et al. 2026: starting low and escalating on a verified failure matched or beat a
-  fixed top effort at lower cost). The call value overrides the frontmatter and stays in effect
+  model falls back to that model's default anyway). The coordinator passes effort and, for a small item, a model on the Agent
+  call (`skills/lead/fresh-eyes.md`, "Effort and model"): `medium` on the agent's own model by default,
+  which is where Anthropic's guidance for the current models starts (within a level the model decides
+  how much to think; it does not raise the level itself); `model: sonnet` at `medium` for a small item
+  with a checkable DONE WHEN and its PLACES listed (18 of 18 passes on three fixtures at about 40% of
+  the cost, 2026-11-13: a small sample of easy tasks, and the strongest model at `low` cost twice as
+  much with the one miss seen); `high` for a bug in existing code, a flaky test or a change that has
+  to find every caller, not for an ambiguous item, which gets a better brief instead. After a `FAIL`
+  that is not `scope=local`, or a `BLOCKED`, the brief is re-read first, an item on the smaller model
+  goes back to the agent's own, and effort goes to `high` once, when the defect was a missed edge
+  case or reader. A new level is a new thread: the call value overrides the frontmatter and stays in effect
   when the thread is resumed (sub-agents reference, Claude Code 2.1.292+); the values are `low`,
   `medium`, `high`, `xhigh`, `max`. Scouts run at `low`, `kit:verifier` at `medium` (declared in
   its frontmatter; it used to inherit the session's level). `CLAUDE_CODE_SUBAGENT_EFFORT`

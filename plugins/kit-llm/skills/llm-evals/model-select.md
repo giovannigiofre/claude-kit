@@ -5,6 +5,9 @@ Target: the prompt or role named in the request.
 Benchmarks and vendor claims don't predict how a model does on *this* task. The project's own
 eval suite does. (Anthropic: teams with evals adopt a new model in days instead of weeks.)
 
+Before adding a candidate model, sweep effort on the one in use: a gap that a level closes needs no
+second model.
+
 ## 0. Preconditions
 
 - A trusted eval suite per role (steps 0-5 of [SKILL.md](SKILL.md) if missing). Hard checks matter most here:

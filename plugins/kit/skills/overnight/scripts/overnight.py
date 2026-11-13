@@ -53,7 +53,8 @@ UNATTENDED = (
     "This is an unattended run: nobody reads your messages until it ends, and nobody will answer a "
     "question. A turn that ends with a summary announcing the next step, an offer to continue, or a "
     "list of decisions that don't block you ends this iteration with nothing done. Finish the step "
-    "you chose, check it, then give your report. Stop early only when nothing can move without a "
+    "you chose, then give your report. An error, a timeout or a failing tool is not a blocker: "
+    "diagnose it and work through it. Stop early only when nothing can move without a "
     "human; then report blocked and say what they must decide. Never take destructive or "
     "irreversible actions outside the repository."
 )

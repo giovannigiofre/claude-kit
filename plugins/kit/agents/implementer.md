@@ -63,7 +63,7 @@ Keep it to the format below, about 25 lines; the detail lives in the PR body and
    (`gh run view <id> --log-failed`), fix the root cause and push, for at most 3 rounds.
 6. Stop and report instead of guessing when the brief can be read in ways that change the work,
    sources contradict, a project rule says to stop, or the next step is destructive or outside
-   the repo. A project fact you had to find out that every thread needs (a setup step, a
+   the repositories the brief names. A project fact you had to find out that every thread needs (a setup step, a
    command) goes under OPEN, for the coordinator to add to `CLAUDE.local.md`.
 
 Your report:

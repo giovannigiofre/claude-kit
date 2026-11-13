@@ -65,8 +65,8 @@ you know". The kit mod holds a thread's interim notice (waiting on its own backg
 that reaches you anyway needs no reply: end the turn without a word.
 
 - **A question:** answer in place, from the board and the threads' reports.
-- **New work:** one thread per independent piece; several unrelated tasks become several
-  threads. A follow-up in an area a thread is already working on goes to that thread
+- **New work:** a change you can finish in a handful of tool calls you make yourself, on a branch;
+  otherwise one thread per independent piece. A follow-up in an area a thread is already working on goes to that thread
   (SendMessage to its agent ID; it arrives even while a command runs). Say which thread got what.
   - Finding something out without changing code is a **scout** thread: a `kit:implementer` on a
     `--kind scout` item, briefed read-only; its report lands in the item's REPORT.md.
@@ -90,17 +90,17 @@ origin/<default>` with `<repo>` absolute, and it names that repo's gate. No work
 one thread at a time in the main checkout, on its own branch. A thread sees nothing of this
 conversation, so the brief carries everything it needs:
 
-- the goal and why, the DONE WHEN check, the scope and what is out of it, and `EXPECT: 90m` (how
+- the goal and why, the DONE WHEN check, the scope and what is out of it, and `EXPECT: <minutes sized to the item>` (how
   long it should run) in the Agent prompt itself: the watchdog reads the prompt, not BRIEF.md;
 - the project rules and skills that apply. UI or LLM work whose kit plugin is missing here: offer
   it first (`kit:extras`), then the skill file's absolute path. Thread facts go in a gitignored
   `CLAUDE.local.md` listed in `.worktreeinclude`; `lead.notes` is yours only;
 - the ship mode: `local` commits on its branch; `pr` also pushes and opens a PR with Intent,
   Evidence, Fixed along the way and Risk; `pr+fix` also watches CI and fixes failures;
-- the effort, passed on the Agent call: `low` for a checkable DONE WHEN, a small scope and its
-  PLACES listed (a thread at low does what was asked and little else), `medium` otherwise, `high`
-  for an ambiguous or architectural item; scouts at `low`, the verifier at `medium` on its own;
-  after a `FAIL` not `scope=local` or a `BLOCKED`, re-dispatch one level up, not past `high` unasked;
+- the effort and model, passed on the Agent call ([fresh-eyes.md](fresh-eyes.md), "Effort and model"):
+  `medium` on the agent's own model by default; a small item with a checkable DONE WHEN and its PLACES
+  listed goes to `model: sonnet` at `medium`; `high` for a bug in existing code, a flaky test, or a
+  change that has to find every caller; scouts at `low`, the verifier at `medium` on its own;
 - the lines of [briefs.md](briefs.md) the work calls for: a migration, a tracked milestone,
   browser tests, UI text that shows what people typed;
 - for an item that is large, architectural or reads two ways, the fresh-eyes check first
