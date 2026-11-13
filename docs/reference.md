@@ -135,22 +135,32 @@ project does not ignore it).
 ### Working state: `.kit/`
 
 The kit's working state lives in `.kit/` at the root of the main checkout: `lead/` (the board,
-items, proposal cards), `evidence/` (gate records and proof), `agent-memory/kit-verifier/`, and
-`overnight/` (in the checkout the run is in). It used to live in `.claude/`, where Claude Code asks
-the owner before every write, so background threads waited on prompts nobody saw. Each entry is
-kept out of git by its own line (`/.kit/lead/`), never a blanket `/.kit/`. `kit.json`,
-`kit.local.json`, settings, skills, agents, `worktrees/`, `loop.md` and `review-decisions.md` stay
-in `.claude/`: the gate commands the kit runs unasked come from `kit.json`, so it stays behind the
-protected path.
+items, proposal cards) and `agent-memory/kit-verifier/`. `evidence/` and `overnight/` are per
+checkout: a thread saves its proof in its own worktree's `.kit/evidence/<branch>/`, and a run lives
+in the checkout it runs in. The gate's record is the exception: `gate.py` keeps it in the main
+checkout's `.kit/evidence/<branch>/gate-<name>.json`, so it outlives the worktree. The state used
+to live in `.claude/`, where Claude Code asks the owner before every write, so background threads
+waited on prompts nobody saw. Each entry is kept out of git by its own line (`/.kit/lead/`), never
+a blanket `/.kit/`. `kit.json`, `kit.local.json`, settings, skills, agents, `worktrees/`,
+`loop.md` and `review-decisions.md` stay in `.claude/`: the gate commands the kit runs unasked come
+from `kit.json`, so it stays behind the protected path. A kit.json `lead.board` inside
+`.claude/lead/` follows the folder (same name under `.kit/lead/`); one anywhere else stays as written.
 
 An older project moves at a session start when nothing is at work, and the session says so in one
 line (or, when an item is `working` or `landing` or an overnight run is live, why it waits). By
 hand: `python3 <kit>/hooks/scripts/migrate_state.py status|migrate|undo [--dry-run] [--force]`
-(`--force` moves anyway, for a thread that died and left `working`). It renames the entries in one
-step through `.kit.migrating/` (a run that died is finished by the next one), rewrites the exclude
-lines first, leaves `.claude/kit-state-moved.txt`, records `.kit/migration.json` for `undo`, and
-never overwrites an entry that exists in both places. An entry tracked in git is not moved: the
-`git mv` to run is printed. Until it moves, every command keeps working on the old layout.
+(`--force` moves anyway, for a thread that died and left `working`). Each entry moves on its own,
+one rename from `.claude/<entry>` to `.kit/<entry>` (across filesystems: copy, compare, delete),
+and the kit reads each entry from wherever it is, so a run that dies part-way loses nothing and the
+next session start carries on. The `/.kit/<entry>/` lines are added before anything moves, and the
+`/.claude/<entry>/` lines stay, so anything written to the old place later stays out of git too.
+An entry in both places is left alone in both, the others move anyway, and the session start says
+so once (and again only if the set changes); `status` always lists them with both paths. An entry
+tracked in git is not moved: the `git mv` to run is printed. `undo` moves the known entries back and
+sets kit.local.json `lead.state` to `".claude"`, so the session start leaves them there until
+`migrate` is run by hand. It leaves `.claude/kit-state-moved.txt` and `.kit/migration.json` (a log
+of what moved, which `undo` does not read). A `.kit.migrating/` left by the first version of the
+script is emptied into `.kit/` the same way.
 
 
 ### Auto mode environment, per repo
@@ -473,7 +483,8 @@ session that has not loaded it) each one still wakes the coordinator.
 
 `permission.py` (PermissionRequest, matcher Bash) allows, without a prompt, a command that is
 exactly kit.json `check` or `verify`, or the kit's own `gate.py`, `lessons.py`, `items.py`,
-`proposals.py`, `migrate_state.py` or `compact_logs.py` by their real path, unless the command changes a settings
+`proposals.py` or `compact_logs.py` by their real path, and `migrate_state.py status` or a bare
+`migrate_state.py migrate` (not `undo`, `--force` or `--root`), unless the command changes a settings
 file (below). Nothing else is touched: the guard has already judged the
 command, and the permission system decides the rest. `/fewer-permission-prompts` (built in)
 writes a broader read-only allowlist to project settings if you want one.
