@@ -32,6 +32,18 @@ def read_json(path):
     return (value, True) if isinstance(value, dict) else (None, False)
 
 
+def json_trouble(path):
+    """Why read_json said no to `path`, for a message: `<path> could not be read (<reason>)` when
+    the file or a folder above it cannot be opened, else `<path> does not parse`."""
+    try:
+        Path(path).read_bytes()
+    except FileNotFoundError:
+        return f"{path} does not parse"
+    except OSError as exc:
+        return f"{path} could not be read ({exc.strerror or exc})"
+    return f"{path} does not parse"
+
+
 def read_input():
     try:
         return json.load(sys.stdin)
@@ -377,7 +389,7 @@ def unattended_effective(cwd):
     effective, notes = {k: "ask" for k in UNATTENDED_STEPS}, {}
     for step, (blocked, covered, refused) in steps.items():
         if unreadable:
-            notes[step] = (f"{step}: {said}, but it stays ask: {', '.join(map(str, unreadable))} does not parse, "
+            notes[step] = (f"{step}: {said}, but it stays ask: {'; '.join(map(json_trouble, unreadable))}, "
                            f"so its rules are unknown; fix it first.")
         elif blocked:
             which = "; ".join(f'{b} rule "{r}" in {f}' for b, r, f in blocked)

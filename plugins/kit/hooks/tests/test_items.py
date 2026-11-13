@@ -754,6 +754,14 @@ def main():
         check(out.startswith("UNATTENDED: push=ask rebase=ask") and "does not parse" in out,
               f"a settings file that does not parse keeps it at ask: {out}")
         user.unlink()
+        # a home that is a file: settings.json could not be read, which is not the same as not parsing
+        homefile = home.parent / "homefile"
+        homefile.write_text("")
+        odd = {k: v for k, v in env.items() if k != "CLAUDE_CONFIG_DIR"}
+        code, out, err = run(repo, "unattended", "push=allow", env=dict(odd, HOME=str(homefile)))
+        note = [line for line in out.splitlines() if line.startswith("push:")]
+        check(code == 0 and "Traceback" not in out + err and len(note) == 1 and "could not be read" in note[0]
+              and "does not parse" not in out, f"an unusable home says settings.json could not be read: {out} {err}")
         check(settings.read_text() == local_rules and json.loads(local.read_text())["lead"]["unattended"]["push"] == "allow",
               "the kit changed no permission settings, and the owner's saved answer stands")
         # the forms the kit prescribes count: an ask rule on just --force-with-lease or --delete-branch blocks the step
