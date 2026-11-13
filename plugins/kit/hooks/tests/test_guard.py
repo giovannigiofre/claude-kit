@@ -38,10 +38,12 @@ def setup(project_kit=True, user_kit=None):
     return home, repo
 
 
-def call(home, repo, tool, tool_input, session="s1"):
+def call(home, repo, tool, tool_input, session="s1", agent=None):
     env = dict(os.environ, HOME=str(home), TMPDIR=str(home / "tmp"), CLAUDE_CONFIG_DIR=str(home / ".claude"))
     (home / "tmp").mkdir(exist_ok=True)
     payload = {"tool_name": tool, "tool_input": tool_input, "cwd": str(repo), "session_id": session}
+    if agent:
+        payload.update(agent_id="a1", agent_type=agent)
     out = subprocess.run([sys.executable, str(SCRIPT)], input=json.dumps(payload), capture_output=True,
                          text=True, env=env, timeout=30)
     return out.returncode, out.stdout, out.stderr
@@ -52,8 +54,8 @@ def bash(home, repo, command):
     return code, err
 
 
-def verdict(home, repo, command):
-    code, out, err = call(home, repo, "Bash", {"command": command})
+def verdict(home, repo, command, agent=None, tool="Bash", tool_input=None):
+    code, out, err = call(home, repo, tool, tool_input or {"command": command}, agent=agent)
     if code == 2:
         return "block"
     if out.strip() and json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "ask":
@@ -673,6 +675,79 @@ def main():
     if verdict(home, r20, "git commit --no-verify -m wip") != "allow":
         failed += 1
         print("FAIL guard.allowCommands lets a project allow a specific hook bypass")
+
+    # force and --all pushes are asked about from any caller, --force-with-lease stays free; a thread
+    # merging a PR is refused and deleting a remote branch asked about, while the main session's
+    # merge goes to the permission system
+    home, r21 = setup()
+    items = SCRIPT.parent / "items.py"
+    (r21 / "items.py").write_text("print('not the kit')\n")
+    thread = "kit:implementer"
+    for command, agent, expect in [
+        ("git push --force origin feat/x", None, "ask"),
+        ("git push -f origin feat/x", None, "ask"),
+        ("git push -uf origin feat/x", None, "ask"),
+        ("git push origin +feat/x", None, "ask"),
+        ("git push --all origin", None, "ask"),
+        ("git push --force origin feat/x", thread, "ask"),
+        ("git push --force-with-lease origin feat/x", None, "allow"),
+        ("git push --force-with-lease origin feat/x", thread, "allow"),
+        ("git push origin feature", None, "allow"),
+        ("git push origin feature", thread, "allow"),
+        ("git push -o ci.skip origin feature", None, "allow"),
+        ("git push --mirror", None, "block"),
+        ("git push --mirror", thread, "block"),
+        ("git push origin --delete feat/old", None, "allow"),
+        ("git push origin --delete feat/old", thread, "ask"),
+        ("git push origin :feat/old", thread, "ask"),
+        ("git push -d origin feat/old", thread, "ask"),
+        ("gh pr merge 12 --squash", None, "allow"),
+        ("gh pr merge 12 --squash", thread, "block"),
+        ("gh -R o/r pr merge 12", thread, "block"),
+        ("gh api -X PUT repos/o/r/pulls/12/merge", thread, "block"),
+        ("gh api graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'", thread, "block"),
+        ("gh pr view 12", None, "allow"),
+        ("gh pr view 12", thread, "allow"),
+        ("gh pr checks 12", thread, "allow"),
+        ("gh api repos/o/r/pulls/12", thread, "allow"),
+        # the kit's items.py commands that change the owner's settings are the coordinator's
+        (f"python3 {items} away on", thread, "block"),
+        (f"python3 {items} away off", thread, "block"),
+        (f"python3 {items} sandbox on", thread, "block"),
+        (f"python3 {items} sandbox off", thread, "block"),
+        (f"python3 {items} unattended push=ask", thread, "block"),
+        (f"python3 {items} unattended merge=allow", thread, "block"),
+        (f"python3 -I {items} away on", thread, "block"),
+        (f"cd {items.parent} && python3 ./items.py away on", thread, "block"),
+        (f"bash -c 'python3 {items} sandbox on'", thread, "block"),
+        ("python3 $KIT/hooks/scripts/items.py away on", thread, "block"),
+        (f"python3 {items} away status", thread, "allow"),
+        (f"python3 {items} away", thread, "allow"),
+        (f"python3 {items} sandbox status", thread, "allow"),
+        (f"python3 {items} unattended", thread, "allow"),
+        (f"python3 {items} list", thread, "allow"),
+        ("python3 items.py away on", thread, "allow"),  # the repo's own items.py, not the kit's
+        (f"python3 {items} away on", None, "allow"),
+        (f"python3 {items} unattended push=ask", None, "allow"),
+    ]:
+        got = verdict(home, r21, command, agent)
+        if got != expect:
+            failed += 1
+            print(f"FAIL {'thread' if agent else 'main session'} {expect}: {command!r} -> {got}")
+    code, _, err = call(home, r21, "Bash", {"command": "gh pr merge 12"}, agent=thread)
+    if code != 2 or "needs merge" not in err:
+        failed += 1
+        print(f"FAIL a thread's merge refusal says to hand it back: {err}")
+    code, _, err = call(home, r21, "Bash", {"command": f"python3 {items} away on"}, agent=thread)
+    if code != 2 or "only the coordinator" not in err:
+        failed += 1
+        print(f"FAIL a thread's away on refusal names the coordinator: {err}")
+    for agent, expect in [(thread, "block"), (None, "allow")]:
+        got = verdict(home, r21, None, agent, "mcp__github__merge_pull_request", {"owner": "o", "repo": "r",
+                                                                                 "pullNumber": 12})
+        if got != expect:
+            failed += 1
+            print(f"FAIL the GitHub MCP merge tool from {'a thread' if agent else 'the main session'}: {got}")
 
     # hermetic git: GIT_DIR inherited from a git hook does not turn guard.git to another repository
     sys.path.insert(0, str(SCRIPT.parent))

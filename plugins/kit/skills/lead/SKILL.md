@@ -129,8 +129,8 @@ identity (kit.json `author`), with no AI co-author lines or footers; on a branch
 for its item it may amend, rebase and force-push with `--force-with-lease`, never on the default
 branch or one it didn't create. Deploys, migrations, deleting data and anything outside the repo need the
 user's go-ahead. Your own docs or diary commits ride with the next merge, at most one an hour.
-When the user is leaving or going to sleep, follow [unattended.md](unattended.md) and run `I away on`
-(the next interactive start undoes it); when they ask for the sandbox, run `I sandbox on`.
+When the user is leaving or going to sleep, follow [unattended.md](unattended.md) and run `I away on`.
+When the user writes again after it, run `I away off` before anything else. For the sandbox: `I sandbox on`.
 
 ## Replies
 

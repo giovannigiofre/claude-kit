@@ -1,6 +1,6 @@
 ---
 name: learn
-description: Use when the ledger says a review is due, when the user asks what the kit has learned or to undo a lesson, after the user corrects Claude, or when the verifier caught the same defect twice. Tidies the lesson ledger for this repo (merge, retire, propose hardening), shows or undoes what it learned, and turns a repeated mistake into a durable fix - a check, a hook entry, a project skill or a CLAUDE.md line, asking first before it changes a committed instruction file.
+description: Use when the ledger says a review is due, when the user asks what the kit has learned or to undo a lesson, after the user corrects Claude, or when the verifier caught the same defect twice. Tidies the lesson ledger for this repo (merge, retire, propose hardening), shows or undoes what it learned, and turns a repeated mistake into a durable fix - a check, a hook entry, a project skill or a CLAUDE.md line, asking first before it changes a committed instruction file or .claude/kit.json.
 argument-hint: "[empty = distill + this session's corrections | undo <id> | retire <id> | wrong <id> | news | list | stats | export | import <file> | promote [id] | sweep [N] | the lesson to make stick]"
 ---
 
@@ -65,8 +65,10 @@ Nothing copied.)
    needed and near-duplicates and propose removing them; keep always-loaded text (CLAUDE.md plus
    every skill description) under about 5k tokens.
 4. **At most 4 changes per run.** Before changing an instruction file the repo commits (CLAUDE.md,
-   AGENTS.md, a skill) or `~/.claude/CLAUDE.md`, show each change as a diff with its evidence and
-   ask with one AskUserQuestion multi-select which to apply; write only those. Don't commit unless asked.
+   AGENTS.md, a skill), `.claude/kit.json` (a `check`, `onEdit`, `protect` or `guard` entry decides
+   what runs and what is refused in every session) or `~/.claude/CLAUDE.md`, show each change as a
+   diff with its evidence and ask with one AskUserQuestion multi-select which to apply; write only
+   those. Don't commit unless asked.
 5. Once a mechanism covers a lesson, retire it: `$L retire <id> .`.
 
 ## Sweep

@@ -21,6 +21,16 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    root counts as deleting the root
   push-protected   a push to a protected branch (main, master, the remote's default), a force
                    push to one, a mirror push, or deleting one
+  push-force       asked about: a push with --force, -f or a +refspec (not --force-with-lease,
+                   which stays free on a branch that is not protected), or with --all; from a
+                   subagent also a push that deletes a remote branch (`:branch`, --delete, -d)
+  merge-thread     from a subagent: merging a PR (gh pr merge, a gh api call to .../merge or
+                   the mergePullRequest mutation, a GitHub MCP merge tool); the coordinator merges,
+                   and from the main session the merge is left to the permission system
+  owner-settings   from a subagent: the kit's items.py commands that change the owner's settings
+                   (`away` and `sandbox` with on or off, `unattended` with any argument), found by
+                   the script's real path; `away status`, `sandbox status` and a bare `unattended`
+                   only read
   discard-work     git reset --hard, checkout/restore of the whole tree, clean, stash drop/clear
                    while there are uncommitted changes; git clean -x/-X always
   system           sudo/su/doas, mkfs, dd to a device, disk erase, shutdown/reboot, recursive
@@ -108,6 +118,7 @@ SECRET_PATHS = ["~/.ssh", "~/.aws", "~/.config/gh", "~/.netrc", "~/.docker/confi
                 "~/.config/gcloud", "~/.azure"]
 CACHE_PATHS = ["~/.cache", "~/Library/Caches", "~/.npm/_cacache", "~/.cargo/registry/cache"]
 UNKNOWN = object()
+PLUGIN = Path(__file__).resolve().parents[2]
 
 
 def home():
@@ -746,7 +757,7 @@ def check_interpreter(argv):
     return None
 
 
-def check_git(argv, cwd, opts):
+def check_git(argv, cwd, opts, agent=False):
     args = argv[1:]
     while args and args[0] in ("-C", "-c", "--git-dir", "--work-tree"):
         if args[0] == "-C" and len(args) > 1:
@@ -758,8 +769,11 @@ def check_git(argv, cwd, opts):
     sub, rest = args[0], args[1:]
     if sub == "push":
         branches = protected_branches(cwd, opts)
-        force = any(a in ("-f", "--force", "--force-with-lease", "--force-if-includes") or
-                    a.startswith("--force-with-lease=") for a in rest)
+        # --force and -f (also inside -uf) overwrite whatever the remote has; --force-with-lease only
+        # what this clone last saw. -o takes a value, so a word after it is not a flag.
+        plain_force = any(a == "--force" or re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", a) for a in rest)
+        force = plain_force or any(a in ("--force-with-lease", "--force-if-includes") or
+                                   a.startswith("--force-with-lease=") for a in rest)
         if "--mirror" in rest:
             return ("deny", "push-protected", "git push --mirror")
         positional = [a for a in rest if not a.startswith("-")]
@@ -769,8 +783,8 @@ def check_git(argv, cwd, opts):
             if current in branches:
                 return ("deny", "push-protected",
                         f"push from '{current}', a protected branch: work on a branch and open a PR")
-            return None
-        delete = "--delete" in rest or "-d" in rest
+            return push_ask(rest, [], False, plain_force, agent)
+        delete = "--delete" in rest or any(re.fullmatch(r"-[a-zA-Z]*d[a-zA-Z]*", a) for a in rest)
         for spec in refspecs:
             plus = spec.startswith("+")
             dst = re.sub(r"^refs/heads/", "", spec.lstrip("+").split(":")[-1])
@@ -782,7 +796,7 @@ def check_git(argv, cwd, opts):
                 if force or plus:
                     return ("deny", "push-protected", f"force push to the protected branch '{dst}'")
                 return ("deny", "push-protected", f"push to the protected branch '{dst}': open a PR instead")
-        return None
+        return push_ask(rest, refspecs, delete, plain_force, agent)
 
     def has_changes(untracked=False):
         return bool(git(cwd, "status", "--porcelain", "--untracked-files=" + ("all" if untracked else "no")))
@@ -801,6 +815,67 @@ def check_git(argv, cwd, opts):
         return ("deny", "discard-work", f"git {sub} of the whole tree would discard uncommitted changes")
     if sub == "stash" and rest[:1] in (["drop"], ["clear"]):
         return ("deny", "discard-work", f"git stash {rest[0]} deletes stashed work")
+    return None
+
+
+def push_ask(rest, refspecs, delete, plain_force, agent):
+    """A push to a branch that is not protected: asked about when it overwrites the remote
+    (--force, -f, a +refspec), pushes every branch (--all), or, from a subagent, deletes one."""
+    if plain_force or any(spec.startswith("+") for spec in refspecs):
+        return ("ask", "push-force", "a force push overwrites the remote branch whatever is on it; "
+                "--force-with-lease overwrites only what this clone last fetched")
+    if "--all" in rest:
+        return ("ask", "push-force", "git push --all pushes every local branch")
+    if agent and delete:
+        return ("ask", "push-delete", "a thread deleting a remote branch")
+    return None
+
+
+def check_gh(argv, agent):
+    """From a subagent, merging a PR: gh pr merge, or gh api to a .../merge path or with the
+    mergePullRequest mutation. `gh pr view`, `gh pr checks` and the like only read."""
+    if not agent:
+        return None
+    positional, values = gh_words(argv[1:])
+    if any(positional[i:i + 2] == ["pr", "merge"] for i in range(len(positional))):
+        return ("deny", "merge-thread", "gh pr merge from a thread")
+    if "api" in positional:
+        after = positional[positional.index("api") + 1:]
+        texts = after + [v for vs in values.values() for v in vs]
+        if any(re.search(r"/merges?(?:$|[/?])", w) for w in after[:1]) or \
+                any("mergePullRequest" in t or "enablePullRequestAutoMerge" in t for t in texts):
+            return ("deny", "merge-thread", "a gh api call that merges a PR, from a thread")
+    return None
+
+
+OWNER_SUBS = {"away", "sandbox", "unattended"}
+
+
+def owner_settings(argv, cwd):
+    """`python3 <kit>/hooks/scripts/items.py away on`: the items.py command that changes the
+    owner's settings (away or sandbox with an action other than status, unattended with any
+    argument), else None. The script counts as the kit's when its real path is inside this
+    plugin or beside a kitlib.py (another installed copy), or when its path is only known at run
+    time and its name is items.py."""
+    if not argv or not re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(argv[0]).name):
+        return None
+    args = list(argv[1:])
+    while args and args[0].startswith("-"):
+        if args[0] in ("-c", "-m"):
+            return None
+        args = args[2:] if args[0] in ("-X", "-W") else args[1:]
+    if len(args) < 2 or not args[0].endswith("items.py"):
+        return None
+    path = expand(args[0], cwd)
+    if path is not UNKNOWN:
+        real = Path(os.path.realpath(path))
+        if real.name != "items.py" or not (PLUGIN in real.parents or (real.parent / "kitlib.py").exists()):
+            return None
+    sub, rest = args[1], args[2:]
+    if sub in ("away", "sandbox") and rest not in ([], ["status"]):
+        return f"items.py {sub} {' '.join(rest)}"
+    if sub == "unattended" and rest:
+        return f"items.py unattended {' '.join(rest)}"
     return None
 
 
@@ -1171,7 +1246,7 @@ def check_secrets(argv, cwd):
     return None
 
 
-def check_bash(command, cwd, root, opts):
+def check_bash(command, cwd, root, opts, agent=False):
     if allowed(command, opts):
         return None
     for decision, key in (("deny", "denyCommands"), ("ask", "askCommands")):
@@ -1242,10 +1317,13 @@ def check_bash(command, cwd, root, opts):
                 found = ("ask", "rm-outside", "delete in a folder only known when the command runs")
             checks.append(found)
         elif name == "git":
-            checks.append(check_git(argv, cwd, opts))
+            checks.append(check_git(argv, cwd, opts, agent))
             checks.append(check_hooks(argv, cwd, {**shell_env, **(seg.get("env") or {})}))
-        elif name in INTERPRETERS:
-            checks.append(check_interpreter(argv))
+        elif name == "gh":
+            checks.append(check_gh(argv, agent))
+        elif name in INTERPRETERS or re.fullmatch(r"python3\.\d+", name):
+            owned = owner_settings(argv, cwd) if agent else None
+            checks.append(("deny", "owner-settings", owned) if owned else check_interpreter(argv))
         else:
             checks.append(check_system(argv, cwd, root))
         for found in checks:
@@ -1559,7 +1637,8 @@ def main():
         except Exception:  # the wait rule never stops a command on its own failure
             found = None
         try:
-            found = found or check_bash(str(tool_input.get("command") or ""), cwd, root, opts)
+            found = found or check_bash(str(tool_input.get("command") or ""), cwd, root, opts,
+                                        bool(data.get("agent_id")))
         except Exception as error:  # a crash would let the command run unchecked
             found = ("ask", "guard", f"the guard could not judge this command ({type(error).__name__})")
         if not found and not monitor:
@@ -1575,8 +1654,11 @@ def main():
             found = ("deny", "secrets", "globs a credential store")
     elif tool in ("Agent", "Task"):
         found = check_agents(data, opts)
-    elif tool.startswith("mcp__") and "github" in tool.lower() and opts.get("attribution") != "allow":
-        found = check_github_tool(tool_input)
+    elif tool.startswith("mcp__") and "github" in tool.lower():
+        if data.get("agent_id") and "merge_pull_request" in tool.lower():
+            found = ("deny", "merge-thread", f"{tool.split('__')[-1]} from a thread")
+        elif opts.get("attribution") != "allow":
+            found = check_github_tool(tool_input)
     if not found:
         return 0
     decision, rule, why = found
@@ -1595,6 +1677,14 @@ def main():
         print(f"kit guard (hook-bypass): {why}. {HOOKS_FIX}. Blocked whatever the "
               "permission mode; a project can allow a specific command with guard.allowCommands in "
               ".claude/kit.json.", file=sys.stderr)
+        return 2
+    if rule == "merge-thread":
+        print(f"kit guard (merge-thread): {why}. Merging is the coordinator's step, whatever the permission "
+              "mode: leave the PR open and report it under OPEN as `needs merge`.", file=sys.stderr)
+        return 2
+    if rule == "owner-settings":
+        print(f"kit guard (owner-settings): {why} changes the owner's settings, and only the coordinator "
+              "runs it, at the owner's word. Say in your report what you need changed and why.", file=sys.stderr)
         return 2
     if rule == "wait":
         print(f"kit guard (wait): {why} holds this turn with no progress and no alarm if it hangs. "

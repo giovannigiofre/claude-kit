@@ -42,15 +42,16 @@ The kit lives at the marketplace named `claude-kit` (find its directory with
    not evidence that it helps in this user's projects.
 7. **Decide a proposal**: `adopted-user`, `adopted-project` (which repos), `vendored`, `trial`
    (default for anything plausible), or `rejected`, with the reason in one or two sentences.
-8. **Write it down**: add or update the row in `CATALOG.md` (date = today). For `trial`/adopted
-   plugins, add a marketplace entry pinned to the reviewed commit:
-   `{"name": "<name>", "source": {"source": "github", "repo": "<owner/repo>", "sha": "<sha>"}, "description": "..."}`
-   and run `claude plugin validate <kit dir>`.
-9. **Propose the trial** (do not run it without the user's go-ahead): the project, the install
-   command `claude plugin install <name>@claude-kit --scope local`, any config to change
-   (e.g. turn off telemetry or ledgers), what to watch for a week, and - if feasible - a
-   `claude plugin eval` comparison. Show the diff of CATALOG.md and marketplace.json; commit only
-   if asked.
+8. **Write it down**: add or update the row in `CATALOG.md` (date = today); the row records the
+   review, so it needs no question.
+9. **Propose the marketplace entry and the trial** in one question, with the CATALOG.md diff.
+   For `trial`/adopted plugins the entry is pinned to the reviewed commit:
+   `{"name": "<name>", "source": {"source": "github", "repo": "<owner/repo>", "sha": "<sha>"}, "description": "..."}`;
+   the trial names the project, the install command
+   `claude plugin install <name>@claude-kit --scope local`, any config to change (e.g. turn off
+   telemetry or ledgers), what to watch for a week, and - if feasible - a `claude plugin eval`
+   comparison. Only on yes, add the entry to marketplace.json, run
+   `claude plugin validate <kit dir>`, then install. Commit only if asked.
 
 ## Writing, adapting or rewriting a skill
 

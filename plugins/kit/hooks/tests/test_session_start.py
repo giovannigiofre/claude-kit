@@ -137,17 +137,35 @@ def main():
         assert "coordinates" not in out and "kit harness active" in out, "the personal light mode is the off switch"
         assert "coordinates" not in run({"cwd": str(repo), "source": "compact"}, home=light)
 
-        # the old /kit-safety unattended left denyInsteadOfPrompting in settings.local.json: removed, said once
-        local = repo / ".claude" / "settings.local.json"
-        local.write_text(json.dumps({"permissions": {"denyInsteadOfPrompting": True, "allow": ["Bash(make)"]}, "model": "opus"}))
-        out = run({"cwd": str(repo), "source": "startup"})
-        assert "removed permissions.denyInsteadOfPrompting" in out, out
-        assert json.loads(local.read_text()) == {"permissions": {"allow": ["Bash(make)"]}, "model": "opus"}
-        assert "removed permissions" not in run({"cwd": str(repo), "source": "startup"}), "said once"
-        local.write_text(json.dumps({"permissions": {"denyInsteadOfPrompting": False}}))
-        run({"cwd": str(repo), "source": "startup"})
-        assert json.loads(local.read_text()) == {}, "a false is dropped too, and an emptied permissions goes"
-        local.unlink()
+        # a long-lived session with away on: after a compaction or a /clear the coordinator line is
+        # followed by one saying since when, and that the coordinator turns it off when the user writes
+        away = Path(tmp) / "away-home"
+        (away / ".claude").mkdir(parents=True)
+        (away / ".claude" / "kit.json").write_text(json.dumps({"machineSetup": "declined"}))
+        (away / ".claude" / "settings.json").write_text(json.dumps({"model": "opus"}))
+        items = SCRIPT.parent / "items.py"
+        env = {**os.environ, "HOME": str(away), "CLAUDE_CONFIG_DIR": str(away / ".claude")}
+        on = subprocess.run([sys.executable, str(items), "away", "on"], cwd=str(repo), env=env,
+                            capture_output=True, text=True)
+        assert on.returncode == 0 and on.stdout.strip().splitlines()[-1].startswith("The owner is back when he writes"), on.stdout
+        for source in ("compact", "clear"):
+            lines = run({"cwd": str(repo), "source": source}, home=away).splitlines()
+            at = [i for i, line in enumerate(lines) if line.startswith("kit: away is on since ")]
+            assert at and lines[at[0] - 1] == coordinator, (source, lines)
+            assert lines[at[0]].endswith(": turn it off with `I away off` when the user writes."), lines[at[0]]
+        assert "away is on" not in run({"cwd": str(repo), "source": "compact", "agent_id": "a1"}, home=away), \
+            "a thread is not the one to turn it off"
+        out = run({"cwd": str(repo), "source": "startup"}, home=away)
+        assert "away is off again" in out and "away is on since" not in out, out
+        assert "away is on" not in run({"cwd": str(repo), "source": "compact"}, home=away), "off: no line"
+        # an account whose settings.json is not JSON: one line, and the file is left as it is
+        (away / ".claude" / "settings.json").write_text("{bad")
+        out = run({"cwd": str(repo), "source": "startup"}, home=away, CLAUDE_CODE_REMOTE="")
+        assert "kit: declined" not in out and "not valid JSON" not in out, "declined on this machine: silent"
+        (away / ".claude" / "kit.json").write_text("{}")
+        out = run({"cwd": str(repo), "source": "startup"}, home=away, CLAUDE_CODE_REMOTE="")
+        assert out.count("not valid JSON") == 1 and "left alone" in out and "Kit setup" not in out, out
+        assert (away / ".claude" / "settings.json").read_text() == "{bad"
         # a typo is named with the closest known key, at the top level and inside a section
         (repo / ".claude" / "kit.json").write_text(json.dumps({"chek": "make lint", "verfy": "make test",
                                                                "lead": {"baord": "docs/b.md", "notes": "n"},

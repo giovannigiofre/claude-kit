@@ -8,7 +8,11 @@ After each iteration the runner, not the agent, decides what happens to the chan
   - agent reports done / stop condition met -> commit what passed and stop
   - agent reports blocked              -> undo, stop, a human must decide
 Caps are all optional: iterations, USD, tokens. With none set the run goes on until the stop
-condition holds or --max-failures consecutive iterations fail.
+condition holds or --max-failures consecutive iterations fail. A detached run with none set gets
+40 iterations and USD 25, since nobody is watching it; --no-caps runs it without.
+The run's branch is never a protected one (the kit guard's protectedBranches, main and master by
+default, and the remote's default branch), and --push honours the owner's unattended push choice
+(kit.local.json lead.unattended.push): with `ask` the branch stays local and the notes say so.
 Memory between iterations is a notes.md file in the run directory, which the runner also
 writes to (one line per iteration outcome) so the next session knows what failed and why.
 
@@ -355,6 +359,47 @@ def cap_reached(args, state):
 
 
 DETACH_WAIT = 5  # seconds the launcher watches the run start, so an early refusal is not lost in a log
+DETACH_CAPS = (40, 25.0)  # iterations and USD for a detached run that names no cap (the skill's defaults)
+
+
+def main_of(root):
+    """The main checkout of `root` (a linked worktree resolves to it)."""
+    common = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", check=False)
+    return Path(common).parent if common and Path(common).name == ".git" else Path(root)
+
+
+def read_object(path):
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def protected_branches(root):
+    """The branches the kit guard protects: guard.protectedBranches from the project's kit.json,
+    else from ~/.claude/kit.json, else main and master; and the remote's default branch."""
+    names = None
+    for path in (kit_config(root), Path(os.environ.get("HOME") or Path.home()) / ".claude" / "kit.json"):
+        guard = read_object(path).get("guard")
+        if isinstance(guard, dict) and isinstance(guard.get("protectedBranches"), list):
+            names = {str(b) for b in guard["protectedBranches"]}
+            break
+    names = names or {"main", "master"}
+    head = git(root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD", check=False)
+    if head.startswith("origin/"):
+        names.add(head[len("origin/"):])
+    return names
+
+
+def push_choice(root):
+    """(choice, path): the owner's push choice for unattended runs, "ask" or "allow" (the default),
+    from kit.local.json in the main checkout (kitlib.unattended_prefs; this script is standalone)."""
+    path = main_of(root) / ".claude" / "kit.local.json"
+    lead = read_object(path).get("lead")
+    own = lead.get("unattended") if isinstance(lead, dict) else None
+    value = str((own if isinstance(own, dict) else {}).get("push", "")).strip().lower()
+    return (value if value in ("ask", "allow") else "allow"), path
 
 
 def detach(argv):
@@ -437,7 +482,11 @@ def main(argv=None):
     p.add_argument("--detach", action="store_true",
                    help="start the run in its own process session, with its output in a log file, and return at once")
     p.add_argument("--push", action="store_true",
-                   help="when the run ends with commits, push its branch to origin once (a failed push is noted, not fatal)")
+                   help="when the run ends with commits, push its branch to origin once (a failed push is noted, not fatal; "
+                        "push=ask in kit.local.json keeps it local)")
+    p.add_argument("--no-caps", action="store_true",
+                   help=f"with --detach, run without caps (a detached run that names none gets {DETACH_CAPS[0]} "
+                        f"iterations and USD {DETACH_CAPS[1]:g})")
     argv = sys.argv[1:] if argv is None else list(argv)
     args = p.parse_args(argv)
     if args.model and re.search(r"fable|mythos", args.model, re.I) and not args.allow_credits:
@@ -445,6 +494,12 @@ def main(argv=None):
                 "if that is what you want, or use an Opus model")
     given = {a.dest for a in p._actions
              if any(tok.split("=", 1)[0] in a.option_strings for tok in argv if tok.startswith("-"))}
+    if args.detach and not args.resume and not args.no_caps and \
+            args.max_iterations is None and args.max_usd is None and args.max_tokens is None:
+        args.max_iterations, args.max_usd = DETACH_CAPS
+        argv += ["--max-iterations", str(DETACH_CAPS[0]), "--max-usd", f"{DETACH_CAPS[1]:g}"]
+        print(f"overnight: no caps given for a detached run, so it stops at {DETACH_CAPS[0]} iterations or "
+              f"USD {DETACH_CAPS[1]:g}; name caps, or pass --no-caps to run without")
     if args.detach and not args.dry_run:
         return detach([a for a in argv if a != "--detach"])
 
@@ -480,6 +535,11 @@ def main(argv=None):
         common = git(Path.cwd(), "rev-parse", "--path-format=absolute", "--git-common-dir")
         main = Path(common).parent if Path(common).name == ".git" else root
         run_dir = runs_dir(root, main) / run_id
+
+    protected = protected_branches(main_checkout)
+    if state["branch"] in protected:
+        raise SystemExit(f"overnight: {state['branch']} is a protected branch ({', '.join(sorted(protected))}): "
+                         "the run commits on a branch of its own; pick another --branch, or leave it out")
 
     # the gate comes from the checkout the run starts from (a worktree may not exist yet)
     gate = args.gate or kit_gate(root if root.exists() else main_checkout)
@@ -670,7 +730,9 @@ def main(argv=None):
         log.close()
 
     if args.push and state["commits"]:
-        state["pushed"] = push_branch(root, state["branch"])
+        choice, prefs = push_choice(root)
+        state["pushed"] = push_branch(root, state["branch"]) if choice == "allow" else \
+            f"skipped: push=ask in {prefs}, so the branch stays local; push it with `git push -u origin {state['branch']}`"
         note(f"push: {state['pushed']}")
         print(f"overnight: push {state['pushed']}")
     save()

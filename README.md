@@ -30,7 +30,7 @@ whole interface: the coordinator picks the skill, starts the work and tells you 
 | Merging | nothing, or say so | you merge; say "merge green PRs yourself" and the coordinator saves `lead.merge: agent` in `kit.json` |
 | Finishing by hand | "ship it" | `kit:go`: PR with intent, live evidence (the gate run is recorded on the exact tree), what was fixed, risk; keeps CI green; merges if the project allows it |
 | Evening | "tonight keep doing X until Y" | `kit:overnight` starts at once, detached: a fresh session per small step, a commit only when the gate passes, 40 iterations and USD 25 unless you name other caps, the branch pushed once at the end |
-| Every two weeks or so | nothing, or "what has the kit learned?" | when the review is due the coordinator runs `kit:learn` itself: it tidies the lesson ledger, turns repeated corrections into checks or rules and prunes instructions that no longer help, asking you only before it changes an instruction file (at most 4 changes); capture and distilling run on their own, `sweep` reads transcripts for repeated corrections |
+| Every two weeks or so | nothing, or "what has the kit learned?" | when the review is due the coordinator runs `kit:learn` itself: it tidies the lesson ledger, turns repeated corrections into checks or rules and prunes instructions that no longer help, asking you only before it changes an instruction file or `.claude/kit.json` (at most 4 changes); capture and distilling run on their own, `sweep` reads transcripts for repeated corrections |
 
 Your time goes to the two ends: saying what you want, and judging the PR. The middle is the
 threads' job.
@@ -56,7 +56,7 @@ the kit sends one notification (desktop, or phone with Remote Control).
 working 2: chart, cleanup · 1 waiting on a prompt · queued 2`, read again every 15 seconds (it names the
 board's items; `waiting on a prompt`: a thread stopped on a question or a permission; `sandbox` and `away` lead the line while they are on). When the board gains a ready item or a question, the coordinator sends one
 PushNotification (desktop, or phone with Remote Control). Safety in plain words: "I'm off to bed" and the coordinator runs `away on`
-(a permission prompt becomes a denial and the thread goes on, until your next session start);
+(a permission prompt becomes a denial and the thread goes on, until you write again);
 "use the sandbox" and it writes the kit's sandbox block for the project.
 
 ---
@@ -213,7 +213,7 @@ project.
   its own rules (`guard.denyCommands` / `askCommands`: a regex over the command and the reason);
   it has no deploy rule of its own. It reads shell text, so it is best effort.
   Saying you are leaving makes the coordinator add Claude Code's `permissions.denyInsteadOfPrompting`
-  (`items.py away on`): a permission prompt becomes a denial and the work goes on, until your next session start. While you are
+  (`items.py away on`): a permission prompt becomes a denial and the work goes on, until you write again (the coordinator then runs `away off` first). While you are
   away, threads push and rebase their own branches and leave merging to you, unless you tell the
   coordinator otherwise for a repo (it keeps that in the repo's gitignored `.claude/kit.local.json`).
   For an allowed step, the kit names the permission rule to add, and

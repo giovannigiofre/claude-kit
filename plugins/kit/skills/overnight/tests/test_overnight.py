@@ -474,6 +474,64 @@ def test_detach_returns_at_once_and_the_run_goes_on():
     assert "overnight: stopped" in logs[0].read_text()
     state = json.loads((ends[0].parent / "state.json").read_text())
     assert "detach" not in state["args"], state["args"]
+    # no caps named: a detached run, which nobody watches, gets the skill's 40 iterations and USD 25
+    assert state["args"]["max_iterations"] == 40 and state["args"]["max_usd"] == 25, state["args"]
+    assert "stops at 40 iterations or USD 25" in out.stdout, out.stdout
+
+
+def dry(d, fake, *args):
+    return subprocess.run([sys.executable, str(SCRIPT), "improve work.txt", "--agent-cmd", f"{sys.executable} {fake}",
+                           "--dry-run", *args], cwd=d, capture_output=True, text=True, timeout=60, env=env(d))
+
+
+def test_detach_without_caps_gets_the_defaults():
+    d, fake = repo(["change"])
+    out = dry(d, fake, "--detach")
+    assert out.returncode == 0 and "caps: 40 iterations, USD 25.00" in out.stdout, out.stdout + out.stderr
+    out = dry(d, fake, "--detach", "--max-usd", "5")
+    assert "caps: USD 5.00;" in out.stdout and "40 iterations" not in out.stdout, out.stdout  # a cap named wins
+    out = dry(d, fake, "--detach", "--no-caps")
+    assert "caps: NONE" in out.stdout and "WARNING no budget" in out.stdout, out.stdout
+    out = dry(d, fake)
+    assert "caps: NONE" in out.stdout, out.stdout  # in the foreground the user watches it: no default
+
+
+def test_protected_branch_is_refused():
+    d, fake = repo(["change"])
+    for branch in ("main", "master"):
+        out = dry(d, fake, "--branch", branch)
+        assert out.returncode != 0 and f"{branch} is a protected branch" in out.stderr, out.stdout + out.stderr
+    subprocess.run(["git", "-C", str(d), "update-ref", "refs/remotes/origin/trunk", "HEAD"], check=True)
+    subprocess.run(["git", "-C", str(d), "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk"],
+                   check=True)
+    out = dry(d, fake, "--branch", "trunk")
+    assert out.returncode != 0 and "trunk is a protected branch" in out.stderr, out.stdout + out.stderr  # the remote's default
+    (d / ".git" / "info" / "exclude").write_text(".claude/\n")
+    (d / ".claude").mkdir()
+    (d / ".claude" / "kit.json").write_text(json.dumps({"guard": {"protectedBranches": ["release"]}}))
+    out = dry(d, fake, "--branch", "release")
+    assert out.returncode != 0 and "release is a protected branch" in out.stderr, out.stdout + out.stderr
+    out = dry(d, fake, "--branch", "overnight/mine")
+    assert out.returncode == 0 and "branch overnight/mine" in out.stdout, out.stdout + out.stderr
+    # nothing was created or checked out by a refusal
+    head = subprocess.run(["git", "-C", str(d), "branch", "--show-current"], capture_output=True, text=True).stdout
+    assert head.strip() == "main", head
+
+
+def test_push_ask_keeps_the_branch_local():
+    d, fake = repo(["change", "done"])
+    remote = Path(tempfile.mkdtemp()) / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    subprocess.run(["git", "-C", str(d), "remote", "add", "origin", str(remote)], check=True)
+    (d / ".git" / "info" / "exclude").write_text(".claude/\n")
+    (d / ".claude").mkdir()
+    (d / ".claude" / "kit.local.json").write_text(json.dumps({"lead": {"unattended": {"push": "ask"}}}))
+    out, end, run_dir = run(d, fake, "--push")
+    assert end["pushed"].startswith("skipped: push=ask in ") and "git push -u origin" in end["pushed"], end
+    assert len(end["commits"]) == 2, end
+    on_remote = subprocess.run(["git", "-C", str(remote), "branch", "--list"], capture_output=True, text=True).stdout
+    assert not on_remote.strip(), on_remote
+    assert "push: skipped: push=ask" in (run_dir / "notes.md").read_text() and "push=ask" in out, out
 
 
 def test_detach_reports_a_run_that_stops_at_once():

@@ -23,15 +23,14 @@ without being asked (`auto_apply`), and session_start.py says so in one line.
 A settings file that is not valid JSON is never rewritten. Standard library only.
 """
 
-import json
-import shutil
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from kitlib import config_dir, read_json  # noqa: E402
+from kitlib import config_dir, read_json, update_settings  # noqa: E402
 
 ATTRIBUTION = {"commit": "", "pr": "", "sessionUrl": False}
+BACKUP = "settings.json.kit-backup"
 OWN_BRANCHES = ("On a branch an agent created for its own task (not the default branch, not one "
                 "someone else pushed to), rewriting its commits (amend, rebase, setting the user's "
                 "authorship) and pushing it with --force-with-lease")
@@ -66,14 +65,10 @@ def answer():
 
 def remember(value):
     """Write machineSetup into ~/.claude/kit.json beside its other keys; False when it does not parse."""
-    path = kit_path()
-    kit, ok = read_json(path)
-    if not ok:
-        return False
-    kit["machineSetup"] = value
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(kit, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    return True
+    def note(kit):
+        kit["machineSetup"] = value
+
+    return update_settings(kit_path(), note) == "written"
 
 
 def pending():
@@ -84,33 +79,50 @@ def pending():
     return missing(settings) if ok else []
 
 
+def unreadable():
+    """One line when this account's settings.json is not valid JSON (and the user has not said no on
+    this machine): the kit left it alone, so the user knows why nothing was offered or applied."""
+    if answer() == "declined":
+        return None
+    _, ok = read_json(settings_path())
+    if ok:
+        return None
+    return (f"kit: {settings_path()} is not valid JSON, so the kit's machine settings were not offered "
+            "or applied and the file was left alone. Claude Code cannot read it either: fix it, and the "
+            "next session start offers them.")
+
+
 def merge():
-    """(code, lines): merge the settings into this account's settings.json, backup first."""
+    """(code, lines): merge the settings into this account's settings.json, backup first. The file
+    is read again under the kit's settings lock, so a change another writer made is kept."""
     path = settings_path()
-    settings, ok = read_json(path)
-    if not ok:
+    existed = path.exists()
+    todo = []
+
+    def add(settings):
+        todo[:] = missing(settings)
+        if not todo:
+            return False
+        if settings.get("attribution") not in (ATTRIBUTION, False):
+            settings["attribution"] = dict(ATTRIBUTION)
+        auto = settings.get("autoMode")
+        auto = auto if isinstance(auto, dict) else {}
+        allow = auto.get("allow")
+        if not isinstance(allow, list):
+            allow = ["$defaults"]  # keep Claude Code's built-in allow rules, add ours after them
+        if OWN_BRANCHES not in allow:
+            allow.append(OWN_BRANCHES)
+        auto["allow"] = allow
+        settings["autoMode"] = auto
+
+    result = update_settings(path, add, backup=BACKUP)
+    if result == "broken":
         return 1, [f"{path} is not a valid JSON object; nothing was changed. Fix it, then run --apply again."]
-    todo = missing(settings)
-    if not todo:
+    if result == "busy":
+        return 1, [f"{path} kept changing while the kit wrote it; nothing was changed. Run --apply again."]
+    if result == "same":
         return 0, ["Nothing to do: this machine already has the kit's settings."]
-    lines = []
-    if path.exists():
-        backup = path.with_name("settings.json.kit-backup")
-        shutil.copy2(path, backup)
-        lines.append(f"Backup: {backup}")
-    if settings.get("attribution") not in (ATTRIBUTION, False):
-        settings["attribution"] = dict(ATTRIBUTION)
-    auto = settings.get("autoMode")
-    auto = auto if isinstance(auto, dict) else {}
-    allow = auto.get("allow")
-    if not isinstance(allow, list):
-        allow = ["$defaults"]  # keep Claude Code's built-in allow rules, add ours after them
-    if OWN_BRANCHES not in allow:
-        allow.append(OWN_BRANCHES)
-    auto["allow"] = allow
-    settings["autoMode"] = auto
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    lines = [f"Backup: {path.with_name(BACKUP)}"] if existed else []
     return 0, lines + [f"Updated {path}:"] + [f"- {line}" for line in todo]
 
 
@@ -135,7 +147,10 @@ def auto_apply():
     if not ok or settings.get("attribution", ATTRIBUTION) not in (ATTRIBUTION, False):
         return None
     existed = settings_path().exists()
-    code, _ = merge()
+    try:
+        code, _ = merge()
+    except OSError:  # the settings lock is busy (kitlib.SettingsBusy): the next session start retries
+        return None
     if code != 0:
         return None
     backup = "; a backup is beside it" if existed else ""

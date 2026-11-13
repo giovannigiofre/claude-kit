@@ -31,7 +31,7 @@ queued | agent - | - | from <source>`), so a handed-off or taken item is seen. S
     python3 items.py done <id> [--force]
     python3 items.py status [--json]
     python3 items.py conflicts [<id> ...]
-    python3 items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow] [--proposal]
+    python3 items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask] [--proposal]
     python3 items.py records [set "<place>: <what to update>" ...]
     python3 items.py away on|off|status
     python3 items.py sandbox on|off|status
@@ -62,14 +62,18 @@ rebase=.. merge=..`; not set, they are the defaults push=allow rebase=allow merg
 prints as `ask`, with the file and rule to change, while a deny or ask rule in any settings scope
 matches the step or no allow rule covers it (kitlib.unattended_effective). With `--proposal`, for an
 owner who asks how to change that, it also prints a PROPOSAL, the settings change per file as a JSON
-diff, which it never applies (kitlib.unattended_proposal).
+diff, which it never applies (kitlib.unattended_proposal). It never sets merge=allow: the owner merges,
+and only he can write that value into the file. A thread cannot run `unattended` with arguments, nor
+`away` or `sandbox` but their status (guard.py): those are the coordinator's.
 
 `away on` sets permissions.denyInsteadOfPrompting in the account's settings.json (backup first, other
 keys kept, a file that does not parse left alone), so a permission prompt becomes a denial while
-nobody is there to answer; the next interactive session start or `away off` takes it away again
-(kitlib.away_on). A value the owner set himself is left as it is.
+nobody is there to answer. The owner is back when he writes: the coordinator runs `away off` at his
+next message, and the next interactive session start does it too (kitlib.away_on). A value the
+owner set himself is left as it is. `away status` says since when it is on.
 
-`sandbox on` writes SANDBOX into this checkout's .claude/settings.local.json beside its other keys;
+`sandbox on` writes SANDBOX into this checkout's .claude/settings.local.json beside its other keys
+(through a symlink to its target, under the kit's settings lock: kitlib.update_settings);
 a sandbox block the owner wrote is left as it is. `sandbox off` changes nothing and prints the exact
 edit: loosening a setting is the owner's to approve (settings_guard.py asks for it), not the kit's.
 """
@@ -87,21 +91,23 @@ import kitlib  # noqa: E402
 
 ITEM_LINE = re.compile(r"^\s*ITEM:\s*([a-z0-9][a-z0-9._-]*)\s*$", re.M | re.I)
 # The kit's sandbox (Claude Code's sandbox settings): the network the usual package registries and
-# GitHub need, and no read of the stores that hold credentials an agent has no use for. git's own
-# network commands run outside it, so push, fetch and pull keep the credentials they need (the
-# ssh agent, gh, .netrc), which is also why those three are not in denyRead. Inside the sandbox
-# Bash runs without a prompt (autoAllowBashIfSandboxed): the sandbox is the check.
+# GitHub need, and no read of the stores that hold credentials, the ssh keys, gh's token and
+# .netrc among them. git's own network commands run outside it (excludedCommands, each with and
+# without arguments), so push, fetch and pull still reach the ssh agent, gh and .netrc; a command
+# inside the sandbox cannot read them. Inside it Bash runs without a prompt (autoAllowBashIfSandboxed):
+# the sandbox is the check.
 SANDBOX = {
     "enabled": True,
     "failIfUnavailable": False,
     "allowUnsandboxedCommands": False,
     "autoAllowBashIfSandboxed": True,
-    "excludedCommands": ["git push *", "git fetch *", "git pull *"],
+    "excludedCommands": ["git push", "git push *", "git fetch", "git fetch *", "git pull", "git pull *"],
     "network": {"allowedDomains": [
         "github.com", "*.github.com", "*.githubusercontent.com", "registry.npmjs.org", "*.npmjs.org",
         "registry.yarnpkg.com", "pypi.org", "files.pythonhosted.org", "crates.io", "index.crates.io",
         "static.crates.io", "proxy.golang.org", "sum.golang.org", "rubygems.org", "api.anthropic.com"]},
-    "filesystem": {"denyRead": ["~/.aws", "~/.docker", "~/.kube", "~/.gnupg"]},
+    "filesystem": {"denyRead": ["~/.aws", "~/.docker", "~/.kube", "~/.gnupg", "~/.ssh", "~/.config/gh",
+                                "~/.netrc"]},
 }
 
 
@@ -123,8 +129,14 @@ def sandbox(here, action):
             return 0, f"Sandbox is already on ({path})."
         if current is not None:
             return 0, f"{path} already has a sandbox block of yours; the kit left it as it is."
-        settings["sandbox"] = SANDBOX
-        kitlib.write_json_atomic(path, settings)
+        def add(settings):
+            if settings.get("sandbox") is not None:  # written meanwhile: the owner's, left as it is
+                return False
+            settings["sandbox"] = SANDBOX
+
+        result = kitlib.update_settings(path, add)
+        if result != "written":
+            return 1, f"{path} changed while the kit wrote it; nothing was changed. Run sandbox on again."
         return 0, (f"Sandbox on: wrote the kit's block to {path}. Bash runs inside it without a prompt; "
                    "git push, fetch and pull run outside it. Check it with /sandbox; add a host under "
                    "sandbox.network.allowedDomains.")
@@ -682,6 +694,11 @@ def main(argv=None):
             if step not in kitlib.UNATTENDED_STEPS or value not in ("ask", "allow"):
                 print(f"items: unattended takes push=, rebase=, merge= each ask or allow, not {arg!r}", file=sys.stderr)
                 return 2
+            if step == "merge" and value == "allow":
+                print("items: merge=allow is not the kit's to set: the owner merges. To let unattended runs merge, "
+                      f"set \"lead\": {{\"unattended\": {{\"merge\": \"allow\"}}}} in {kitlib.unattended_prefs(root)[2]} "
+                      "yourself.", file=sys.stderr)
+                return 2
             changes[step] = value
         if changes:
             try:
@@ -723,7 +740,8 @@ def main(argv=None):
         elif action == "status":
             state, path = kitlib.away_state()
             code, message = (1 if state == "broken" else 0), {
-                "kit": "Away: on (set by the kit; the next interactive session start turns it off).",
+                "kit": f"Away: on since {kitlib.away_since()} (set by the kit; the coordinator runs "
+                       "`I away off` at the user's next message, and the next interactive session start turns it off).",
                 "own": f"Away: on (you set it in {path}).", "off": "Away: off.",
                 "broken": f"{path} is not a valid JSON object."}[state]
         else:

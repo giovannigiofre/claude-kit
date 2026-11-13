@@ -61,7 +61,7 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
 - `guard`: on by default in a project with `kit.json`; `"off"` turns it off. `protectedBranches`
   defaults to main, master and the remote's default branch. `denyCommands` / `askCommands`: the
   project's own rules, `{"pattern": "<regex over the whole command>", "reason": "..."}` each
-  (a plain string is a pattern); `/kit:learn` writes one when a lesson is "never run X here". `agentsAsk` / `agentsDeny` are an
+  (a plain string is a pattern); `/kit:learn` proposes one when a lesson is "never run X here" and writes it on your yes. `agentsAsk` / `agentsDeny` are an
   optional per-session cap on subagents (ask past one, refuse past the other); the native
   `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` caps how many run at once. `allowCommands`: regexes the
   guard lets through. `attribution` (default `"block"`): blocks AI credits in commit messages, PR,
@@ -88,7 +88,17 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
   and `git config core.hooksPath` (or `--unset`) leaving the repository's hooks; its current
   hooks folder and an existing folder in its work tree (`.husky`, `.githooks`) are its own. The
   refusal says to fix what the hook reports, or hand the step back with the hook's output;
-  `allowCommands` can let a specific command through. One rule holds in every repo, with or without `kit.json` and with the guard off:
+  `allowCommands` can let a specific command through. Pushes: a push to a protected branch, a
+  force push to one, deleting one and `--mirror` are refused; a push with `--force`, `-f` or a
+  `+refspec`, or with `--all`, is asked about from any caller, while `--force-with-lease` on a
+  branch that is not protected stays free. From a subagent, a push that deletes a remote branch
+  (`:branch`, `--delete`) is asked about, and merging a PR (`gh pr merge`, a `gh api` call to
+  `…/merge` or the `mergePullRequest` mutation, a GitHub MCP merge tool) is refused: the thread
+  reports `needs merge` and the coordinator merges; from the main session `gh pr merge` is left to
+  the permission system. Also from a subagent, the kit's `items.py` commands that change the
+  owner's settings (`away on|off`, `sandbox on|off`, `unattended` with any choice) are refused,
+  matched by the script's real path; `away status`, `sandbox status` and a bare `unattended` pass.
+  One rule holds in every repo, with or without `kit.json` and with the guard off:
   a `kit:verifier` subagent (that agent type only, not another plugin's verifier) may write a
   memory file (a `MEMORY.md` in any case, anything in an `agent-memory` folder) only inside
   `<main checkout>/.kit/agent-memory/kit-verifier`, so its pitfalls outlive the worktree. The
@@ -213,7 +223,12 @@ trusted, whatever it commits.
 - A new list starts with `"$defaults"` (`environment` supports it, as `allow` does), so the
   built-in entries stay current; a list without it is left that way, and a non-list
   `environment` is left alone with a one-line warning.
-- Writes happen under a lock (`kit-auto-mode.lock`, waited on for at most 2 seconds: a busy lock skips the sync at session start with one line, and `--set`/`--remove` store the block, exit 1 and leave it for the next session start), atomically, only when the result changes,
+- Writes go through the kit's one settings writer, `kitlib.update_settings`. It holds
+  `~/.claude/kit-settings.lock`, which every kit write to a settings file shares, waiting at most
+  2 seconds (a busy lock skips the sync at session start with one line, and `--set`/`--remove`
+  store the block, exit 1 and leave it for the next session start). It re-reads the file under the
+  lock, writes atomically only when the result changes, and replaces the target of a symlinked
+  settings.json, keeping its mode bits,
   after a backup to `settings.json.kit-auto-mode-backup`; the first backup ever is also kept as
   `settings.json.kit-auto-mode-backup.orig`. If another program writes settings.json during a
   rebuild, the rebuild starts again from that version. A settings file that is not valid JSON,
@@ -250,7 +265,7 @@ python3 <kit>/hooks/scripts/items.py done <id> [--force]   # refuses an open or 
 python3 <kit>/hooks/scripts/items.py status [--json]        # one read-only snapshot of the open items
 python3 <kit>/hooks/scripts/items.py conflicts [<id> ...]   # exit 0 clean, 1 conflict, 2 unknown
 python3 <kit>/hooks/scripts/worktrees.py [--json]           # classify linked worktrees, print a plan
-python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow] [--proposal]
+python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask] [--proposal]
 ```
 
 `unattended`: the owner's git preferences for unattended runs in this repo, in the main
@@ -259,7 +274,8 @@ checkout's `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "allow", 
 repo, never global, never committed. Without arguments it prints the brief line `UNATTENDED:
 push=.. rebase=.. merge=..` and whether it is set; a missing, broken or misspelt value takes the
 default, push and rebase `allow` and merge `ask` (`kitlib.UNATTENDED_DEFAULTS`). The coordinator
-does not ask: it saves a choice only when the owner states one, and briefs every thread of the run
+does not ask: it saves a choice only when the owner states one (push and rebase; `merge=allow` is
+refused, the owner merges and writes that value into the file himself), and briefs every thread of the run
 with that line ([unattended.md](../plugins/kit/skills/lead/unattended.md)). Until 2026-11 an unset
 step was `ask` and the coordinator asked before the first run; the owner gave the same answer
 each time, which is now the default.
@@ -656,7 +672,7 @@ a generic rewording, promoted only when that passes the structural check too.
 **Upkeep**: from 14 days after the last review (the first session starts the clock) the session
 start adds one line, "the lesson review is due", at most once per 14 days, and the coordinator
 runs the review itself (`kit:learn` loads on its own; it asks the user only before changing a
-committed instruction file, and a skipped review comes back a period later). It runs `lessons.py review --dry-run`, which changes nothing
+committed instruction file or `.claude/kit.json`, and a skipped review comes back a period later). It runs `lessons.py review --dry-run`, which changes nothing
 and previews the distiller's merges, retires and promotions on a throwaway copy of the ledgers (its
 rewords too when the model is allowed: that one call counts for the day and the review applies its
 answer; `--no-model` says rewords are skipped), then `lessons.py review` (every change has an undo): it
@@ -734,16 +750,20 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
     `permissions.denyInsteadOfPrompting` (2.1.319) in the account's own `settings.json` (backup
     `settings.json.kit-away-backup`, other keys kept, a file that does not parse left alone): a
     tool call that would wait on a permission prompt is denied and the turn goes on. The kit notes
-    that it set it (`kit-away.json` beside settings.json) and takes it away at the next interactive
-    session start (not a headless run, not a compaction) or on `away off`; a value you set yourself
-    is never removed. The status line shows `away` while it is on. Until 2026-11 the mod's
-    `/kit-safety unattended` wrote it into the project's `settings.local.json`; session start
-    removes it from there once and says so.
+    that it set it (`kit-away.json` beside settings.json: the time, the file and a hash of the
+    value written). You are back when you write: the coordinator runs `away off` at your next
+    message, before anything else, and the next interactive session start (not a headless run,
+    not a compaction) does it too. While it is on, the coordinator line at a session start, after a
+    compaction or a `/clear` says since when, and `away status` does too. The key counts as the
+    kit's only while the marker matches it: a marker whose key you removed is dropped the first time
+    the kit reads the state, and a value you set yourself is never removed. The status line shows
+    `away` while it is on.
   - "Use the sandbox": `items.py sandbox on` writes the kit's block into
     `.claude/settings.local.json` (a block of your own is left alone): the registries' and GitHub's
-    hosts, no read of `~/.aws`, `~/.docker`, `~/.kube`, `~/.gnupg`, Bash without a prompt inside it
-    (`autoAllowBashIfSandboxed`), and `git push`, `fetch` and `pull` outside it, so they keep their
-    credentials. Check it with `/sandbox`; add hosts under `sandbox.network.allowedDomains`. Where
+    hosts, no read of `~/.aws`, `~/.docker`, `~/.kube`, `~/.gnupg`, `~/.ssh`, `~/.config/gh` and
+    `~/.netrc`, Bash without a prompt inside it (`autoAllowBashIfSandboxed`), and `git push`, `fetch`
+    and `pull` (bare and with arguments) outside it, so they keep their credentials while a command
+    inside cannot read them. Check it with `/sandbox`; add hosts under `sandbox.network.allowedDomains`. Where
     the sandbox can't start, commands run unsandboxed with a warning rather than all failing. The
     status line shows `sandbox` while it is on. `sandbox off` changes nothing and prints the edit:
     loosening a setting is yours to approve.
@@ -758,7 +778,7 @@ line still work; only the status line, the watchdog and the interim-notice drop 
 ```
 python3 <kit>/skills/overnight/scripts/overnight.py "<objective>" --stop-when "<condition>" \
   --worktree ../app-overnight --max-iterations 40 --max-usd 25 --effort medium [--fallback-model sonnet] [--max-turns 60] \
-  [--push] [--detach]
+  [--push] [--detach] [--no-caps]
 ```
 
 The coordinator starts a night itself, without an OK round or a budget question: `items.py away
@@ -770,6 +790,12 @@ log and exit code instead. It is not a Bash `run_in_background` command, which e
 session, and the guard's wait rule does not apply to it. `--push`: when the run ends with commits,
 the runner pushes its branch to `origin` once (`git push -u`), so the morning result can be read
 from a phone; `end-state.json` `pushed` says what happened, and a failed push never fails the run.
+With `push=ask` under `lead.unattended` in the main checkout's `.claude/kit.local.json`, read when
+the run ends, it does not push: `pushed` and `notes.md` say the branch stayed local, with the
+command to push it. A `--detach` run given no caps takes `--max-iterations 40 --max-usd 25` and
+prints that line; `--no-caps` runs it without. The runner refuses a `--branch` the guard protects
+(`guard.protectedBranches` in `.claude/kit.json`, else in `~/.claude/kit.json`, else `main` and
+`master`, plus `origin`'s default branch), since a run commits on a branch of its own.
 
 Each iteration runs `claude -p` in permission mode `auto` unless `--permission-mode` says
 otherwise, with `--permission-prompts none` (a headless session cannot answer a prompt: anything
