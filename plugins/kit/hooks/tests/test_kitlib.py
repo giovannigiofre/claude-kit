@@ -157,10 +157,35 @@ def main():
         check(kitlib.state_dir_name(repo) == ".kit", "kit.json alone is not state: a fresh project uses .kit")
         check(kitlib.state_entry(tree, "lead") == repo / ".kit" / "lead", kitlib.state_entry(tree, "lead"))
         check(kitlib.state_entry(tree, "overnight") == tree / ".kit" / "overnight", "overnight is per checkout")
+        check(kitlib.state_entry(tree, "evidence") == tree / ".kit" / "evidence", "evidence is per checkout")
+        check(kitlib.state_entry(tree, "evidence", per_checkout=False) == repo / ".kit" / "evidence",
+              "the gate's record asks for the main checkout's")
+        check(set(kitlib.PER_CHECKOUT_STATE) <= set(kitlib.STATE_NAMES), "per-checkout names are state names")
         check(kitlib.board_file(tree, {}) == repo / ".kit" / "lead" / "board.md", kitlib.board_file(tree, {}))
         legacy = {"lead": {"board": ".claude/lead/board.md"}}
         check(kitlib.board_file(repo, legacy) == repo / ".kit" / "lead" / "board.md", "the old default follows the move")
         check(kitlib.board_file(repo, {"lead": {"board": "docs/board.md"}}) == repo / "docs" / "board.md", "a custom board stays")
+        # a name of the owner's own inside the old lead folder follows the folder too
+        own = {"lead": {"board": ".claude/lead/BOARD.md"}}
+        check(kitlib.board_file(tree, own) == repo / ".kit" / "lead" / "BOARD.md", kitlib.board_file(tree, own))
+        absolute = {"lead": {"board": str(repo / ".claude" / "lead" / "sub" / "b.md")}}
+        check(kitlib.board_file(repo, absolute) == repo / ".kit" / "lead" / "sub" / "b.md", "an absolute path inside it")
+        check(kitlib.board_file(repo, {"lead": {"board": ".claude/boards/b.md"}}) == repo / ".claude" / "boards" / "b.md",
+              "a path elsewhere in .claude stays as written")
+        # lead.state in kit.local.json, the helpers undo uses: set, read from a worktree, removed
+        check(kitlib.lead_local(tree, "state") is None, "nothing set")
+        kitlib.save_lead_local(tree, "state", ".claude")
+        check(kitlib.lead_local(repo, "state") == ".claude", "set from a worktree, read in the main checkout")
+        kitlib.save_lead_local(repo, "state", None)
+        check(kitlib.lead_local(repo, "state") is None, "removed")
+        (repo / ".claude" / "kit.local.json").write_text("{broken")
+        try:
+            kitlib.save_lead_local(repo, "state", ".claude")
+            check(False, "an unparseable kit.local.json is never rewritten")
+        except ValueError:
+            pass
+        check((repo / ".claude" / "kit.local.json").read_text() == "{broken", "left as it was")
+        (repo / ".claude" / "kit.local.json").unlink()
         (repo / ".claude" / "evidence").mkdir()
         check(kitlib.state_dir_name(repo) == ".claude", "legacy state keeps the project in .claude")
         check(kitlib.state_entry(tree, "lead") == repo / ".claude" / "lead", "a new entry joins the old layout")

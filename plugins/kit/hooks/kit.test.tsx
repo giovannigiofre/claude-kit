@@ -252,6 +252,37 @@ test('the board and overnight runs are read from .kit first, then .claude', asyn
   expect(lines.at(-1)).toBe('loop · host · $1.50 · ready 1: B1 · 2 overnight')
 })
 
+test('a board name of the owner inside .claude/lead follows the move; one elsewhere stays as written', async ($, on) => {
+  const files: Record<string, string> = {
+    '/repo/.claude/kit.json': JSON.stringify({ lead: { board: '.claude/lead/BOARD.md' } }),
+    '/repo/.kit/lead/BOARD.md': 'NEEDS YOU: none\nB1 | ship | moved | DONE WHEN e2e | review | agent B1 | PR #4 | CI green',
+  }
+  world(on, files)
+  const lines: (string | undefined)[] = []
+  on('ui.status', (_, e) => {
+    lines.push(e.text)
+    return { value: undefined }
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  expect(lines.at(-1)).toBe('loop · host · $1.50 · ready 1: B1')
+})
+
+test('a board kept outside .claude/lead is read where kit.json says', async ($, on) => {
+  const files: Record<string, string> = {
+    '/repo/.claude/kit.json': JSON.stringify({ lead: { board: 'ops/board.md' } }),
+    '/repo/ops/board.md': 'NEEDS YOU: none\nC1 | ship | own | DONE WHEN e2e | review | agent C1 | PR #5 | CI green',
+    '/repo/.kit/lead/board.md': 'NEEDS YOU: none\nB1 | ship | moved | DONE WHEN e2e | review | agent B1 | PR #4 | CI green',
+  }
+  world(on, files)
+  const lines: (string | undefined)[] = []
+  on('ui.status', (_, e) => {
+    lines.push(e.text)
+    return { value: undefined }
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  expect(lines.at(-1)).toBe('loop · host · $1.50 · ready 1: C1')
+})
+
 test('a thread waiting for an answer counts on the line; a board that gains work for the person keeps the line right', async ($, on) => {
   const files: Record<string, string> = {
     '/repo/.claude/lead/board.md': 'NEEDS YOU: none\nA1 | ship | login | DONE WHEN e2e | working | agent A1 | - | started',

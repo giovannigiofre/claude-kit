@@ -39,7 +39,7 @@ the thread's own report: a narrative that frames a change as a fix can steer a r
 3. Exercise the change the way a user meets it where there is a surface. For a bug fix,
    reproduce the original failure first, then show it gone. A suite that never touches the
    change, or a test that mocks the path it claims to check, is not evidence. Save what proves
-   it in the evidence folder the kit's gate line names (`.kit/evidence/<branch>/`), written with Bash. A check that changes the code to see
+   it in the evidence folder the kit's gate line names (`.kit/evidence/<branch>/` of your worktree), written with Bash. A check that changes the code to see
    a test fail runs in a throwaway worktree, never in the checkout under review.
 4. Check the project's own rules for this kind of change. When the diff touches LLM code
    (prompts, tool schemas, model config, provider calls) and the kit-llm plugin is around, its

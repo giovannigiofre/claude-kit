@@ -44,7 +44,15 @@ def main():
             (f'python3 "{SCRIPTS / "items.py"}" list --status queued', "allow"),
             (f"python3 {SCRIPTS / 'items.py'} new \"Login page\" --brief - --from lead", "allow"),
             (f"python3 {SCRIPTS / 'proposals.py'} take readme-install", "allow"),
-            (f"python3 {SCRIPTS / 'migrate_state.py'} migrate --root .", "allow"),  # the move out of .claude
+            # the move out of .claude: status and a bare migrate only, the rest is the owner's call
+            (f"python3 {SCRIPTS / 'migrate_state.py'} migrate", "allow"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} status", "allow"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} migrate --force", "prompt"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} undo", "prompt"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} migrate --root /other", "prompt"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} --root /other migrate", "prompt"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} migrate --dry-run", "prompt"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'}", "prompt"),
             (f"python3 {Path(tmp) / 'migrate_state.py'} migrate", "prompt"),
             (f"python3 {Path(tmp) / 'items.py'} list", "prompt"),  # a script of that name elsewhere is not the kit's
             (f"python3 {SCRIPTS / 'machine_setup.py'} --apply", "prompt"), ("rm -rf /", "prompt"),

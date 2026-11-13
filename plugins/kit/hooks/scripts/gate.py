@@ -87,7 +87,7 @@ def ensure_excluded(root):
     """Evidence stays out of git: its line (`/.kit/evidence/`, or `/.claude/evidence/` before the
     move) in .git/info/exclude unless the project ignores it already (the overnight runner does the
     same for its run files)."""
-    kitlib.exclude_state(root, "evidence")
+    kitlib.exclude_state(root, "evidence", per_checkout=False)
 
 
 def evidence_root(root):
@@ -96,7 +96,8 @@ def evidence_root(root):
 
 
 def record_path(root, name, branch=None):
-    return kitlib.state_entry(root, "evidence") / (branch or branch_name(root)) / f"gate-{name}.json"
+    # the main checkout's, also from a worktree: the record outlives the worktree (kitlib.PER_CHECKOUT_STATE)
+    return kitlib.state_entry(root, "evidence", per_checkout=False) / (branch or branch_name(root)) / f"gate-{name}.json"
 
 
 def read_record(root, name, branch=None):

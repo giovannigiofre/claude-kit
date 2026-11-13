@@ -297,6 +297,27 @@ def main():
             failed += 1
             print(f"FAIL sibling worktree {want} expected, got {got}: {command!r} from {cwd.name}")
 
+    # the kit's state folders of the main checkout are refused like the root once out of .claude/,
+    # from the main checkout and from a worktree; an item's own output folder stays deletable
+    out = repo / ".kit" / "lead" / "items" / "x1" / "out"
+    out.mkdir(parents=True)
+    (out / "shot.png").write_text("x")
+    (repo / ".kit" / "agent-memory" / "kit-verifier").mkdir(parents=True)
+    (sibling / ".kit" / "evidence").mkdir(parents=True)
+    for cwd, command, want in ((repo, "rm -rf .kit", "block"), (repo, "rm -rf .kit/", "block"),
+                               (repo, "rm -rf ./.kit/lead", "block"), (repo, "rm -rf .kit/agent-memory", "block"),
+                               (repo, f"rm -rf {repo}/.kit", "block"), (repo, "find .kit -delete", "block"),
+                               (repo, "find .kit/lead -name '*.tmp' -delete", "allow"),
+                               (sibling, f"rm -rf {repo}/.kit", "block"), (sibling, "rm -rf ../app/.kit/lead", "block"),
+                               (sibling, f"cd {repo} && rm -rf .kit/agent-memory", "block"),
+                               (repo, "rm -rf .kit/lead/items/x1/out", "allow"),
+                               (repo, "rm -rf .kit/lead/items/x1/out/shot.png", "allow"),
+                               (sibling, "rm -rf .kit", "allow"), (sibling, "rm -rf .kit/evidence", "allow")):
+        got = verdict(home, cwd, command)
+        if got != want:
+            failed += 1
+            print(f"FAIL kit state delete {want} expected, got {got}: {command!r} from {cwd.name}")
+
     # `cd <dir> &&` into another repository: deletes inside it are judged against that repository
     other = repo.parent / "other"
     subprocess.run(["git", "init", "-q", str(other)], check=True)
@@ -516,6 +537,36 @@ def main():
         if code == 2:
             failed += 1
             print(f"FAIL only the verifier's memory writes are checked, not {agent}'s")
+
+    # the same under the .kit/ layout: the stable folder is the main checkout's .kit/agent-memory/
+    h17, r17 = setup(project_kit=False)
+    stable17 = r17 / ".kit" / "agent-memory" / "kit-verifier"
+    stable17.mkdir(parents=True)
+    wt17 = r17.parent / "app-wt"
+    subprocess.run(["git", "-C", str(r17), "worktree", "add", "-q", "-b", "feat/wt", str(wt17)], check=True)
+    (wt17 / ".kit" / "agent-memory" / "kit-verifier").mkdir(parents=True)
+
+    def as_verifier17(cwd, command):
+        env = dict(os.environ, HOME=str(h17), TMPDIR=str(h17 / "tmp"), CLAUDE_CONFIG_DIR=str(h17 / ".claude"))
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd), "session_id": "s17",
+                   "agent_id": "v1", "agent_type": "kit:verifier"}
+        out = subprocess.run([sys.executable, str(SCRIPT)], input=json.dumps(payload), capture_output=True,
+                             text=True, env=env, timeout=30)
+        return out.returncode, out.stderr
+
+    for cwd, command, blocked in [
+        (r17, "cat >> MEMORY.md <<'EOF'\n- [x](x.md) — y\nEOF", True),
+        (wt17, "echo '- x' >> .kit/agent-memory/kit-verifier/MEMORY.md", True),
+        (wt17, f"cd {wt17}/.kit/agent-memory/kit-verifier && cat >> MEMORY.md", True),
+        (wt17, "cp notes.md .kit/agent-memory/kit-verifier/pitfall.md", True),
+        (wt17, f"cat >> {stable17}/MEMORY.md <<'EOF'\n- [x](x.md) — y\nEOF", False),
+        (wt17, f"cd {stable17} && cat >> MEMORY.md", False),
+        (wt17, "mkdir -p .kit/evidence/feat-wt && echo ok > .kit/evidence/feat-wt/run.txt", False),
+    ]:
+        code, err = as_verifier17(cwd, command)
+        if (code == 2) != blocked or (blocked and str(stable17) not in err):
+            failed += 1
+            print(f"FAIL verifier memory (.kit) {'block' if blocked else 'allow'}: {command!r} in {cwd} -> {code} {err[:160]}")
 
     # retry: the same push, rebase or merge at the same commit stops at the fourth try, per session and thread
     home, r17 = setup()

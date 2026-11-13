@@ -171,6 +171,33 @@ def save_unattended(cwd, changes):
 # comment, a progress file, a diary, a published page): the coordinator finds them in the repo's
 # own guidance once, confirms them with the owner and saves them in the same kit.local.json
 # (`{"lead": {"records": ["...", ...]}}`); `items.py done` prints them as the item's checklist.
+def lead_local(cwd, key):
+    """kit.local.json `lead.<key>` of the repo's main checkout, or None."""
+    value, _ = read_json(Path(main_checkout(cwd) or cwd) / LOCAL_CONFIG)
+    lead = (value or {}).get("lead")
+    return lead.get(key) if isinstance(lead, dict) else None
+
+
+def save_lead_local(cwd, key, value):
+    """Set kit.local.json `lead.<key>` beside the other keys (None removes it); a file that does
+    not parse is never rewritten (ValueError)."""
+    path = Path(main_checkout(cwd) or cwd) / LOCAL_CONFIG
+    data, ok = read_json(path)
+    if not ok:
+        raise ValueError(f"{path} is not a JSON object; fix or remove it first")
+    lead = dict(data.get("lead")) if isinstance(data.get("lead"), dict) else {}
+    if value is None:
+        if key not in lead:
+            return
+        lead.pop(key)
+    else:
+        lead[key] = value
+    data["lead"] = lead
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    exclude(path.parent.parent, LOCAL_CONFIG)
+
+
 def records(cwd):
     """(places, path): the saved record places, [] when not set or unreadable."""
     path = Path(main_checkout(cwd) or cwd) / LOCAL_CONFIG
@@ -473,8 +500,11 @@ STATE_DIR = ".kit"
 LEGACY_STATE_DIR = ".claude"
 # What moves, an allowlist: a name missing here stays where it is (other agents' agent-memory too).
 STATE_NAMES = ("lead", "evidence", "overnight", "agent-memory/kit-verifier")
-PER_CHECKOUT_STATE = ("overnight",)  # in the checkout the run is in, a linked worktree included
-LEGACY_BOARD = ".claude/lead/board.md"  # the default /kit:init wrote into kit.json `lead.board`
+# In the checkout they belong to, a linked worktree included: a run lives in the checkout it ran
+# in, and a thread saves its proof under its own worktree. The gate's record is the exception:
+# gate.py keeps it in the main checkout's evidence folder, so it outlives the worktree.
+PER_CHECKOUT_STATE = ("overnight", "evidence")
+LEGACY_LEAD = ".claude/lead/"  # a kit.json `lead.board` under it moves with the folder (board_file)
 
 
 def has_legacy_state(base):
@@ -519,20 +549,28 @@ def state_entry(root, name, per_checkout=None):
 
 
 def board_file(root, config=None):
-    """The board: kit.json `lead.board` (relative to `root`), else `<state>/lead/board.md`. The old
-    default /kit:init wrote there, `.claude/lead/board.md`, counts as the default, so it follows
-    the move."""
+    """The board: kit.json `lead.board` (relative to `root`), else `<state>/lead/board.md`. A path
+    inside the old lead folder (`.claude/lead/board.md`, the default /kit:init wrote, or a name of
+    the owner's own such as `.claude/lead/BOARD.md`) follows the move: read only from `.claude/lead`,
+    it showed "none open" once the folder had moved. A path anywhere else is the owner's."""
     lead = config.get("lead") if isinstance(config, dict) else None
-    board = lead.get("board") if isinstance(lead, dict) and isinstance(lead.get("board"), str) else ""
-    if not board.strip() or Path(board.strip()).as_posix() == LEGACY_BOARD:
-        return state_entry(root, "lead") / "board.md"
-    return Path(board) if Path(board).is_absolute() else Path(root) / board
+    board = lead.get("board").strip() if isinstance(lead, dict) and isinstance(lead.get("board"), str) else ""
+    if not board:
+        return state_entry(root, "lead", per_checkout=False) / "board.md"
+    path = Path(board) if Path(board).is_absolute() else Path(root) / board
+    for base in dict.fromkeys(_state_bases(root, False)[:2]):
+        try:
+            inside = path.relative_to(base / LEGACY_LEAD)
+        except ValueError:
+            continue
+        return state_entry(root, "lead", per_checkout=False) / inside
+    return path
 
 
-def exclude_state(root, name):
+def exclude_state(root, name, per_checkout=None):
     """Keep the state entry `name` out of git where it is now: one line per entry
     (`/.kit/lead/`), never a blanket `/.kit/`, so a project may commit other files there."""
-    path = state_entry(root, name)
+    path = state_entry(root, name, per_checkout)
     for base in dict.fromkeys(_state_bases(root, False)[:2]):
         try:
             exclude_dir(base, path.relative_to(base).as_posix())
