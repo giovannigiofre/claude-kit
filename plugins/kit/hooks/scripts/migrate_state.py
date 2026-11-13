@@ -24,14 +24,17 @@ How, one entry at a time, so a run that dies half-way leaves nothing unreadable:
     locks, appends and never removes a line) before anything moves: `/.kit/<entry>/` and the
     old `/.claude/<entry>/`, so a leftover or later-made `.claude/evidence/` stays out of
     `git status`, where `git add -A` or the overnight runner's `git clean -fd` would catch it.
-    An entry tracked in git gets no line in either layout;
+    An entry tracked in git gets no line in either layout. An entry still to move whose line
+    git does not see is reported as not moved (exit 1), never as "nothing to move";
   - each entry is one `os.rename` from `.claude/<entry>` to `.kit/<entry>` (across filesystems:
     copy, compare, then delete the source). kitlib.state_entry looks for each entry in `.kit/`
     first and then in `.claude/`, so between two renames every entry is read from wherever it
     is, and the next run carries on. Two session starts at once: the one that finds the source
     gone says nothing about it; `.kit/migration.json` (the log of runs) is merged under a lock;
   - an entry with files tracked in git stays where it is and the `git mv` to run is printed;
-    a checkout whose `.kit` is a symlink gets nothing moved into it;
+    a symlinked entry is left where it is and gets no exclude line of its own; a checkout
+    whose `.kit` is a symlink is not moved, nothing is written through the link (no log, no
+    note), and only `/.kit` is excluded, so the link stays out of `git status`;
   - an entry in both places is a conflict: both stay, the other entries move anyway, and
     `status` lists it with the two paths. The session start says it, and why a move waits,
     once, and again only when that changes (what it said is kept in the git dir);
@@ -218,9 +221,10 @@ def plan(main, src_dir, dst_dir):
     for checkout in checkouts(main):
         link = checkout / dst_dir
         if dst_dir == STATE and link.is_symlink():
-            if any(present(checkout / src_dir / name) for name in names_for(checkout, main)):
-                skipped.append((checkout / src_dir, f"{link} is a symlink (to {os.readlink(link)}), and nothing is "
-                                f"moved into a link; move the entries by hand, or replace the link with a folder"))
+            if checkout == main or any(present(checkout / src_dir / name) for name in names_for(checkout, main)):
+                skipped.append((checkout / src_dir, f"{link} is a symlink (to {os.readlink(link)}), so it is not the "
+                                f"kit's folder: this checkout stays on {LEGACY}/ and nothing is written through "
+                                f"the link; replace it with a folder to move"))
             continue
         sources = [checkout / src_dir]
         if src_dir == LEGACY and checkout == main:
@@ -257,7 +261,10 @@ def read_manifest(main):
 
 def add_run(main, done):
     """Append this run to `.kit/migration.json` under the lock, read and merged there, so two
-    sessions moving at once each keep the other's entries."""
+    sessions moving at once each keep the other's entries. Nothing when the main checkout's
+    `.kit` is a symlink (only worktrees moved): nothing is written through a link."""
+    if kitlib.kit_dir_linked(main):
+        return
     with kitlib.git_lock(main, "kit-migration.lock"):
         record = read_manifest(main)
         runs = record.get("runs") if isinstance(record.get("runs"), list) else []
@@ -292,18 +299,27 @@ def tell_once(main, lines):
 def exclude_wanted(main, with_files):
     """Every exclude line the move needs, computed once: `/.kit/<entry>/` and `/.claude/<entry>/`
     for each entry found in either place, except one tracked in git (it is not the kit's to hide)
-    and in a checkout whose `.kit` is a symlink (nothing moves there); with `with_files`, the
-    manifest's, the note's and kit.local.json's too (undo writes it later)."""
+    and an entry that is a symlink (never probed: it is the owner's, and left in place). A
+    checkout whose `.kit` is a symlink gets only `/.kit`, so the link does not show in `git
+    status`. With `with_files`, the manifest's, the note's and kit.local.json's too (undo writes
+    it later)."""
     lines = []
     for checkout in checkouts(main):
-        if (checkout / STATE).is_symlink():
+        # the note's line serves every worktree: the exclude file is shared
+        files = [kitlib.LOCAL_CONFIG, f"{LEGACY}/{NOTE}"] if with_files and checkout == main else []
+        if kitlib.kit_dir_linked(checkout):
+            lines += kitlib.exclude_lines(checkout, files=files + [STATE])
             continue
         dirs = []
         for name in names_for(checkout, main):
-            found = [f"{folder}/{name}" for folder in (STATE, LEGACY, OLD_STAGING) if present(checkout / folder / name)]
+            paths = [(folder, checkout / folder / name) for folder in (STATE, LEGACY, OLD_STAGING)]
+            found = [f"{folder}/{name}" for folder, path in paths if present(path)]
+            if any(path.is_symlink() for _, path in paths):
+                continue
             if found and not any(tracked(checkout, rel) for rel in found):
                 dirs += [f"{STATE}/{name}", f"{LEGACY}/{name}"]
-        files = [kitlib.LOCAL_CONFIG, f"{STATE}/{MANIFEST}", f"{LEGACY}/{NOTE}"] if with_files and checkout == main else []
+        if with_files and checkout == main:
+            files.append(f"{STATE}/{MANIFEST}")
         lines += kitlib.exclude_lines(checkout, files=files, dirs=dirs)
     return list(dict.fromkeys(lines))
 
@@ -337,13 +353,13 @@ def migrate(main, dry=False, force=False, out=print, again=False):
     # .gitignore covered it before), so a later write to the old place stays hidden too; one call
     kitlib.add_exclude_lines(main, exclude_wanted(main, with_files=bool(moves)))
     ready = []
+    done, failed = [], []
     for move_ in moves:
         checkout, name, src, _ = move_
         if ignored(checkout, f"{STATE}/{name}"):
             ready.append(move_)
-        else:
-            out(f"left in place: {src} (git would see {STATE}/{name}/: .git/info/exclude could not take it)")
-    done, failed = [], []
+        else:  # still to move: said as a failure, so the exit code and `status` agree
+            failed.append((src, f"git would see {STATE}/{name}/: .git/info/exclude could not take its line"))
     for checkout, name, src, dst in ready:
         try:
             how = move(src, dst)
@@ -362,7 +378,7 @@ def migrate(main, dry=False, force=False, out=print, again=False):
         except OSError as exc:  # the log only; the entries are where kitlib looks for them
             out(f"note: {main / STATE / MANIFEST} not updated ({exc})")
         for checkout in {Path(d["checkout"]) for d in done}:
-            if not (checkout / LEGACY).is_dir():
+            if not (checkout / LEGACY).is_dir() or kitlib.kit_dir_linked(checkout):
                 continue  # its .claude/ held only kit state and is gone: no folder made for a note
             names = ", ".join(d["name"] for d in done if d["checkout"] == str(checkout))
             try:
@@ -429,8 +445,8 @@ def undo(main, dry=False, force=False, out=print):
 
 def auto(root):
     """session_start.py's call. Returns the lines to print: the "moved" line whenever entries
-    moved, and what needs the owner (why the move waits, conflicts, entries left in place), said
-    once and again only when it changes."""
+    moved, and what needs the owner (why the move waits, conflicts, entries left in place or that
+    failed to move, and why), said once and again only when it changes."""
     main = Path(kitlib.main_checkout(root) or root)
     if kitlib.lead_local(main, "state") == LEGACY:  # the owner ran undo
         return []
@@ -439,6 +455,8 @@ def auto(root):
     if not moves and not skipped and not conflicts and not (said and said.exists()):
         return []  # the common case, nothing to do: no file is written
     lines, told, done, failed = [], [], [], []
+    if not moves and any(kitlib.kit_dir_linked(c) for c in checkouts(main)):
+        kitlib.add_exclude_lines(main, exclude_wanted(main, with_files=False))  # the link's `/.kit`
     if moves:
         try:
             _, done, conflicts, failed = migrate(main, out=lambda _line: None)
@@ -452,11 +470,9 @@ def auto(root):
         names = ", ".join(sorted({d["name"] for d in done}))
         lines.append(f"kit: moved this project's kit state ({names}) from {LEGACY}/ to {STATE}/, out of the "
                      f"folder Claude Code protects; undo: python3 {SCRIPT} undo")
-    for src, exc in failed:
-        lines.append(f"kit: {src} did not move to {STATE}/ ({exc}); it is read where it is, and the next "
-                     f"session start tries again")
     conflicts = [(src, dst) for src, dst in conflicts if present(src) and present(dst)]
-    told += [f"kit: {src} was not moved to {STATE}/: {reason}" for src, reason in skipped] + \
+    told += [f"kit: {src} did not move to {STATE}/ ({exc}); it is read where it is, and each session "
+             f"start tries again" for src, exc in failed] + [f"kit: {src} was not moved to {STATE}/: {reason}" for src, reason in skipped] + \
             [f"kit: {src} and {dst} both exist, so neither was moved or changed; merge what you need into "
              f"{dst} and delete {src} (`python3 {SCRIPT} status` lists them)" for src, dst in conflicts]
     return lines + tell_once(main, told)

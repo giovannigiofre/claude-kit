@@ -122,12 +122,15 @@ def undo(root, to="HEAD"):
 def runs_dir(root, main=None):
     """`.kit/overnight` of this checkout, or `.claude/overnight` where runs already are. A new run in
     a project whose main checkout still keeps its state in `.claude` (and has no `.kit`) goes
-    there too, so one project never has two layouts."""
+    there too, so one project never has two layouts. A `.kit` that is a symlink, here or in the
+    main checkout, is not the kit's folder: runs stay in `.claude/overnight`."""
     root = Path(root)
+    main = Path(main) if main else root
+    if (root / STATE_DIR).is_symlink() or (main / STATE_DIR).is_symlink():
+        return root / LEGACY_STATE_DIR / "overnight"  # a linked .kit is not the kit's folder
     for name in (STATE_DIR, LEGACY_STATE_DIR):
         if (root / name / "overnight").is_dir():
             return root / name / "overnight"
-    main = Path(main) if main else root
     if not (main / STATE_DIR).is_dir() and any((main / LEGACY_STATE_DIR / n).is_dir() for n in LEGACY_STATE):
         return root / LEGACY_STATE_DIR / "overnight"
     return root / STATE_DIR / "overnight"
