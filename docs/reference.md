@@ -78,7 +78,10 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
   `gh pr checks --watch`) and names the way out: `run_in_background`, the Monitor tool, the
   completion notice. A Monitor command, a background command, one ended with `&`, a `while read`
   loop, a long Bash `timeout` and a command `allowCommands` names pass; `"waits": false` turns
-  the rule off. One rule holds in every repo, with or without `kit.json` and with the guard off:
+  the rule off. The `retry` rule refuses the same push, rebase or PR merge (the same command text, in
+  the same folder, at the same commit) a fourth time within 30 minutes, per session and thread, and tells
+  the thread to hand the step back; a new commit or another command starts afresh, and
+  `"retries": false` turns it off. One rule holds in every repo, with or without `kit.json` and with the guard off:
   a `kit:verifier` subagent (that agent type only, not another plugin's verifier) may write a
   memory file (a `MEMORY.md` in any case, anything in an `agent-memory` folder) only inside
   `<main checkout>/.claude/agent-memory/kit-verifier`, so its pitfalls outlive the worktree. The
@@ -96,8 +99,8 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
 - `lead` configures the coordinator. `ship`: `local` (verified branches, you merge), `pr` (threads
   push and open PRs), `pr+fix` (they also keep CI green). `merge`: `user` (you review and merge
   every PR) or `agent` (the coordinator merges a PR once CI is green, the review has nothing open
-  and the risk is not high; a high-risk PR still waits for you); unset, the coordinator asks when
-  the first PR is ready and writes your answer here. Setting `pr` or `pr+fix` here is a
+  and the risk is not high; a high-risk PR still waits for you); unset means `user`: threads open
+  PRs on their own, and the coordinator merges one only when you ask for it. Setting `pr` or `pr+fix` here is a
   standing go-ahead to push; without it the coordinator asks once per session. `parallel`:
   threads working at once (default 3). `budget`: `{"items": N}` or `"none"`. `loops`: standing
   loops the coordinator schedules (session-only, they expire after 7 days).
@@ -106,7 +109,8 @@ Threads may commit, amend, rebase and force-push (with `--force-with-lease`) on 
 they created for their own items, never on the default branch or someone else's. Auto mode
 blocks history rewrites by default, and `autoMode` is read from user settings only, so the kit
 offers this rule (with `attribution` off) once per machine at session start and merges it into
-`~/.claude/settings.json` on yes (`hooks/scripts/machine_setup.py`; `--decline` stops the offer):
+the account's `settings.json` on yes (`~/.claude`, or `CLAUDE_CONFIG_DIR` for a second account on the same
+machine, each checked and set up on its own; `hooks/scripts/machine_setup.py`; `--decline` stops the offer):
 
 ```json
 {"autoMode": {"allow": ["$defaults", "On a branch an agent created for its own task (not the default branch, not one someone else pushed to), rewriting its commits (amend, rebase, setting the user's authorship) and pushing it with --force-with-lease"]}}
@@ -595,14 +599,18 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
   ```
 
   Status: `queued`, `working`, `review`, `needs-you`, `landing`, `done`, `parked`. The status line
-  counts the `review` items (`N ready`), the NEEDS YOU questions and `needs-you` rows (`N need
-  you`) and the `queued` rows, re-reading the board every 15 seconds (a board written as a
-  Markdown table, or with capitalised statuses, counts the same), and the threads stopped on a
-  question or a permission (`N waiting`, from the engine's agent list). When a tick finds more
-  ready items or questions than the last one, the mod sends one native notification
-  (`$.ui.notify`, Claude Code 2.1.295+; silently skipped where the engine lacks it), unless you
+  names the items, most urgent first: `needs you 2: a2-region, pr-328` (the NEEDS YOU entries and
+  the `needs-you` rows, each id once), `ready 1: login-page` (`review`), `working 2: chart, cleanup`
+  (`working` and `landing`; without a board, the engine's `N running`), `queued 3`. It shows two
+  ids and then `+n`, re-reads the board every 15 seconds (a Markdown table, a capitalised status, a
+  dropped cell or a `;` inside a question read the same), and adds `N waiting on a prompt` for
+  threads stopped on a question or a permission (the engine's agent list). When a tick finds an id
+  newly ready or newly needing you, the mod sends one native notification naming it, with its
+  question (`$.ui.notify`, Claude Code 2.1.295+; silently skipped where the engine lacks it), unless you
   were active in the terminal within the last minute; in loop mode the coordinator is told the
-  mod notifies, so you get one notice per event, not two.
+  mod notifies, so you get one notice per event, not two. A prompt that arrives over Remote Control
+  says the opposite for as long as you are remote: on a phone neither the line nor that notification
+  shows, so the coordinator sends one PushNotification itself when an item becomes ready or needs you.
 - **Safety**: `/kit-safety host|sandbox`. Sandbox writes the kit's block into
   `.claude/settings.local.json`; check it with `/sandbox`, add hosts under
   `sandbox.network.allowedDomains`. Where the sandbox can't start, commands run unsandboxed with
@@ -670,7 +678,12 @@ claude plugin validate ./plugins/kit && claude plugin validate .
 claude --plugin-dir ./plugins/kit            # try changes in one session without installing
 ```
 
-Self-checks (no tokens):
+Before a pull request, run everything with one command: `python3 tests/run_all.py` (every file below, then
+the mod's tests when `claude` is installed; exit 0 = all good). The repo has no CI, so this is the gate: put
+its last lines in the PR. In your own `.claude/kit.json` for this repo, `{"verify": "python3 tests/run_all.py"}`
+makes it the kit's gate for the kit.
+
+The self-checks one by one (no tokens):
 
 ```bash
 python3 tests/test_budget.py
