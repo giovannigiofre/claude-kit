@@ -538,6 +538,31 @@ def test_a_foreground_run_leaves_nothing_to_tell():
     assert state["detached"] is False and isinstance(state["pid"], int), state
 
 
+def test_the_end_line_waits_for_the_readers_lock():
+    """tell_later appends under an exclusive flock on untold.jsonl, the one the session start
+    holds while it reads and cuts the file in place, so neither loses the other's line."""
+    import fcntl
+    runs_dir = Path(tempfile.mkdtemp()) / "overnight"
+    (runs_dir / "r1").mkdir(parents=True)
+    untold = runs_dir / "untold.jsonl"
+    untold.write_text('{"run": "r0"}\n')
+    code = ("import importlib.util, sys\n"
+            "spec = importlib.util.spec_from_file_location('overnight', sys.argv[1])\n"
+            "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+            "m.tell_later(sys.argv[2], {'run_id': 'r1', 'stop_reason': 'done', 'iteration': 2, 'cost': 0.5,"
+            " 'branch': 'b', 'pushed': ''})\n")
+    with open(untold, "r+b") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        writer = subprocess.Popen([sys.executable, "-c", code, str(SCRIPT), str(runs_dir / "r1")])
+        time.sleep(1.0)
+        assert writer.poll() is None and untold.read_text() == '{"run": "r0"}\n', "the writer waits for the lock"
+        held.seek(0)
+        held.truncate()  # the reader's cut, in place
+    assert writer.wait(timeout=30) == 0
+    lines = untold.read_text().splitlines()
+    assert len(lines) == 1 and json.loads(lines[0])["run"] == "r1", lines
+
+
 def dry(d, fake, *args):
     return subprocess.run([sys.executable, str(SCRIPT), "improve work.txt", "--agent-cmd", f"{sys.executable} {fake}",
                            "--dry-run", *args], cwd=d, capture_output=True, text=True, timeout=60, env=env(d))

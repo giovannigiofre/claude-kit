@@ -249,6 +249,13 @@ def fresh_project_checks(tmp, check):
     data = json.loads(run(repo, "status", "--json", env=env)[1])
     check([r["run"] for r in data["overnight"]] == ["r1"] and (runs / "untold.jsonl").exists(),
           f"status reads it and leaves it: {data['overnight']}")
+    # a record of the wrong shape never stops status
+    with open(runs / "untold.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"run": "r2", "cost": "x", "iterations": None}) + "\n[1]\n{broken\n")
+    code, out, err = run(repo, "status", env=env)
+    check(code == 0 and "the overnight run r2 ended: ?, ? iterations, USD ?, branch ? pushed ?: tell the user" in out
+          and out.count("an overnight run ended (its record could not be read): tell the user") == 2,
+          f"status says odd records plainly: {code} {out} {err}")
 
 
 def away_checks(tmp, check):
@@ -477,6 +484,12 @@ def lock_checks(tmp, check):
     folder = fresh / f"claude-kit-{os.getuid()}"
     check(code == 0 and folder.is_dir() and folder.stat().st_mode & 0o777 == 0o700,
           f"lock folder {folder}: {oct(folder.stat().st_mode) if folder.exists() else 'missing'} {out} {err}")
+    local.unlink()
+    # one of the user's own that is looser (made by hand, or by an older kit under a wide umask) is tightened
+    folder.chmod(0o777)
+    code, out, err = run(repo, "sandbox", "on", env=dict(env, TMPDIR=str(fresh)))
+    check(code == 0 and folder.stat().st_mode & 0o777 == 0o700,
+          f"a loose lock folder is tightened: {oct(folder.stat().st_mode)} {out} {err}")
     local.unlink()
     # a lock folder that cannot be made (a file in its place): the same one line
     odd = tmp / "oddtmp"

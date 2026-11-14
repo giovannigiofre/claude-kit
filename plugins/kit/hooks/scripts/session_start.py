@@ -251,14 +251,18 @@ def away_back(data):
 def overnight_ended(root, data):
     """A detached overnight run cannot send a push, so the next interactive start (a compaction
     too) says each run that ended unseen, once (kitlib.overnight_news). A headless run or a
-    subagent leaves them for the owner. Before the kit.json check: a run is opt-in enough."""
+    subagent leaves them for the owner. At most OVERNIGHT_SAY runs, the rest summed up in one line
+    and left for status. Before the kit.json check: a run is opt-in enough."""
     if not root or os.environ.get("KIT_HEADLESS") or data.get("agent_id"):
         return []
     try:
-        news = kitlib.overnight_news(root, consume=True)
+        news, left = kitlib.overnight_news(root, consume=True, limit=kitlib.OVERNIGHT_SAY)
     except Exception as exc:
         return [f"kit: overnight runs not checked: {exc}"]
-    return [kitlib.overnight_news_line(n) + ": tell the user once, with a push notification" for n in news]
+    lines = [kitlib.overnight_news_line(n) + ": tell the user once, with a push notification" for n in news]
+    if left:
+        lines.append(f"kit: and {left} more overnight runs ended: `items.py status` lists them")
+    return lines
 
 
 def away_line():
