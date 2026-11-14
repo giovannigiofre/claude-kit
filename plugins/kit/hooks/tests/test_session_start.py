@@ -348,6 +348,27 @@ def overnight_checks():
             (runs / "untold.jsonl").write_text(json.dumps(told) + "\n")
             assert line in run({"cwd": str(repo), "source": "compact"}).splitlines(), "after a compaction too"
             assert "overnight run" not in run({"cwd": str(repo), "source": "compact"}), "and once"
+
+            # whatever the file holds, the start exits 0 and prints the rest of its context
+            (repo / ".claude").mkdir(exist_ok=True)
+            (repo / ".claude" / "kit.json").write_text(json.dumps({"check": "make lint"}))
+            odd = [{"run": "r-cost", "cost": "x", "iterations": "7", "pushed": "yes", "branch": ["b"]},
+                   {"run": "r-bare"}, {"run": "r-nan", "cost": float("nan"), "iterations": True},
+                   {"run": "two\nlines", "stop_reason": 5, "cost": 1e300, "branch": "b", "pushed": False}]
+            (runs / "untold.jsonl").write_text("".join(json.dumps(o) + "\n" for o in odd)
+                                               + "[1, 2]\n{not json\n\n\"text\"\n")
+            out = run(payload)
+            said = [l for l in out.splitlines() if "overnight run" in l]
+            assert "make lint" in out, out
+            assert ("kit: the overnight run r-cost ended: ?, ? iterations, USD ?, branch ? pushed ?: "
+                    "tell the user once, with a push notification") in said, said
+            assert any(l.startswith("kit: the overnight run r-bare ended: ?, ? iterations, USD ?, branch ? pushed ?")
+                       for l in said), said
+            assert any(l.startswith("kit: the overnight run r-nan ended: ?, ? iterations, USD ?") for l in said), said
+            assert any(l.startswith("kit: the overnight run two lines ended: 5, ? iterations, USD ?, branch b not pushed")
+                       for l in said), said
+            assert said.count("kit: an overnight run ended (its record could not be read): tell the user once, "
+                              "with a push notification") == 3, said
         finally:
             alive.kill()
             alive.wait()

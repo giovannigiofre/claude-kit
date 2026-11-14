@@ -741,12 +741,13 @@ def overnight_news(root, consume=False):
             except OSError:
                 text = ""
             for line in text.splitlines():
+                if not line.strip():
+                    continue
                 try:
                     entry = json.loads(line)
                 except ValueError:
-                    continue
-                if isinstance(entry, dict) and entry.get("run"):
-                    news.append(entry)
+                    entry = None
+                news.append(entry if isinstance(entry, dict) else None)  # None: said as unreadable
             if source != untold:
                 try:
                     source.unlink()
@@ -776,10 +777,25 @@ def overnight_news(root, consume=False):
 
 
 def overnight_news_line(entry):
-    """One run from overnight_news, as the session start says it."""
-    return (f"kit: the overnight run {entry.get('run')} ended: {entry.get('stop_reason')}, "
-            f"{entry.get('iterations', 0)} iterations, USD {float(entry.get('cost') or 0):.2f}, "
-            f"branch {entry.get('branch')} {'pushed' if entry.get('pushed') else 'not pushed'}")
+    """One run from overnight_news, as the session start says it. It never raises: a field that
+    is missing or of the wrong type prints as `?`, and a record that is not a JSON object is said
+    as an end that could not be read."""
+    if not isinstance(entry, dict):
+        return "kit: an overnight run ended (its record could not be read)"
+
+    def text(key):
+        value = entry.get(key)
+        if isinstance(value, bool) or not isinstance(value, (str, int)) or value == "":
+            return "?"
+        return " ".join(str(value).split())[:200] or "?"  # one line, whatever the file holds
+
+    iterations = entry.get("iterations")
+    iterations = iterations if isinstance(iterations, int) and not isinstance(iterations, bool) else "?"
+    cost = entry.get("cost")
+    ok = isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost == cost and abs(cost) < 1e12
+    pushed = {True: "pushed", False: "not pushed"}.get(entry.get("pushed"), "pushed ?")
+    return (f"kit: the overnight run {text('run')} ended: {text('stop_reason')}, {iterations} iterations, "
+            f"USD {f'{cost:.2f}' if ok else '?'}, branch {text('branch')} {pushed}")
 
 
 def board_file(root, config=None):

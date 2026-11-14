@@ -249,6 +249,13 @@ def fresh_project_checks(tmp, check):
     data = json.loads(run(repo, "status", "--json", env=env)[1])
     check([r["run"] for r in data["overnight"]] == ["r1"] and (runs / "untold.jsonl").exists(),
           f"status reads it and leaves it: {data['overnight']}")
+    # a record of the wrong shape never stops status
+    with open(runs / "untold.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"run": "r2", "cost": "x", "iterations": None}) + "\n[1]\n{broken\n")
+    code, out, err = run(repo, "status", env=env)
+    check(code == 0 and "the overnight run r2 ended: ?, ? iterations, USD ?, branch ? pushed ?: tell the user" in out
+          and out.count("an overnight run ended (its record could not be read): tell the user") == 2,
+          f"status says odd records plainly: {code} {out} {err}")
 
 
 def away_checks(tmp, check):
