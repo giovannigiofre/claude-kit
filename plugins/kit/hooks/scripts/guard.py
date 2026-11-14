@@ -403,22 +403,34 @@ def tokenize(line):
         return line.split()
 
 
-def shell_body(argv):
-    """The command string a shell runs (`bash -c CMD`, `bash -lc CMD`, `sh -xec CMD`), else None.
-    Like bash, the string follows any short-option cluster that holds `c`."""
+SHELL_VALUE_OPTIONS = ("-o", "+o", "-O", "+O", "--rcfile", "--init-file")
+
+
+def shell_bodies(argv):
+    """The command strings a shell runs (`bash -c CMD`, `sh -xec CMD`, `bash -euo pipefail -c CMD`),
+    [] for a script run. Fail safe: once a short-option cluster holds `c`, every later word that is
+    not an option is walked as a command (one word too many matches no rule; a skipped body would
+    let anything through). Before it, -o/-O/--rcfile/--init-file and a cluster ending in o or O
+    take the next word as their value, so `pipefail` is not taken for a script file."""
     if not argv or Path(argv[0]).name not in SHELLS:
-        return None
-    i = 1
-    while i < len(argv) - 1:
-        if argv[i] in ("-o", "+o", "-O", "+O"):  # set options take a name
-            i += 2
-            continue
-        if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", argv[i]):
-            return argv[i + 1]
-        if not argv[i].startswith(("-", "+")):
-            return None  # a script file: what follows is its arguments
+        return []
+    bodies, after_c, i = [], False, 1
+    while i < len(argv):
+        word = argv[i]
+        if after_c:
+            if not word.startswith("-"):
+                bodies.append(word)
+        elif word in SHELL_VALUE_OPTIONS:
+            i += 1
+        elif re.fullmatch(r"[-+][A-Za-z]+", word):
+            if word[0] == "-" and "c" in word:
+                after_c = True
+            elif word[-1] in "oO":
+                i += 1
+        elif not word.startswith(("-", "+")):
+            return []  # a script file: what follows is its arguments
         i += 1
-    return None
+    return bodies
 
 
 def strip_wrappers(argv):
@@ -592,8 +604,7 @@ def segments(command, inner=False):
     nested = []
     for seg in out:
         argv = seg["argv"]
-        body = shell_body(argv)
-        if body is not None:
+        for body in shell_bodies(argv):
             nested.extend(dict(s, nested=True, plain=False) for s in segments(body, True))
     return out + nested
 
@@ -1680,10 +1691,11 @@ def memory_words(command):
         argv = seg.get("argv") or []
         if seg.get("nested") or not argv:
             continue
-        if shell_body(argv) is not None:
-            more = memory_words(shell_body(argv))
-            targets, code = targets + more[0], code + more[2]
-            env.update(more[1])
+        if shell_bodies(argv):
+            for body in shell_bodies(argv):
+                more = memory_words(body)
+                targets, code = targets + more[0], code + more[2]
+                env.update(more[1])
         elif INTERPRETER.fullmatch(Path(argv[0]).name):
             code += [argv[i + 1] for i, a in enumerate(argv[:-1]) if a in CODE_FLAGS]
     for opener, body in bodies:  # a here-document read by a shell is commands, by an interpreter code
