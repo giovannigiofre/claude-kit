@@ -18,7 +18,8 @@ from rewriting them; so do settings, skills, agents, worktrees, loop.md and othe
 
 How, one entry at a time, so a run that dies half-way leaves nothing unreadable:
   - refuses (exit 2) while a thread or run is at work: an item whose LOG.md ends in `working`
-    or `landing` and whose branch is not merged into the default branch (items.stale_merged), a
+    or `landing` and whose branch is not merged into the default branch (items.stale_merged; run
+    by hand, a PR git cannot place is asked of gh, the automatic run never does), a
     board row in one of those statuses, an overnight run with no stop_reason and no
     end-state.json. `--force` overrides (a thread that died leaves `working` behind);
   - the exclude lines are computed once and added in one call (kitlib.add_exclude_lines, which
@@ -109,8 +110,9 @@ def board_status(row):
     return (cells[0], cells[4].lower()) if len(cells) >= 5 else None
 
 
-def busy(main):
-    """Why the state must not move now: one line per thread or run still at work."""
+def busy(main, ask=None):
+    """Why the state must not move now: one line per thread or run still at work. `ask`: whether a
+    PR may be asked of gh (items.stale_merged); only a command a person runs passes it."""
     why, boards, stale = [], set(), set()
     for folder in (LEGACY, STATE):
         lead = Path(main) / folder / "lead"
@@ -118,7 +120,7 @@ def busy(main):
         found = lead / "items"
         for item in sorted(found.iterdir()) if found.is_dir() else []:
             status = items.status_of(item)[0] if item.is_dir() and item.name != "done" else None
-            if status in BUSY and items.stale_merged(main, item, status):
+            if status in BUSY and items.stale_merged(main, item, status, ask=ask):
                 stale.add(item.name)  # its branch is merged: nothing runs for it (`items.py done` closes it)
             elif status in BUSY:
                 why.append(f"item {item.name} is {status} ({item / 'LOG.md'})")
@@ -366,15 +368,15 @@ def gitignore_lines(main, names):
             if LEGACY in listed or f"{LEGACY}/{name}" in listed]
 
 
-def migrate(main, dry=False, force=False, out=print, again=False):
+def migrate(main, dry=False, force=False, out=print, again=False, ask_gh=False):
     """Move what can move; returns (exit code, the entries moved, the conflicts left, the entries
-    that failed with their error)."""
+    that failed with their error). ask_gh: run by hand, so an item's PR may be asked of gh."""
     main = Path(main)
     if kitlib.lead_local(main, "state") == LEGACY and not again:
         raise Refused(2, [f"not moving: the owner moved the state back to {LEGACY}/ with `undo` "
                           f"(kit.local.json lead.state); the owner moves it again with: "
                           f"python3 {SCRIPT} migrate --again"])
-    why = busy(main)
+    why = busy(main, items.gh_budget() if ask_gh else None)
     if why and not force:
         raise Refused(2, ["not moving: work is in progress. Wait for it, or --force if it is gone:"]
                       + [f"  - {w}" for w in why])
@@ -504,7 +506,10 @@ def auto(root):
         except Refused as exc:
             why = "; ".join(line.strip().lstrip("- ") for line in exc.lines[1:]) or exc.lines[0]
             told.append(f"kit: the kit's state waits to move from {LEGACY}/ to {STATE}/ ({why}); it moves at a "
-                        f"session start when nothing is at work, or: python3 {SCRIPT} migrate")
+                        f"session start when nothing is at work, or: python3 {SCRIPT} migrate. An item whose PR "
+                        f"was merged can still read as at work here, where no PR is asked about: "
+                        f"python3 {SCRIPT.parent / 'items.py'} status shows which are stale, and "
+                        f"`items.py done <id>` closes each")
         except OSError as exc:
             failed = [(main / LEGACY, exc)]
     if done:  # nothing here when another session moved them first
@@ -519,7 +524,7 @@ def auto(root):
     return lines + tell_once(main, told)
 
 
-def status(main, out=print):
+def status(main, out=print, ask_gh=False):
     main = Path(main)
     out(f"main checkout: {main}")
     out(f"state folder:  {kitlib.state_dir(main)}")
@@ -539,7 +544,7 @@ def status(main, out=print):
         out("  in both places, nothing moved or overwritten:")
         for line in conflict_lines(conflicts):
             out("  " + line)
-    for w in busy(main):
+    for w in busy(main, items.gh_budget() if ask_gh else None):
         out(f"  at work: {w}")
     return 0
 
@@ -558,10 +563,10 @@ def main(argv=None):
         return 1
     try:
         if args.command == "status":
-            return status(root)
+            return status(root, ask_gh=True)
         if args.command == "undo":
             return undo(root, args.dry_run, args.force)
-        return migrate(root, args.dry_run, args.force, again=args.again)[0]
+        return migrate(root, args.dry_run, args.force, again=args.again, ask_gh=True)[0]
     except Refused as exc:
         print("kit migrate: " + "\n".join(exc.lines), file=sys.stderr)
         return exc.code

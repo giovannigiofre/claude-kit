@@ -545,14 +545,36 @@ def merged(root, path, lines=None):
     shas = [m.group(1) for m in map(TIP.search, texts) if m]
     if not shas or kitlib.git_run(root, "rev-parse", "--verify", "--quiet", shas[0] + "^{commit}")[0] != 0:
         return None
-    return contains(shas[0])
+    # a squash merge leaves the reviewed commit outside the default branch: not in it proves nothing
+    return contains(shas[0]) or None
 
 
-def stale_merged(root, path, status=None, lines=None):
+GH_TIMEOUT = 10  # seconds for one `gh pr view` asked by `status` or a hand-run migrate
+GH_MAX = 10      # items asked about in one run, so a long board cannot stall the command
+
+
+def gh_budget():
+    """What a caller that may use the network passes as `ask`: GH_MAX `gh pr view` calls."""
+    return {"left": GH_MAX}
+
+
+def stale_merged(root, path, status=None, lines=None, ask=None):
     """An item logged `working` or `landing` whose branch is already merged: nothing runs for it,
-    and `items.py done <id>` closes it. Never closed here."""
+    and `items.py done <id>` closes it. Never closed here. With `ask` (gh_budget()), an item git
+    cannot place and whose LOG or REPORT names a PR is asked of `gh pr view`, as `done` does: the
+    owner's projects squash-merge and delete the branch, which git alone never reads as merged.
+    Unknown stays unknown. The session start's automatic migration passes no `ask`: no network."""
     status = status_of(path)[0] if status is None else status
-    return status in AT_WORK and merged(root, path, lines) is True
+    if status not in AT_WORK:
+        return False
+    lines = log_lines(path) if lines is None else lines
+    found = merged(root, path, lines)
+    if found is None and ask is not None and ask["left"] > 0:
+        pr = refs(path, lines)[2]
+        if pr:
+            ask["left"] -= 1
+            found = merge_state(root, pr, timeout=GH_TIMEOUT)[0] == "merged"
+    return found is True
 
 
 def at_work(root, path):
@@ -589,8 +611,9 @@ def needs_you(root, known=()):
     return out
 
 
-def snapshot(root, at=None):
-    """One snapshot of the open items, built from their folders (not from board.md)."""
+def snapshot(root, at=None, ask=None):
+    """One snapshot of the open items, built from their folders (not from board.md). `ask`: see
+    stale_merged."""
     rows = []
     for item in list_items(root):
         p = Path(item["path"])
@@ -607,7 +630,7 @@ def snapshot(root, at=None):
         rows.append({"id": item["id"], "kind": kind, "status": item["status"], "last_event": last[1],
                      "last_at": last[0], "age_minutes": age_minutes(last[0], at), "note": item["note"],
                      "agent": agent, "branch": branch, "pr": pr, "cost": costs(lines),
-                     "stale_merged": stale_merged(root, p, item["status"], lines),
+                     "stale_merged": stale_merged(root, p, item["status"], lines, ask),
                      "blocked_by": item["blocked_by"], "brief": item["brief"]})
     counts = {}
     for r in rows:
@@ -713,7 +736,7 @@ def conflicts(root, ids=None):
     return (1 if found else 2 if unknown else 0), lines
 
 
-def merge_state(root, pr):
+def merge_state(root, pr, timeout=30):
     """("merged" | "open" | "closed" | "unknown", detail) for the item's PR from `gh pr view`; unknown
     when gh is missing, not logged in or the call fails, never a guess."""
     gh = shutil.which("gh")
@@ -723,7 +746,7 @@ def merge_state(root, pr):
     target = pr.lstrip("#")
     try:
         out = subprocess.run([gh, "pr", "view", target, "--json", "state,mergedAt"], cwd=str(root),
-                             capture_output=True, text=True, timeout=30, env=kitlib.hermetic_env())
+                             capture_output=True, text=True, timeout=timeout, env=kitlib.hermetic_env())
     except (OSError, subprocess.TimeoutExpired) as exc:
         return "unknown", f"gh failed: {exc}"
     if out.returncode != 0:
@@ -802,7 +825,7 @@ def main(argv=None):
             print("items: none" + (f" with status {status}" if status else ""))
         return 0
     if cmd == "status":
-        snap = snapshot(root)
+        snap = snapshot(root, ask=gh_budget())
         if "--json" in rest:
             print(json.dumps(snap, indent=2))
         else:

@@ -184,7 +184,13 @@ line (or, when an item is `working` or `landing` or an overnight run is live, wh
 once and again only when the reason changes). An item counts as at work only while its branch is
 not merged into the default branch, decided from git alone: the branch its LOG or REPORT.md names
 is an ancestor of it (and has a commit of its own), or, the branch deleted, the last commit the
-item names (a verifier's `REVIEWED:` sha) is. When the kit cannot tell, the item stays at work. By
+item names (a verifier's `REVIEWED:` sha) is. A squash merge leaves that sha outside the default
+branch, so a deleted branch reads as "cannot tell". Then, only where a person runs the command
+(`items.py status`, a hand-run `migrate_state.py migrate` or `status`), an item whose LOG or
+REPORT.md names a PR is asked of `gh pr view` as `done` does: MERGED makes it stale, anything else,
+no `gh` or a failing call leaves it unknown. Each call has 10 seconds and at most ten items are
+asked per run. The session start's automatic move never calls the network, and its "waits to
+move" line names `items.py status` for finding the stale items. When the kit cannot tell, the item stays at work. By
 hand: `python3 <kit>/hooks/scripts/migrate_state.py status|migrate|undo [--dry-run] [--force] [--again]`
 (`--force` moves anyway, for a thread that died and left `working`). Each entry moves on its own,
 one rename from `.claude/<entry>` to `.kit/<entry>` (across filesystems: copy, compare, delete),
