@@ -108,6 +108,26 @@ def main():
         code, _, err = run(base)
         check(code == 2 and "not inside a git repository" in err, err)
 
+        # Claude Code's agent worktree: made on worktree-agent-<id>, then the thread moved to its own
+        # branch. The merged agent branch goes with the worktree; an unmerged one, or one for another
+        # worktree, stays.
+        agent = base / "agent-a1"
+        git(repo, "worktree", "add", "-q", "-b", "worktree-agent-a1", str(agent), "main")
+        git(agent, "checkout", "-q", "-b", "v2/a1")
+        git(repo, "branch", "worktree-agent-b2", "main")  # same commit, so it is this worktree's too
+        tree(repo, base, "merged2")  # also at main's commit: worktree-agent-b2 is listed once only
+        git(repo, "branch", "worktree-agent-zz", "ready")  # unmerged: never deleted
+        git(repo, "branch", "worktree-agent-old", "HEAD~1")  # merged, at the `merged` worktree's commit
+        code, out, _ = run(repo)
+        check(f"git worktree remove {agent} && git branch -d v2/a1 worktree-agent-a1 worktree-agent-b2\n" in out,
+              f"agent branches go with the worktree: {out}")
+        check("worktree-agent-zz" not in out, out)
+        check(f"git worktree remove {merged} && git branch -d merged worktree-agent-old\n" in out, out)
+        check(out.count("worktree-agent-b2") == 1, f"each branch goes with one worktree only: {out}")
+        data = json.loads(run(repo, "--json")[1])
+        row = [r for r in data["worktrees"] if r["path"] == str(agent)][0]
+        check(row["also_delete"] == ["worktree-agent-a1", "worktree-agent-b2"], row)
+
     print("worktrees: all checks passed" if not failed else f"worktrees: {failed} failures")
     return 1 if failed else 0
 
