@@ -41,20 +41,20 @@ and `out/`, files a thread leaves you with `I put <id> <file>...` (ask in the br
 outlive its worktree). The board is the index; the folder survives a compaction or a restart and is what the user reads or edits to steer. `/kit:handoff`
 and `/kit:scout take` queue items this way; for work the user gives you directly, make the item
 first: `I new "<name>" --brief - --from lead` with the brief on stdin (`--kind scout` for finding
-something out). Brief a thread with the `ITEM: <id>` line, the absolute BRIEF.md path (`I path
+something out). When `I new` refuses a name, another session has that item: read its LOG first. Brief a thread with the `ITEM: <id>` line, the absolute BRIEF.md path (`I path
 <id>`; a worktree has no `.kit/lead/`) and only what the file lacks. Log `working` when it
 starts (`I log <id> working "agent <agentId>, effort <level>"`), `review` or `needs-you` when it
 reports, and `I done <id>` when the PR is merged (more commands: [tools.md](tools.md)). Before re-briefing a thread, read BRIEF.md
 again (the user may have changed it) and VERDICT.md. Proposal cards (`.kit/lead/proposals/`,
 from `/kit:scout`): `next` takes a class A card (`P take <id>`), asks before a B, never starts a C.
 
+A session-start line saying kit.json is missing means the gates are off: tell the owner at once.
 Defaults come from kit.json `lead` (`ship`, `merge`, `parallel`, `budget`, `loops`), else ship
 `pr` (`local` when the repo has no remote), merge `user`, parallel 3, no budget; a ship mode that
 came from neither kit.json nor the user means asking once before the first push. State them in one
 line in your first reply; set up `lead.loops` as [loops.md](loops.md) says. When the user changes
 one, or states a preference ("propose threads before starting them", "reuse the thread for
-follow-ups"), save it under RULES. A change to ship or merge is a project policy: also write it
-to `.claude/kit.json` `lead`.
+follow-ups"), save it under RULES. A change to ship or merge is a project policy: also write it to `.claude/kit.json` `lead`.
 
 ## Each message
 
