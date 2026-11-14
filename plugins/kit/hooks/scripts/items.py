@@ -37,6 +37,7 @@ session has it); `--again` makes `<id>-2` on purpose, and an archived name gets 
     python3 items.py records [set "<place>: <what to update>" ...]
     python3 items.py away on|off|status
     python3 items.py sandbox on|off|status
+    python3 items.py forget
 
 `status` is one snapshot of the open items read from their folders: id, kind, status, last event
 and its age, note, the agent, branch and PR the LOG or REPORT.md names, the summed `cost` lines
@@ -67,6 +68,10 @@ owner who asks how to change that, it also prints a PROPOSAL, the settings chang
 diff, which it never applies (kitlib.unattended_proposal). It never sets merge=allow: the owner merges,
 and only he can write that value into the file. A thread cannot run `unattended` with arguments, nor
 `away` or `sandbox` but their status (guard.py): those are the coordinator's.
+
+`forget` removes the record a hook wrote under the account's config dir the first time it saw this
+project as a kit project (kitlib.latch_opt_in), so the hooks go quiet here once kit.json and the
+kit's state are both gone. It is the owner's: a thread is refused it (guard.py).
 
 `away on` sets permissions.denyInsteadOfPrompting in the account's settings.json (backup first, other
 keys kept, a file that does not parse left alone), so a permission prompt becomes a denial while
@@ -923,6 +928,21 @@ def main(argv=None):
                     print(f'  "{r}" also asks for other commands: removing it drops that prompt too; '
                           f"a narrower rule may be what the owner wants")
                 print(p["diff"])
+        return 0
+    if cmd == "forget":  # the owner's: guard.py refuses it from a thread
+        if rest:
+            print("items: forget takes no arguments", file=sys.stderr)
+            return 2
+        try:
+            record, had = kitlib.opt_in_record(root), kitlib.forget_opt_in(root)
+        except OSError as exc:
+            print(kitlib.write_failed(exc, "The kit's record of this project"), file=sys.stderr)
+            return 1
+        print((f"Forgot this project: removed {record}." if had else
+               f"Nothing to forget: no record at {record}.")
+              + " The kit's hooks stay quiet here while it has neither .claude/kit.json nor the kit's items "
+                "or board; either one makes it a kit project again. To keep the hooks off with kit.json "
+                'present, set "guard": "off" in it.')
         return 0
     if cmd in ("away", "sandbox"):
         action = rest[0] if rest else "status"

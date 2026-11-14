@@ -113,25 +113,112 @@ def _config_and_main(root):
 
 
 def has_kit_state(base):
-    """True when the checkout `base` holds the coordinator's working state: a `lead/` folder in
-    `.kit/` (or the legacy `.claude/`) with a board.md or an `items/` folder in it."""
+    """True when the checkout `base` holds what looks like the coordinator's working state: a real
+    (not symlinked) `lead/` folder in `.kit/` (or the legacy `.claude/`) with a board.md, or with an
+    `items/` folder holding at least one item folder that has a BRIEF.md. An empty `items/` or a
+    symlink planted in a repository does not opt it in."""
     for folder in (STATE_DIR, LEGACY_STATE_DIR):
         lead = Path(base) / folder / "lead"
         try:
-            if (Path(base) / folder).is_symlink() or not lead.is_dir():
+            if (Path(base) / folder).is_symlink() or lead.is_symlink() or not lead.is_dir():
                 continue
-            if (lead / "items").is_dir() or any(p.name.lower() == "board.md" and p.is_file() for p in lead.iterdir()):
+            if any(p.name.lower() == "board.md" and p.is_file() for p in lead.iterdir()):
+                return True
+            items = lead / "items"
+            if items.is_dir() and not items.is_symlink() and any((i / "BRIEF.md").is_file() for i in items.iterdir()):
                 return True
         except OSError:
             continue
     return False
 
 
+# The opt-in, latched outside the project. In a project that is a kit project only through its
+# state, `mv .kit/lead/items /tmp/x` or `rmdir .kit/lead/items` switched every hook off (review of
+# 2.0.1). So the first time a hook sees a project as a kit project, by kit.json or by its state, it
+# records that under the user's config dir, keyed the way auto_mode_sync.py keys a repository (the
+# normalized origin, else the main checkout's path); from then on the project counts as a kit
+# project. The owner turns it off with `"guard": "off"` in kit.json (no record is kept, and one
+# kept before is removed) or with `items.py forget`, which a subagent may not run.
+OPT_IN_DIR = "kit-projects"
+_LATCHED = set()
+
+
+def opt_in_key(root):
+    """The repository's key: its normalized origin (auto_mode_sync.clean_origin), else its main
+    checkout's path, else `root` outside git."""
+    main = main_checkout(root) or Path(root)
+    origin = ""
+    try:
+        import auto_mode_sync
+        raw = git_out(main, "remote", "get-url", "origin", timeout=10)
+        origin = (auto_mode_sync.clean_origin(raw) or "") if raw else ""
+    except Exception:
+        origin = ""
+    return origin or str(Path(main).resolve())
+
+
+def opt_in_record(root):
+    """The latch file for the repository at `root`."""
+    import hashlib
+    key = opt_in_key(root)
+    slug = re.sub(r"[^a-z0-9]+", "-", key.lower()).strip("-")[-60:]
+    folder = Path(os.environ.get("KIT_OPT_IN_DIR") or config_dir() / OPT_IN_DIR)  # the env: tests only
+    return folder / f"{slug}-{hashlib.sha1(key.encode()).hexdigest()[:8]}.json"
+
+
+def opted_in_before(root):
+    """True when a hook once saw this repository as a kit project and nobody has forgotten it."""
+    try:
+        return opt_in_record(root).is_file()
+    except Exception:
+        return False
+
+
+def latch_opt_in(root):
+    """Record that the repository at `root` is a kit project. Never raises: a hook must not fail
+    because the config dir cannot be written."""
+    try:
+        here = str(Path(root).resolve())
+        if here in _LATCHED:
+            return
+        record = opt_in_record(root)
+        if not record.is_file():
+            write_json_atomic(record, {"key": opt_in_key(root), "checkout": str(main_checkout(root) or here)})
+        _LATCHED.add(here)
+    except Exception:
+        pass
+
+
+def forget_opt_in(root):
+    """Remove the latch: True when there was one. The owner's command (items.py forget)."""
+    _LATCHED.clear()  # a checkout and its worktrees share the record: none of them is latched now
+    try:
+        opt_in_record(root).unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+_DROPPED = set()
+
+
+def drop_opt_in(root):
+    """forget_opt_in once per process for a kit.json that says `"guard": "off"`; never raises."""
+    here = str(Path(root).resolve())
+    if here in _DROPPED:
+        return
+    _DROPPED.add(here)
+    try:
+        forget_opt_in(root)
+    except Exception:
+        pass
+
+
 def config_missing(root):
-    """True when no kit.json applies in `root` although its main checkout holds kit state: the
-    project uses the kit and its kit.json went missing (load_config then returns `{}`)."""
+    """True when no kit.json applies in `root` although the project uses the kit: its main
+    checkout holds kit state, or a hook latched it before (load_config then returns `{}`)."""
     path, main = _config_and_main(root)
-    return not path.exists() and has_kit_state(main or Path(root))
+    return not path.exists() and (has_kit_state(main or Path(root)) or opted_in_before(main or Path(root)))
 
 
 def load_config(root):
@@ -145,16 +232,24 @@ def load_config(root):
     days while the coordinator kept its board and items: no guard, no REPORT.md, no cost lines.
     A project with neither stays untouched, as before."""
     path, main = _config_and_main(root)
+    base = main or Path(root)
     if not path.is_file():
         if path.exists():  # a folder named kit.json: not opted in, as before
             return None, None
-        return ({} if has_kit_state(main or Path(root)) else None), None
+        if has_kit_state(base):
+            latch_opt_in(base)
+            return {}, None
+        return ({} if opted_in_before(base) else None), None
     try:
         config = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # a broken config must be visible, not silently ignored
         return None, f"kit: cannot read {path}: {exc}"
     if not isinstance(config, dict):
         return None, f"kit: {path} must hold a JSON object"
+    if config.get("guard") == "off":  # the owner's off switch: nothing latched, an old latch dropped
+        drop_opt_in(base)
+    else:
+        latch_opt_in(base)
     return config, None
 
 

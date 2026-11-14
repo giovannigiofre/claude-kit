@@ -30,6 +30,7 @@ def gate_cmd(repo, *args):
 
 def main():
     failed = 0
+    os.environ.setdefault("KIT_OPT_IN_DIR", tempfile.mkdtemp(prefix="kit-opt-in-"))  # not the user's config dir
 
     def check(cond, msg):
         nonlocal failed
@@ -152,11 +153,16 @@ def main():
         check(sh(repo, "status", "--porcelain") == "", "evidence excluded: " + sh(repo, "status", "--porcelain"))
         check("/.kit/evidence/" in (repo / ".git" / "info" / "exclude").read_text().splitlines(), "its own line")
 
-        # kit.json went missing while the kit's items are here: verify says there is no gate
+        # kit.json went missing in a project a hook saw as a kit project (latched): verify says
+        # there is no gate and that the file is missing; forgotten, the old answer
         (repo / ".claude" / "kit.json").unlink()
         code, out = gate_cmd(repo, "verify")
+        check(code == 3 and "there is no `verify` gate" in out and "kit.json is missing" in out, f"latched: {code} {out}")
+        kitlib.forget_opt_in(repo)
+        code, out = gate_cmd(repo, "verify")
         check(code == 3 and "no .claude/kit.json" in out, f"neither file nor state: the old answer: {code} {out}")
-        (repo / ".kit" / "lead" / "items").mkdir(parents=True)
+        (repo / ".kit" / "lead" / "items" / "a1").mkdir(parents=True)
+        (repo / ".kit" / "lead" / "items" / "a1" / "BRIEF.md").write_text("ITEM: a1\n")
         code, out = gate_cmd(repo, "verify")
         check(code == 3 and "there is no `verify` gate" in out and "kit.json is missing" in out, f"{code} {out}")
 

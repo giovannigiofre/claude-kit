@@ -8,14 +8,21 @@ user may choose to commit it instead, so every clone gets the same gates. Every 
 the mod, `gate.py`, the overnight runner, kit-llm) takes a checkout's own kit.json, else its main
 checkout's, so a linked worktree, which has no copy of an excluded file, runs with the main
 checkout's. A project also counts as using the kit when its main checkout holds the kit's state
-(`.kit/lead/`, or `.claude/lead/` before the move, with a board or an `items/` folder): when
+(`.kit/lead/`, or `.claude/lead/` before the move, with a board or an item folder holding a
+BRIEF.md; a symlinked `.kit`, `.claude` or lead folder does not count), or when a hook has seen it as a
+kit project before: the first time a hook reads its kit.json or its state, it writes a record under
+the account's config dir (`~/.claude/kit-projects/`, or `$CLAUDE_CONFIG_DIR/kit-projects/`), keyed by
+the repository's origin, else its main checkout's path, so every clone and worktree shares it, and a
+config dir that cannot be written fails no hook. When
 kit.json goes missing there (a commit removed it in the owner's project and nothing said so for
 days), the kit runs on its defaults (guard on, reports, verdicts and cost lines filed, the
 coordinator line), nothing gates a stop, `gate.py` says there is no gate, and every session start
 and compaction prints one line saying the file is missing, the gates are off, and how to restore it
 (`git show <commit>:.claude/kit.json` from its last version in git, else `/kit:init`), for the
-coordinator to tell the owner once and restore only with his approval. With neither file nor state
-the kit stays off. The owner's personal choices that are never shared
+coordinator to tell the owner once and restore only with his approval. With neither file, state nor record
+the kit stays off. The owner turns the record off with `"guard": "off"` in kit.json (the record is
+removed, and the kit is off while that file says so), or with `items.py forget`, which removes it and
+which a thread is refused, like `away on`. The owner's personal choices that are never shared
 (the unattended git steps) live in `.claude/kit.local.json` beside it.
 
 ```json

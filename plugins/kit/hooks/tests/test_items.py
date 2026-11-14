@@ -236,6 +236,29 @@ def missing_config_checks(tmp, check):
     check("| cost | in=3 out=100 cache_read=1000 cache_write=500 tools=2 minutes=3.0 agent=g1" in log, log)
 
 
+def forget_checks(tmp, check):
+    """`forget` removes the record a hook wrote the first time it saw the project, so the hooks go
+    quiet once kit.json and the kit's state are both gone; without a record it says so."""
+    opt = tmp / "opt-in"
+    env = dict(os.environ, KIT_OPT_IN_DIR=str(opt))
+    repo = tmp / "forgotten"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "kit.json").write_text("{}")
+    code, out, err = run(repo, "list", env=env)  # any read of kit.json latches the project
+    records = list(opt.glob("*.json")) if opt.is_dir() else []
+    check(code == 0 and len(records) == 1, f"a kit project is recorded: {code} {err} {records}")
+    (repo / ".claude" / "kit.json").unlink()
+    code, out, err = run(repo, "forget", env=env)
+    check(code == 0 and out.startswith("Forgot this project: removed ") and not list(opt.glob("*.json")),
+          f"forget removes the record: {code} {out} {err}")
+    code, out, err = run(repo, "forget", env=env)
+    check(code == 0 and out.startswith("Nothing to forget: no record at "), f"a second forget: {code} {out} {err}")
+    code, out, err = run(repo, "forget", "now", env=env)
+    check(code == 2 and "takes no arguments" in err, f"forget with an argument: {code} {err}")
+
+
 REMINDER = "<system-reminder>\nYour final report is delivered through SubagentHandback: when your work is complete...</system-reminder>"
 DELIVERED = '{"success":true,"message":"Report delivered to your caller."}'
 VERDICT = "VERDICT: PASS\nREVIEWED: main, abc1234\nEVIDENCE:\n- gate ok\nPROBLEMS:\n- none\n"
@@ -1196,6 +1219,8 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmp:
         missing_config_checks(Path(os.path.realpath(tmp)), check)
+    with tempfile.TemporaryDirectory() as tmp:
+        forget_checks(Path(os.path.realpath(tmp)), check)
 
     with tempfile.TemporaryDirectory() as tmp:
         stale_checks(Path(os.path.realpath(tmp)), check)

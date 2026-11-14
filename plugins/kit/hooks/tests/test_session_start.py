@@ -28,6 +28,7 @@ def run(payload, home=HOME, **env):
 
 
 def main():
+    os.environ.setdefault("KIT_OPT_IN_DIR", tempfile.mkdtemp(prefix="kit-opt-in-"))  # not the user's config dir
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp) / "repo"
         (repo / ".claude" / "lead").mkdir(parents=True)
@@ -65,7 +66,8 @@ def main():
 
         # git history has the file: the line names the commit to restore it from
         hist = Path(tmp) / "hist"
-        (hist / ".kit" / "lead" / "items").mkdir(parents=True)
+        (hist / ".kit" / "lead" / "items" / "a1").mkdir(parents=True)
+        (hist / ".kit" / "lead" / "items" / "a1" / "BRIEF.md").write_text("ITEM: a1\n")
         g = lambda *a: subprocess.run(["git", "-C", str(hist), "-c", "user.name=t", "-c", "user.email=t@t", *a],
                                       check=True, capture_output=True, text=True).stdout.strip()
         g("init", "-q")
@@ -82,6 +84,16 @@ def main():
         (hist / ".claude" / "kit.json").unlink()  # deleted on disk only: the last commit still holds it
         last = g("log", "-1", "--format=%h", "--", ".claude/kit.json")
         assert f"`git show {last}:.claude/kit.json" in run({"cwd": str(hist), "source": "startup"})
+        # latched only: a hook saw kit.json here once, then the file and the state both went;
+        # session start still says the file is missing instead of going quiet
+        latched = Path(tmp) / "latched"
+        (latched / ".claude").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(latched)], check=True)
+        (latched / ".claude" / "kit.json").write_text('{"verify": "make test"}')
+        assert "kit harness active" in run({"cwd": str(latched), "source": "startup"})
+        (latched / ".claude" / "kit.json").unlink()
+        out = run({"cwd": str(latched), "source": "startup"})
+        assert "kit.json is missing" in out, f"latched only: {out}"
         out = run({"cwd": str(repo), "source": "compact"})
         assert "A1 | ship" not in out, "lead.board moves the board; the default path is not read"
         (repo / "docs").mkdir()

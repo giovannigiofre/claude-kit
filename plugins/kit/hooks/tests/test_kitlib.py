@@ -48,6 +48,7 @@ def sh(repo, *args):
 
 def main():
     failed = 0
+    os.environ["KIT_OPT_IN_DIR"] = tempfile.mkdtemp(prefix="kit-opt-in-")  # the latches of this run only
 
     def check(cond, msg):
         nonlocal failed
@@ -117,6 +118,11 @@ def main():
         check(kitlib.load_config(tree) == ({"check": "own"}, None), "a worktree's own kit.json wins")
         (tree / ".claude" / "kit.json").unlink()
         (repo / ".claude" / "kit.json").unlink()
+        # latched (review of 2.0.1): a project a hook once saw as a kit project stays one, and the
+        # missing file is said; items.py forget is the owner's way out
+        check(kitlib.load_config(tree) == ({}, None) and kitlib.config_missing(tree),
+              "kit.json gone after a hook saw it: still a kit project, the file said missing")
+        check(kitlib.forget_opt_in(tree) and not kitlib.forget_opt_in(tree), "forget removes the latch once")
         check(kitlib.load_config(tree) == (None, None), "no kit.json in the worktree or the main checkout: off")
         check(kitlib.config_file(Path(tmp)) == Path(tmp) / ".claude" / "kit.json", "outside git: its own path")
 
@@ -128,18 +134,57 @@ def main():
         check(kitlib.load_config(tree) == ({}, None) and kitlib.config_missing(tree), "a board in .kit/: on, missing")
         check(kitlib.load_config(repo) == ({}, None) and kitlib.config_missing(repo), "in the main checkout too")
         (repo / ".kit" / "lead" / "Board.md").unlink()
+        # the state alone opted in, then was moved away: the latch keeps the project in
+        check(not kitlib.has_kit_state(repo) and kitlib.load_config(tree) == ({}, None) and kitlib.config_missing(tree),
+              "state moved away: still a kit project through the latch")
+        kitlib.forget_opt_in(repo)
         (repo / ".claude" / "lead" / "items").mkdir(parents=True)
-        check(kitlib.has_kit_state(repo) and kitlib.load_config(tree) == ({}, None), "legacy .claude/lead/items/: on")
+        check(not kitlib.has_kit_state(repo) and kitlib.load_config(tree) == (None, None), "an empty items/ is not state")
+        (repo / ".claude" / "lead" / "items" / "a1").mkdir()
+        check(not kitlib.has_kit_state(repo), "an item folder without BRIEF.md is not state")
+        (repo / ".claude" / "lead" / "items" / "a1" / "BRIEF.md").write_text("ITEM: a1\n")
+        check(kitlib.has_kit_state(repo) and kitlib.load_config(tree) == ({}, None), "legacy .claude/lead/items/<id>/BRIEF.md: on")
         (repo / ".claude" / "kit.json").write_text("{}")
         check(not kitlib.config_missing(tree), "the file is back: not missing")
+        (repo / ".claude" / "kit.json").write_text(json.dumps({"guard": "off"}))
+        check(kitlib.load_config(tree)[0] == {"guard": "off"} and not kitlib.opted_in_before(tree),
+              "guard off in kit.json: the latch is dropped")
         (repo / ".claude" / "kit.json").unlink()
         shutil.rmtree(repo / ".claude" / "lead")
         shutil.rmtree(repo / ".kit")
+        check(kitlib.load_config(repo) == (None, None), "guard off, then file and state gone: off")
         elsewhere = Path(tmp) / "elsewhere"
-        (elsewhere / "lead" / "items").mkdir(parents=True)
+        (elsewhere / "lead" / "items" / "a1").mkdir(parents=True)
+        (elsewhere / "lead" / "items" / "a1" / "BRIEF.md").write_text("ITEM: a1\n")
         (repo / ".kit").symlink_to(elsewhere)
         check(not kitlib.has_kit_state(repo) and kitlib.load_config(repo) == (None, None), "a symlinked .kit is not state")
         (repo / ".kit").unlink()
+        (repo / ".kit").mkdir()
+        (repo / ".kit" / "lead").symlink_to(elsewhere / "lead")
+        check(not kitlib.has_kit_state(repo) and kitlib.load_config(repo) == (None, None), "a symlinked .kit/lead is not state")
+        (repo / ".kit" / "lead").unlink()
+        (repo / ".kit").rmdir()
+
+        # the latch is keyed by the normalized origin: another clone of the same repository shares it
+        sh(repo, "remote", "add", "origin", "git@github.com:Owner/Repo.git")
+        clone = Path(tmp) / "clone"
+        clone.mkdir()
+        sh(clone, "init", "-q", "-b", "main")
+        sh(clone, "remote", "add", "origin", "https://github.com/owner/repo")
+        check(kitlib.opt_in_key(repo) == kitlib.opt_in_key(clone) == "github.com/owner/repo", kitlib.opt_in_key(repo))
+        kitlib.latch_opt_in(repo)
+        check(kitlib.opted_in_before(clone) and kitlib.load_config(clone) == ({}, None), "same origin: same latch")
+        kitlib.forget_opt_in(clone)
+        check(kitlib.load_config(repo) == (None, None), "forgotten from either clone")
+        # a config dir that cannot be written never fails a hook
+        saved = os.environ.get("KIT_OPT_IN_DIR")
+        (Path(tmp) / "blocked").write_text("a file, not a folder")
+        os.environ["KIT_OPT_IN_DIR"] = str(Path(tmp) / "blocked" / "x")
+        kitlib._LATCHED.clear()
+        (repo / ".claude" / "kit.json").write_text("{}")
+        check(kitlib.load_config(repo) == ({}, None), "an unwritable latch folder: the hook goes on")
+        (repo / ".claude" / "kit.json").unlink()
+        os.environ["KIT_OPT_IN_DIR"] = saved
 
     # hermetic git: inside a git hook GIT_DIR and friends point at the hook's repository; the helpers
     # still answer for the folder they were asked about

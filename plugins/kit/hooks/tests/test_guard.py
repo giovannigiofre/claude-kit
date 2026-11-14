@@ -387,7 +387,8 @@ def main():
         failed += 1
         print("FAIL a project with neither kit.json nor kit state stays silent")
     # kit.json went missing in a project that uses the kit (its items are here): the guard stays on
-    (r4 / ".kit" / "lead" / "items").mkdir(parents=True)
+    (r4 / ".kit" / "lead" / "items" / "a1").mkdir(parents=True)
+    (r4 / ".kit" / "lead" / "items" / "a1" / "BRIEF.md").write_text("ITEM: a1\n")  # an item, not an empty folder
     code, err = bash(h4, r4, "git push origin main")
     if code != 2:
         failed += 1
@@ -783,6 +784,10 @@ def main():
         (f"python3 {SCRIPT.parent / 'machine_setup.py'} --apply", None, "allow"),
         (f"python3 {items} away on", None, "allow"),
         (f"python3 {items} unattended push=ask", None, "allow"),
+        # forgetting the project's opt-in record is the owner's: a thread is refused, the owner is not
+        (f"python3 {items} forget", thread, "block"),
+        (f"python3 -I {items} forget", thread, "block"),
+        (f"python3 {items} forget", None, "allow"),
     ]:
         got = verdict(home, r21, command, agent)
         if got != expect:
