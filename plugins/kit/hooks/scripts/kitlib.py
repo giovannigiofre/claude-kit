@@ -557,6 +557,19 @@ def add_exclude_lines(root, lines):
         return []
 
 
+LOCAL_SETTINGS = ".claude/settings.local.json"
+
+
+def exclude_local_settings(checkout):
+    """Keep the checkout's settings.local.json, once the kit writes it, out of `git status` (an
+    untracked file stops the overnight runner): one line in .git/info/exclude, unless git
+    already tracks or ignores the file. Returns the lines added."""
+    for args in (("ls-files", "--error-unmatch", "--", LOCAL_SETTINGS), ("check-ignore", "-q", "--", LOCAL_SETTINGS)):
+        if git_run(checkout, *args)[0] in (0, None):
+            return []
+    return add_exclude_lines(checkout, ["/" + LOCAL_SETTINGS])
+
+
 def exclude_lines(root, files=(), dirs=()):
     """The exclude lines (`/<file>`, `/<dir>/`) for paths under the checkout `root` that git does not
     ignore yet. One `git check-ignore` call for all of them; when that call fails (one path beyond a

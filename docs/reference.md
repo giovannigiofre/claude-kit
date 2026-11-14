@@ -801,8 +801,9 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
     and `pull` (bare and with arguments) outside it, so they keep their credentials while a command
     inside cannot read them. Check it with `/sandbox`; add hosts under `sandbox.network.allowedDomains`. Where
     the sandbox can't start, commands run unsandboxed with a warning rather than all failing. The
-    status line shows `sandbox` while it is on. `sandbox off` changes nothing and prints the edit:
-    loosening a setting is yours to approve.
+    status line shows `sandbox` while it is on. Unless git tracks or ignores that file, it also gets
+    `/.claude/settings.local.json` in `.git/info/exclude`, so the tree stays clean for an overnight
+    run. `sandbox off` changes nothing and prints the edit: loosening a setting is yours to approve.
   - `permissions.blockWritesOutsideWorkingDirectories` (2.1.314) is not for a kit project: it
     refuses a thread's edits in another repo and removes the worktree tools.
 
