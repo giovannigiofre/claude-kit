@@ -98,6 +98,9 @@ def main():
         line = next(l for l in out.splitlines() if "permission rules ask" in l)
         assert "push, rebase, merge here" in line and "`Bash(git push*)`" in line and "`Bash(gh pr merge*)`" in line, line
         assert "in .claude/settings.json" in line and "reset" not in line and "force" not in line, line
+        # what the kit knows: the rules ask, so a step may stop; not a claim about every mode
+        assert "so such a step may stop on a prompt for the owner" in line and "auto mode" not in line, line
+        assert "run each such step once" in line and "never repeat one" in line and "tell the owner" in line, line
         settings.write_text(json.dumps({"permissions": {"ask": ["Bash(git reset --hard*)"], "allow": ["Bash(git push*)"]}}))
         assert "permission rules ask" not in run({"cwd": str(repo), "source": "startup"}), "an ask on another command is not named"
         settings.write_text("{ not json")

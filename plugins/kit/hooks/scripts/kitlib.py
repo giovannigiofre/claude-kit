@@ -396,8 +396,8 @@ def _unattended_steps(cwd):
 
 def asking_rules(cwd):
     """{step: [(rule, where)]}: the ask rules, in any settings scope or the kit guard's askCommands,
-    that match a push, rebase or merge as the kit runs them. Each such command stops on a prompt
-    in every permission mode (auto too) and from a thread; the owner's saved preference is not read."""
+    that match a push, rebase or merge as the kit runs them, so such a command may stop on a prompt.
+    Whether it does in a given mode is Claude Code's to decide; the owner's saved preference is not read."""
     rules = []
     for f in permission_files(cwd):
         value, ok = read_json(f)

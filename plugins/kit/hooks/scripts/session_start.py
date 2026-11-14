@@ -127,8 +127,8 @@ def asking_line(root):
             if rule not in seen[str(where)]:
                 seen[str(where)].append(rule)
     which = "; ".join(", ".join(f"`{r}`" for r in rules[:4]) + f" in {where}" for where, rules in seen.items())
-    return [f"- permission rules ask before every {', '.join(asking)} here ({which}): each one stops on a prompt "
-            "for the owner, in auto mode and from a thread too, and an allow rule cannot override it. So run each "
+    return [f"- permission rules ask before every {', '.join(asking)} here ({which}), so such a step may "
+            "stop on a prompt for the owner. So run each "
             "such step once, in one command with its clean-up; never repeat one that is waiting on a prompt or was "
             "not answered (hand it back as `needs push`). The first time one of these prompts comes up in this "
             "session, tell the owner in one line that these rules are why, and ask once whether to change them "
