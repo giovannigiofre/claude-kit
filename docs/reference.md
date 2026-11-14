@@ -193,10 +193,11 @@ not merged into the default branch, decided from git alone: the branch its LOG o
 is an ancestor of it (and has a commit of its own), or, the branch deleted, the last commit the
 item names (a verifier's `REVIEWED:` sha) is. A squash merge leaves that sha outside the default
 branch, so a deleted branch reads as "cannot tell". Then, only where a person runs the command
-(`items.py status`, a hand-run `migrate_state.py migrate` or `status`), an item whose LOG or
-REPORT.md names a PR is asked of `gh pr view` as `done` does: MERGED makes it stale, anything else,
-no `gh` or a failing call leaves it unknown. Each call has 10 seconds and at most ten items are
-asked per run. The session start's automatic move never calls the network, and its "waits to
+(`items.py status`, a hand-run `migrate_state.py migrate` or `status`), an item that names its PR
+is asked of `gh pr view` as `done` does: MERGED makes it stale, anything else, no `gh` or a
+failing call leaves it unknown. Each call has 10 seconds, at most ten items are asked per run,
+and all the calls of one run share 20 seconds; the items left when either runs out stay at work,
+and one line says how many were not asked. The session start's automatic move never calls the network, and its "waits to
 move" line names `items.py status` for finding the stale items. When the kit cannot tell, the item stays at work. By
 hand: `python3 <kit>/hooks/scripts/migrate_state.py status|migrate|undo [--dry-run] [--force] [--again]`
 (`--force` moves anyway, for a thread that died and left `working`). Each entry moves on its own,
@@ -428,7 +429,12 @@ until that item is done (archived, or last logged `done`); an id that does not e
 every pair against each other with `git merge-tree --write-tree --name-only`, which touches no
 checkout, and prints the files in conflict. Without git 2.38 or a branch it says `unknown` and why.
 
-`done <id>` on an item whose LOG or report names a PR runs `gh pr view <n> --json state,mergedAt`
+An item names its PR only in its own `reported`, `review`, `landing` or `verdict` LOG lines
+(`PR #n` or a URL) or in REPORT.md's `PR:` or `BRANCH / PR:` field, never in a free note (a note
+that compared it with another PR got that PR asked about). gh is given only the bare number: `#n`,
+or the number of a URL on this repository's own origin; another repository's URL is not asked.
+
+`done <id>` on an item that names its PR runs `gh pr view <n> --json state,mergedAt`
 and refuses an open or closed-unmerged PR; `--force` archives it anyway and says so. Without gh,
 or when the call fails or answers something unexpected, it prints "merge state unknown" and
 archives as before: it never calls a PR merged on an incomplete check. It does not check `gh auth

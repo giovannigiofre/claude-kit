@@ -107,7 +107,7 @@ def squash_checks(check):
         (bare / "git").symlink_to(git_bin)
         answer, calls = tmp / "gh.json", tmp / "calls"
         saved = {k: os.environ.get(k) for k in ("PATH", "FAKE_GH", "GH_CALLS", "GH_SLEEP")}
-        saved_timeout, saved_max = items.GH_TIMEOUT, items.GH_MAX
+        saved_timeout, saved_max, saved_total = items.GH_TIMEOUT, items.GH_MAX, items.GH_TOTAL
         os.environ.update(PATH=f"{fake}:{saved['PATH']}", FAKE_GH=str(answer), GH_CALLS=str(calls))
 
         def asked():
@@ -154,8 +154,16 @@ def squash_checks(check):
             # the cap: GH_MAX items asked in one run, the rest stay unknown
             items.GH_MAX = 1
             repo = squash_project(tmp / "cap", ids=("B1", "B2"))
-            snap = items.snapshot(repo, ask=items.gh_budget())
+            budget = items.gh_budget()
+            snap = items.snapshot(repo, ask=budget)
             check(sorted(r["stale_merged"] for r in snap["items"]) == [False, True] and asked() == 1, snap["items"])
+            check(snap["gh_not_asked"] == 1 and items.not_asked_line(budget).startswith("gh was not asked about 1 item:"),
+                  f"the cap: one line for the item left out: {items.not_asked_line(budget)}")
+            import contextlib, io
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                items.print_status(snap)
+            check(printed.getvalue().count("gh was not asked about 1 item:") == 1, printed.getvalue())
             items.GH_MAX = saved_max
 
             # no gh: unknown stays unknown, the move waits
@@ -171,8 +179,22 @@ def squash_checks(check):
             started = __import__("time").monotonic()
             code, why = hand_migrate(repo)
             check(code == 2 and __import__("time").monotonic() - started < 4 and asked() == 1, f"timeout: {code} {why}")
+
+            # the total: GH_TOTAL seconds for every call of one command (ten slow calls held `status`
+            # 100 s); the call that would pass it is cut short, the rest are not asked and say so
+            items.GH_TIMEOUT, items.GH_TOTAL = 3, 1
+            repo = squash_project(tmp / "total", ids=("B1", "B2", "B3"))
+            started = __import__("time").monotonic()
+            code, why = hand_migrate(repo)
+            spent = __import__("time").monotonic() - started
+            check(code == 2 and spent < 2.5 and asked() == 1, f"total budget: {spent:.1f}s {code} {why}")
+            check("gh was not asked about 2 items: the 1 s or 10-call budget ran out; they stay at work" in why, why)
+            said = []
+            items.GH_TOTAL = 1
+            migrate_state.status(repo, out=said.append, ask_gh=True)
+            check(sum("gh was not asked about 2 items" in l for l in said) == 1 and asked() == 1, f"status: {said}")
         finally:
-            items.GH_TIMEOUT, items.GH_MAX = saved_timeout, saved_max
+            items.GH_TIMEOUT, items.GH_MAX, items.GH_TOTAL = saved_timeout, saved_max, saved_total
             for k, v in saved.items():
                 if v is None:
                     os.environ.pop(k, None)

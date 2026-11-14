@@ -236,6 +236,35 @@ def missing_config_checks(tmp, check):
     check("| cost | in=3 out=100 cache_read=1000 cache_write=500 tools=2 minutes=3.0 agent=g1" in log, log)
 
 
+def pr_source_checks(tmp, check):
+    """The PR an item is asked about comes from its own report lines or REPORT.md's PR field, and gh
+    is given a bare number: a free note naming another PR, or another repository's URL, is never asked."""
+    repo = tmp / "prs"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "remote", "add", "origin", "git@github.com:Owner/Repo.git")
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "kit.json").write_text("{}")
+    item = items.find(repo, items.new(repo, "Prs"))
+
+    def pr_of():
+        return items.refs(item, items.log_lines(item))[2]
+
+    items.log(repo, "prs", "working", "unlike PR #12, this one keeps the cache")
+    check(pr_of() == "", f"a free note names no PR of the item: {pr_of()!r}")
+    (item / "REPORT.md").write_text("STATUS: done\nBRANCH / PR: `feat/prs`, #9\nEVIDENCE: see #12\n")
+    check(pr_of() == "#9", f"REPORT.md's PR field: {pr_of()!r}")
+    items.log(repo, "prs", "review", "PR #13 open")
+    check(pr_of() == "#13", f"a review line: {pr_of()!r}")
+    check(items.gh_target(repo, "#13") == "13", "a number goes to gh bare")
+    check(items.gh_target(repo, "https://github.com/owner/repo/pull/5") == "5", "a URL on this origin: its number")
+    for other in ("https://github.com/someone/else/pull/5", "https://github.com/owner/repo/pull/5;id",
+                  "https://evil.example/owner/repo/pull/5", "--repo=x"):
+        check(items.gh_target(repo, other) is None, f"not this repository's PR: {other}")
+    state, detail = items.merge_state(repo, "https://github.com/someone/else/pull/5")
+    check(state == "unknown" and "not a PR of this repository" in detail, f"another repository's PR: {state} {detail}")
+
+
 def forget_checks(tmp, check):
     """`forget` removes the record a hook wrote the first time it saw the project, so the hooks go
     quiet once kit.json and the kit's state are both gone; without a record it says so."""
@@ -1221,6 +1250,8 @@ def main():
         missing_config_checks(Path(os.path.realpath(tmp)), check)
     with tempfile.TemporaryDirectory() as tmp:
         forget_checks(Path(os.path.realpath(tmp)), check)
+    with tempfile.TemporaryDirectory() as tmp:
+        pr_source_checks(Path(os.path.realpath(tmp)), check)
 
     with tempfile.TemporaryDirectory() as tmp:
         stale_checks(Path(os.path.realpath(tmp)), check)

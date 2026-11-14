@@ -452,7 +452,10 @@ def blocked_by(root, path):
 
 LOG_LINE = re.compile(r"^- (\S+) \| ([^|]+?)\s*(?:\| (.*))?$")
 AGENT = re.compile(r"\bagent[ =]([A-Za-z0-9][\w-]*)")
-PR_REF = re.compile(r"(https://\S+/pull/\d+)|\bPR\s*#(\d+)|/pull/(\d+)")
+PR_REF = re.compile(r"(https://\S+/pull/\d+)|\bPR\s*#(\d+)")
+PR_FIELD = re.compile(r"^\W*(?:BRANCH\s*/\s*)?PR:\s*(.+)$", re.M | re.I)  # REPORT.md's PR or BRANCH / PR line
+FIELD_REF = re.compile(r"(https://\S+/pull/\d+)|(?<![\w/&])#(\d+)\b")
+PR_URL = re.compile(r"(https://[^/\s]+/[^\s]+?)/pull/(\d+)/?")
 BRANCH_NOTE = re.compile(r"\bbranch:?\s+`?([A-Za-z0-9][\w./-]*[\w-])`?", re.I)
 BRANCH_FIELD = re.compile(r"^\W*BRANCH(?:\s*/\s*PR)?:\s*`?([A-Za-z0-9][\w./-]*[\w-])`?", re.M | re.I)
 COST_KEYS = ("in", "out", "cache_read", "cache_write", "tools", "minutes")
@@ -513,13 +516,31 @@ def refs(path, lines):
         if m and m.group(1).lower() not in NOT_A_BRANCH:
             branch = m.group(1)
             break
+    # the PR comes from the item's own report lines or REPORT.md's PR field, never from a free note:
+    # a note that mentions another PR (`unlike PR #12`) was once asked of gh as this item's
     pr = ""
-    for text in notes + [report]:
-        m = PR_REF.search(text)
+    field = PR_FIELD.search(report)
+    for m in [PR_REF.search(note) for _, st, note in reversed(lines) if st in REPORTED] + \
+             [FIELD_REF.search(field.group(1)) if field else None]:
         if m:
-            pr = m.group(1) or "#" + (m.group(2) or m.group(3))
+            pr = m.group(1) or "#" + m.group(2)
             break
     return agent, branch, pr
+
+
+def gh_target(root, pr):
+    """What `gh pr view` is given for an item's PR: the bare number of `#n`, or of a URL on this
+    repository's own origin; None for anything else (another repository's PR is not this item's)."""
+    m = re.fullmatch(r"#(\d+)", pr or "")
+    if m:
+        return m.group(1)
+    m = PR_URL.fullmatch(pr or "")
+    if not m:
+        return None
+    import auto_mode_sync
+    origin = kitlib.git_out(kitlib.main_checkout(root) or root, "remote", "get-url", "origin", timeout=10)
+    here = auto_mode_sync.clean_origin(origin) if origin else None
+    return m.group(2) if here and auto_mode_sync.clean_origin(m.group(1)) == here else None
 
 
 AT_WORK = ("working", "landing")
@@ -569,11 +590,20 @@ def merged(root, path, lines=None):
 
 GH_TIMEOUT = 10  # seconds for one `gh pr view` asked by `status` or a hand-run migrate
 GH_MAX = 10      # items asked about in one run, so a long board cannot stall the command
+GH_TOTAL = 20    # seconds for all of them: ten slow calls would otherwise hold a command 100 s
 
 
 def gh_budget():
-    """What a caller that may use the network passes as `ask`: GH_MAX `gh pr view` calls."""
-    return {"left": GH_MAX}
+    """What a caller that may use the network passes as `ask`: GH_MAX `gh pr view` calls within
+    GH_TOTAL seconds; `not_asked` counts the items left out when either runs out."""
+    return {"left": GH_MAX, "until": time.monotonic() + GH_TOTAL, "not_asked": 0}
+
+
+def not_asked_line(ask):
+    """The one line for the items gh was not asked about, or "" when there were none."""
+    n = (ask or {}).get("not_asked", 0)
+    return (f"gh was not asked about {n} item{'s' if n != 1 else ''}: the {GH_TOTAL} s or {GH_MAX}-call "
+            f"budget ran out; {'they stay' if n != 1 else 'it stays'} at work until asked again") if n else ""
 
 
 REPORTED = ("reported", "review", "landing", "verdict")
@@ -599,11 +629,15 @@ def stale_merged(root, path, status=None, lines=None, ask=None):
     if not any(st in REPORTED for _, st, _ in lines):
         return False
     found = merged(root, path, lines)
-    if found is None and ask is not None and ask["left"] > 0:
+    if found is None and ask is not None:
         pr = refs(path, lines)[2]
-        if pr:
+        target = gh_target(root, pr) if pr else None
+        remaining = ask.get("until", float("inf")) - time.monotonic()
+        if target and ask["left"] > 0 and remaining > 0:
             ask["left"] -= 1
-            found = merge_state(root, pr, timeout=GH_TIMEOUT)[0] == "merged"
+            found = merge_state(root, pr, timeout=min(GH_TIMEOUT, remaining))[0] == "merged"
+        elif target:
+            ask["not_asked"] = ask.get("not_asked", 0) + 1
     return found is True and not edited_in_worktree(root, refs(path, lines)[1])
 
 
@@ -684,7 +718,7 @@ def snapshot(root, at=None, ask=None):
     for r in rows:
         counts[r["status"] or "?"] = counts.get(r["status"] or "?", 0) + 1
     return {"at": now(), "items": rows, "counts": counts, "questions": needs_you(root, [r["id"] for r in rows]),
-            "overnight": overnight_ended(root)}
+            "overnight": overnight_ended(root), "gh_not_asked": (ask or {}).get("not_asked", 0)}
 
 
 def overnight_ended(root):
@@ -712,6 +746,8 @@ def print_status(snap):
     if stale:
         print(f"stale (merged): {', '.join(stale)}: the branch is in the default branch and nothing runs for it; "
               f"`items.py done <id>` closes each")
+    if snap.get("gh_not_asked"):
+        print(not_asked_line({"not_asked": snap["gh_not_asked"]}))
     print("counts: " + (", ".join(f"{k} {v}" for k, v in sorted(snap["counts"].items())) or "none"))
     for run in snap.get("overnight") or ():
         print(kitlib.overnight_news_line(run).replace("kit: ", "", 1) + ": tell the user")
@@ -787,11 +823,13 @@ def conflicts(root, ids=None):
 def merge_state(root, pr, timeout=30):
     """("merged" | "open" | "closed" | "unknown", detail) for the item's PR from `gh pr view`; unknown
     when gh is missing, not logged in or the call fails, never a guess."""
+    target = gh_target(root, pr)
+    if not target:
+        return "unknown", f"{pr} is not a PR of this repository"
     gh = shutil.which("gh")
     if not gh:
         return "unknown", "gh is not installed"
     import subprocess
-    target = pr.lstrip("#")
     try:
         out = subprocess.run([gh, "pr", "view", target, "--json", "state,mergedAt"], cwd=str(root),
                              capture_output=True, text=True, timeout=timeout, env=kitlib.hermetic_env())
