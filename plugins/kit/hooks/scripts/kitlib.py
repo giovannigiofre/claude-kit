@@ -694,18 +694,28 @@ def state_entry(root, name, per_checkout=None):
 
 
 OVERNIGHT_UNTOLD = "untold.jsonl"  # overnight.py's tell_later: detached runs that ended, not yet said
+OVERNIGHT_TOLD = "told.json"  # dead runs already said, in the main checkout's overnight folder
 OVERNIGHT_GONE = "stopped without finishing: its process is gone (its container or machine stopped)"
+OVERNIGHT_SAY = 5  # the most runs one session start says; the rest wait in the file for status
+OVERNIGHT_LOCK_WAIT = 2.0  # seconds; a session start does not stall on a stuck holder
 
 
-def overnight_alive(pid):
-    """Whether `pid` is still an overnight runner. With /proc a reused pid is told apart by its
-    command line; without, a process that exists counts as alive."""
-    proc = Path("/proc")
+def overnight_alive(pid, proc=Path("/proc")):
+    """Whether `pid` is still an overnight runner, told apart from a reused pid by its command
+    line: /proc where there is one, else `ps -p <pid> -o command=`. Only without ps does a
+    process that exists count as alive."""
     if proc.is_dir():
         try:
             return b"overnight.py" in (proc / str(pid) / "cmdline").read_bytes()
         except OSError:
             return False
+    try:
+        got = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, timeout=5)
+        return "overnight.py" in got.stdout
+    except FileNotFoundError:
+        pass
+    except (OSError, subprocess.SubprocessError):
+        return True  # cannot tell: not news yet
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -715,65 +725,158 @@ def overnight_alive(pid):
     return True
 
 
-def overnight_news(root, consume=False):
-    """The project's overnight runs that ended unseen: the lines detached runs left in each
-    checkout's untold.jsonl, and runs whose state.json has a pid but no stop_reason while that
-    process is gone (a run that died with its container writes nothing). `consume` says each one
-    once: it empties untold.jsonl and records the stop reason of a dead run in its state.json."""
+def _flock(fh, wait=OVERNIGHT_LOCK_WAIT):
+    """An exclusive flock on the open file `fh`, tried until `wait` seconds have passed."""
+    import fcntl
+    import time
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if time.monotonic() > deadline:
+                return False
+            time.sleep(0.02)
+
+
+def _untold_lines(data):
+    return [line for line in data.split(b"\n") if line.strip()]
+
+
+def _untold_entry(line):
+    try:
+        entry = json.loads(line.decode("utf-8", errors="replace"))
+    except ValueError:
+        return None
+    return entry if isinstance(entry, dict) else None  # None: said as unreadable
+
+
+def _dead_run(state_file):
+    """The news entry of a run whose state.json has a pid and no stop_reason while that process
+    is gone (a run that died with its container writes nothing), else None."""
+    state = json.loads(state_file.read_text(encoding="utf-8", errors="replace"))
+    if not isinstance(state, dict) or state.get("stop_reason"):
+        return None
+    pid = state.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or overnight_alive(pid):
+        return None
+    return {"run": state.get("run_id") or state_file.parent.name, "dir": str(state_file.parent),
+            "stop_reason": OVERNIGHT_GONE, "iterations": state.get("iteration"), "cost": state.get("cost"),
+            "branch": state.get("branch"), "pushed": False}
+
+
+def overnight_news(root, consume=False, limit=None):
+    """The project's overnight runs that ended unseen, as (news, left): the lines detached runs left
+    in each checkout's untold.jsonl (and in an untold.jsonl.*.reading an earlier kit left behind),
+    and the runs that died without a word. Read only, it lists them all and changes nothing.
+    `consume` says each one once, at most `limit`: the said lines are cut from untold.jsonl in place,
+    under the same flock overnight.py appends under, so a run that ends meanwhile is neither lost
+    nor said twice; the lines past `limit` stay there (`left` counts them). A dead run said is
+    remembered in the main checkout's overnight/told.json; the run's own files are left alone."""
     rc, out, _ = git_run(root, "worktree", "list", "--porcelain")
     checkouts = [Path(ln[9:]) for ln in out.splitlines() if ln.startswith("worktree ")] if rc == 0 else []
-    news = []
-    for checkout in checkouts:
-        for folder in (STATE_DIR, LEGACY_STATE_DIR):
-            runs = checkout / folder / "overnight"
-            if not runs.is_dir() or (checkout / folder).is_symlink():
-                continue
-            untold = runs / OVERNIGHT_UNTOLD
-            source = untold
-            if consume and untold.exists():
-                source = untold.with_name(f"{OVERNIGHT_UNTOLD}.{os.getpid()}.reading")
+    folders = [checkout / folder / "overnight" for checkout in checkouts for folder in (STATE_DIR, LEGACY_STATE_DIR)
+               if (checkout / folder / "overnight").is_dir() and not (checkout / folder).is_symlink()]
+    if not folders:
+        return [], 0
+    told_file = state_entry(root, "overnight", per_checkout=False) / OVERNIGHT_TOLD
+    try:
+        told = set(json.loads(told_file.read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        told = set()
+    if not consume:
+        news = []
+        for runs in folders:
+            for leftover in sorted(runs.glob(OVERNIGHT_UNTOLD + ".*.reading")):
                 try:
-                    os.replace(untold, source)
-                except OSError:
-                    source = untold
-            try:
-                text = source.read_text(encoding="utf-8")
-            except OSError:
-                text = ""
-            for line in text.splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    entry = json.loads(line)
-                except ValueError:
-                    entry = None
-                news.append(entry if isinstance(entry, dict) else None)  # None: said as unreadable
-            if source != untold:
-                try:
-                    source.unlink()
+                    news += [_untold_entry(line) for line in _untold_lines(leftover.read_bytes())]
                 except OSError:
                     pass
+            try:
+                with open(runs / OVERNIGHT_UNTOLD, "rb") as fh:
+                    if _flock(fh):
+                        news += [_untold_entry(line) for line in _untold_lines(fh.read())]
+            except OSError:
+                pass
             for state_file in sorted(runs.glob("*/state.json")):
                 try:
-                    state = json.loads(state_file.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
+                    entry = _dead_run(state_file)
+                except Exception:  # one odd run never hides the others
                     continue
-                if not isinstance(state, dict) or state.get("stop_reason"):
-                    continue
-                pid = state.get("pid")
-                if not isinstance(pid, int) or overnight_alive(pid):
-                    continue
-                news.append({"run": state.get("run_id") or state_file.parent.name, "dir": str(state_file.parent),
-                             "stop_reason": OVERNIGHT_GONE, "iterations": state.get("iteration", 0),
-                             "cost": round(float(state.get("cost") or 0), 2), "branch": state.get("branch", "?"),
-                             "pushed": False})
-                if consume:
-                    state["stop_reason"] = OVERNIGHT_GONE
-                    try:
-                        write_text_atomic(state_file, json.dumps(state, indent=2))
-                    except OSError:
-                        pass
-    return news
+                if entry and entry["dir"] not in told:
+                    news.append(entry)
+        return news, 0
+    try:
+        consumer = file_lock(folders[0] / ".told.lock", OVERNIGHT_LOCK_WAIT)  # the same folder for every start
+        consumer.__enter__()
+    except Busy:
+        return [], 0  # another start is saying them now
+    try:
+        return _overnight_consume(root, folders, told_file, told, limit)
+    finally:
+        consumer.__exit__(None, None, None)
+
+
+def _overnight_consume(root, folders, told_file, told, limit):
+    room = float("inf") if limit is None else limit
+    news, left, newly = [], 0, []
+    for runs in folders:
+        untold = runs / OVERNIGHT_UNTOLD
+        try:
+            fh = open(untold, "r+b") if untold.exists() else None
+            leftovers = sorted(runs.glob(OVERNIGHT_UNTOLD + ".*.reading"))
+            if leftovers and fh is None:
+                fh = open(untold, "a+b")
+        except OSError:
+            fh = None
+        if fh is not None:
+            with fh:
+                if _flock(fh):
+                    fh.seek(0)
+                    lines = _untold_lines(fh.read())
+                    gathered = []
+                    for leftover in leftovers:  # an earlier kit's rename-read-unlink, cut short
+                        try:
+                            gathered.append((leftover, _untold_lines(leftover.read_bytes())))
+                        except OSError:
+                            pass
+                    lines += [line for _, got in gathered for line in got]
+                    take = lines[:max(0, int(min(room, len(lines))))]
+                    keep = lines[len(take):]
+                    fh.seek(0)
+                    fh.truncate()  # in place: the writer's file stays the same inode
+                    fh.write(b"".join(line + b"\n" for line in keep))
+                    fh.flush()
+                    for leftover, _ in gathered:
+                        try:
+                            leftover.unlink()
+                        except OSError:
+                            pass
+                    news += [_untold_entry(line) for line in take]
+                    room -= len(take)
+                    left += len(keep)
+        for state_file in sorted(runs.glob("*/state.json")):
+            try:
+                entry = _dead_run(state_file)
+            except Exception:
+                continue
+            if not entry or entry["dir"] in told:
+                continue
+            if room > 0:
+                news.append(entry)
+                newly.append(entry["dir"])
+                room -= 1
+            else:
+                left += 1
+    if newly:
+        kept = sorted(d for d in told | set(newly) if Path(d).is_dir())  # a removed run is forgotten
+        try:
+            write_text_atomic(told_file, json.dumps(kept, indent=2) + "\n")
+            exclude_state(root, "overnight", per_checkout=False)
+        except OSError:
+            pass
+    return news, left
 
 
 def overnight_news_line(entry):

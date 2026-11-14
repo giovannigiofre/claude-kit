@@ -529,7 +529,15 @@ def snapshot(root, at=None):
     for r in rows:
         counts[r["status"] or "?"] = counts.get(r["status"] or "?", 0) + 1
     return {"at": now(), "items": rows, "counts": counts, "questions": needs_you(root, [r["id"] for r in rows]),
-            "overnight": kitlib.overnight_news(root)}  # read only: the next interactive start says them
+            "overnight": overnight_ended(root)}
+
+
+def overnight_ended(root):
+    """The overnight runs that ended unseen, read only: the next interactive start says them."""
+    try:
+        return kitlib.overnight_news(root)[0]
+    except Exception:  # status goes on without them; the session start says why
+        return []
 
 
 def print_status(snap):

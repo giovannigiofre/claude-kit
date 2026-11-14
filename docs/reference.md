@@ -834,11 +834,15 @@ prints that line; `--no-caps` runs it without. The runner refuses a `--branch` t
 (`guard.protectedBranches` in `.claude/kit.json`, else in `~/.claude/kit.json`, else `main` and
 `master`, plus `origin`'s default branch), since a run commits on a branch of its own.
 A detached run that ends appends one line (run, stop reason, iterations, spend, branch, pushed) to
-`untold.jsonl` in its runs folder; the next interactive session start in the project (a
-compaction too, not a headless run or a subagent) says each such line once and removes it, and
-`items.py status` lists them without removing them. A run whose `state.json` has no
-`stop_reason` while its recorded `pid` is no longer a runner (it died with its container) is said
-once the same way, and its `state.json` records that it stopped without finishing.
+`untold.jsonl` in its runs folder, under an exclusive `flock` on that file; the next interactive
+session start in the project (a compaction too, not a headless run or a subagent) takes the same
+lock, says each such line once and cuts it from the file in place, and `items.py status` lists them
+without removing them. A start says at most five runs and sums up the rest in one line ("and N
+more"); those stay in the file for status and the next start. A run whose `state.json` has no
+`stop_reason` while its recorded `pid` is no longer a runner (it died with its container; without
+`/proc`, `ps` names the process) is said once the same way; the kit remembers it in
+`overnight/told.json` of the main checkout and leaves the run's own files alone. A record of the
+wrong shape is said with `?` for the fields it lacks.
 
 Each iteration runs `claude -p` in permission mode `auto` unless `--permission-mode` says
 otherwise, with `--permission-prompts none` (a headless session cannot answer a prompt: anything

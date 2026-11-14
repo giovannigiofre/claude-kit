@@ -297,6 +297,7 @@ def main():
         out = run({"cwd": str(fresh), "source": "startup"})
         assert "kit state" not in out and not (fresh / ".kit").exists(), out
     overnight_checks()
+    overnight_store_checks()
     print("session_start: all checks passed")
 
 
@@ -343,8 +344,9 @@ def overnight_checks():
                        and "branch overnight/y not pushed" in l for l in said), said
             assert not any("20261114-030000" in l for l in said), "a live run is not news"
             assert "overnight run" not in run(payload), "said once"
-            assert json.loads((dead / "state.json").read_text())["stop_reason"].startswith("stopped without"), \
-                "the dead run's end is recorded"
+            assert json.loads((dead / "state.json").read_text())["stop_reason"] is None, "the run's files are left alone"
+            assert json.loads((repo / ".kit" / "overnight" / "told.json").read_text()) == [str(dead)], \
+                "the kit remembers it said the dead run"
             (runs / "untold.jsonl").write_text(json.dumps(told) + "\n")
             assert line in run({"cwd": str(repo), "source": "compact"}).splitlines(), "after a compaction too"
             assert "overnight run" not in run({"cwd": str(repo), "source": "compact"}), "and once"
@@ -367,11 +369,90 @@ def overnight_checks():
             assert any(l.startswith("kit: the overnight run r-nan ended: ?, ? iterations, USD ?") for l in said), said
             assert any(l.startswith("kit: the overnight run two lines ended: 5, ? iterations, USD ?, branch b not pushed")
                        for l in said), said
-            assert said.count("kit: an overnight run ended (its record could not be read): tell the user once, "
-                              "with a push notification") == 3, said
+            unreadable = ("kit: an overnight run ended (its record could not be read): tell the user once, "
+                          "with a push notification")
+            # seven ends: five are said, the other two summed up and left in the file for status
+            assert len(said) == 6 and said.count(unreadable) == 1, said
+            assert said[-1] == "kit: and 2 more overnight runs ended: `items.py status` lists them", said
+            assert len((runs / "untold.jsonl").read_text().splitlines()) == 2
+            said = [l for l in run(payload).splitlines() if "overnight run" in l]
+            assert said == [unreadable, unreadable], said
+            assert (runs / "untold.jsonl").read_text() == "", "cut in place, not removed"
         finally:
             alive.kill()
             alive.wait()
+
+
+def overnight_store_checks():
+    """The untold file and the runs folder, whatever state an earlier kit or a crash left them in:
+    nothing is lost, nothing is said twice, and one odd run never hides another."""
+    sys.path.insert(0, str(SCRIPT.parent))
+    import kitlib
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / "repo"
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+        runs = repo / ".kit" / "overnight"
+        (runs / "launch").mkdir(parents=True)  # the detach logs: not a run
+        (runs / "launch" / "20261114-010000.log").write_text("overnight: started\n")
+        (runs / "untold.jsonl").write_bytes(b'{"run": "r-bytes\xff", "stop_reason": "done"}\n')
+        (runs / "untold.jsonl.4242.reading").write_text('{"run": "r-left", "stop_reason": "done"}\n')
+        broken = runs / "r-broken"
+        broken.mkdir()
+        (broken / "state.json").write_text('{"pid": ')
+        odd = runs / "r-odd"
+        odd.mkdir()
+        (odd / "state.json").write_text(json.dumps({"pid": "12", "stop_reason": None}))
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        dead = runs / "r-dead"
+        dead.mkdir()
+        (dead / "state.json").write_text(json.dumps({"run_id": "r-dead", "pid": gone.pid, "iteration": 1,
+                                                     "cost": 0.25, "branch": "b"}))
+        out = run({"cwd": str(repo), "source": "startup"})
+        said = [l for l in out.splitlines() if "overnight run" in l]
+        assert len(said) == 3 and any("r-bytes\ufffd ended: done" in l for l in said), said
+        assert any("r-left ended: done" in l for l in said), "a leftover .reading file is said"
+        assert any("r-dead ended: stopped without finishing" in l for l in said), "a broken state.json hides nothing"
+        assert not any("launch" in l or "r-odd" in l or "r-broken" in l for l in said), said
+        assert not list(runs.glob("untold.jsonl.*.reading")), "and then removed"
+        assert "overnight run" not in run({"cwd": str(repo), "source": "startup"}), "said once"
+        assert kitlib.overnight_news(str(repo)) == ([], 0), "status has nothing left either"
+
+        # without /proc, ps names the runner; a pid that is not one is not alive
+        nowhere = Path(tmp) / "no-proc"
+        runner = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "overnight.py"])
+        try:
+            assert kitlib.overnight_alive(runner.pid, proc=nowhere), "ps names overnight.py"
+            assert not kitlib.overnight_alive(os.getpid(), proc=nowhere), "a reused pid is not a run"
+            assert not kitlib.overnight_alive(gone.pid, proc=nowhere), "a gone pid is not alive"
+        finally:
+            runner.kill()
+            runner.wait()
+
+        # several runs ending while several starts read: every end said once, none lost
+        writer = ("import importlib.util, sys\n"
+                  "spec = importlib.util.spec_from_file_location('overnight', sys.argv[1])\n"
+                  "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+                  "for i in range(200):\n"
+                  "    m.tell_later(sys.argv[2], {'run_id': f'{sys.argv[3]}-{i}', 'stop_reason': 'done', 'iteration': i,"
+                  " 'cost': 0.1, 'branch': 'b', 'pushed': ''})\n")
+        reader = ("import json, sys, time\n"
+                  "sys.path.insert(0, sys.argv[1]); import kitlib\n"
+                  "end = time.monotonic() + 4\n"
+                  "while time.monotonic() < end:\n"
+                  "    for n in kitlib.overnight_news(sys.argv[2], consume=True)[0]:\n"
+                  "        print(n['run'], flush=True)\n")
+        overnight = SCRIPT.parents[2] / "skills" / "overnight" / "scripts" / "overnight.py"
+        (runs / "w").mkdir()
+        readers = [subprocess.Popen([sys.executable, "-c", reader, str(SCRIPT.parent), str(repo)],
+                                    stdout=subprocess.PIPE, text=True) for _ in range(3)]
+        writers = [subprocess.Popen([sys.executable, "-c", writer, str(overnight), str(runs / "w"), f"w{k}"])
+                   for k in range(4)]
+        assert all(w.wait(timeout=60) == 0 for w in writers)
+        seen = [line for r in readers for line in r.communicate(timeout=60)[0].split()]
+        seen += [n["run"] for n in kitlib.overnight_news(str(repo), consume=True)[0]]
+        want = sorted(f"w{k}-{i}" for k in range(4) for i in range(200))
+        assert sorted(seen) == want, (len(seen), len(set(seen)), len(want))
 
 
 if __name__ == "__main__":

@@ -471,7 +471,13 @@ def tell_later(run_dir, state):
             "pushed": pushed}
     try:
         with open(Path(run_dir).parent / UNTOLD, "a", encoding="utf-8") as fh:
+            try:
+                import fcntl  # the reader cuts the file in place under this lock (kitlib.overnight_news)
+                fcntl.flock(fh, fcntl.LOCK_EX)
+            except ImportError:
+                pass
             fh.write(json.dumps(line) + "\n")
+            fh.flush()  # written before the lock goes with the close
     except OSError as exc:  # the run's own end stands; only the morning line is lost
         print(f"overnight: could not leave the end for the next session start: {exc}")
 
