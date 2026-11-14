@@ -646,8 +646,14 @@ def main():
         check(brief.startswith("ITEM: login-page\nKIND: ship\n\nBRIEF: a login page"), brief)
         check("| queued | from handoff" in (folder / "LOG.md").read_text(), "first log line")
         check("/.claude/lead/" in (repo / ".git" / "info" / "exclude").read_text(), "lead folder excluded")
-        code, out, _ = run(repo, "new", "Login page")
-        check(out.startswith("login-page-2\t"), f"a second item with the same name gets a suffix: {out}")
+        # the name of an open item: refused, naming it (two sessions once worked one issue twice)
+        code, out, err = run(repo, "new", "Login page")
+        created = (folder / "LOG.md").read_text().split(" | ")[0].lstrip("- ").strip()
+        check(code == 1 and out == "" and "login-page is already an open item (queued, created " + created in err
+              and "LOG.md" in err and "--again" in err, f"a duplicate name is refused: {code} {out} {err}")
+        check(not (folder.parent / "login-page-2").exists(), "nothing made on a refusal")
+        code, out, _ = run(repo, "new", "Login page", "--again")
+        check(code == 0 and out.startswith("login-page-2\t"), f"--again makes the numbered item on purpose: {out}")
         check(items.find_id("hello\nITEM: Login-Page\nmore") == "login-page", "find_id is case-insensitive")
         check(items.find_id("no item here") is None, "no id when absent")
 
@@ -774,6 +780,10 @@ def main():
             check((archived / "REPORT.md").read_text() == "the first round\n", "the first archive is untouched")
             check((folder.parent / "done" / f"login-page-{n}" / "LOG.md").read_text().endswith("| done\n"),
                   f"the next archive lands at done/login-page-{n}")
+        code, out, err = run(repo, "new", "Search box archived")
+        run(repo, "done", "search-box-archived")
+        code, out, err = run(repo, "new", "Search box archived")
+        check(code == 0 and out.startswith("search-box-archived-2\t"), f"an archived-only name gets its suffix: {out} {err}")
 
         # unattended git preferences: per repo, in the main checkout's gitignored kit.local.json.
         # Every run gets the test HOME, so the user's real ~/.claude/settings.json never counts.

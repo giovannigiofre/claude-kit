@@ -20,9 +20,11 @@ The board stays the index; these files are what survives a compaction, a restart
 another session (`cat` them). BRIEF.md starts with `ITEM: <id>`: a thread briefed with its text
 carries the id, and the hooks file its report under it. `new` also appends a `queued` row to the
 board when it exists (`<id> | <kind> | <name> | DONE WHEN <first DONE WHEN line of the brief> |
-queued | agent - | - | from <source>`), so a handed-off or taken item is seen. Standard library only.
+queued | agent - | - | from <source>`), so a handed-off or taken item is seen. `new` refuses the
+name of an item that is still open (exit 1, naming its status and when it was made: another
+session has it); `--again` makes `<id>-2` on purpose, and an archived name gets its suffix as is. Standard library only.
 
-    python3 items.py new <slug> [--brief FILE|-] [--from lead|handoff|scout] [--kind ship|scout]
+    python3 items.py new <slug> [--brief FILE|-] [--from lead|handoff|scout] [--kind ship|scout] [--again]
     python3 items.py list [--status queued|working|review|needs-you|done]
     python3 items.py log <id> <status> [note]
     python3 items.py put <id> <file>...      copy files into the item's out/ folder (their names kept)
@@ -263,14 +265,37 @@ def status_of(path):
     return (parts[1] if len(parts) > 1 else ""), (parts[2] if len(parts) > 2 else "")
 
 
-def new(root, name, brief="", source="lead", kind="ship"):
+class ItemExists(Exception):
+    """`new` with the name of an item that is still open: (id, status, created)."""
+
+
+def created_at(path):
+    """When the item was made: the time on the first line of its LOG.md, else ""."""
+    try:
+        for line in (path / "LOG.md").read_text(encoding="utf-8").splitlines():
+            if line.startswith("- "):
+                return line[2:].split("|", 1)[0].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def new(root, name, brief="", source="lead", kind="ship", again=False):
     """Make an item: the folder, BRIEF.md headed by `ITEM: <id>`, the first LOG line, and, when
-    the board exists, a `queued` row on it (so the lead and the status line see it). Returns the id."""
+    the board exists, a `queued` row on it (so the lead and the status line see it). Returns the id.
+
+    An open item of the same id raises ItemExists unless `again`: two coordinator sessions on one
+    project (2026-11) each made the item 40 seconds apart, the second silently as `<id>-2`, and
+    worked the same issue twice. A name found only among the archived (done/) items, or `again`,
+    gets the next free suffix."""
     root = Path(root)
     base = items_dir(root)
+    item_id = slug(name)
+    if not again and item_path(root, item_id).is_dir():
+        path = item_path(root, item_id)
+        raise ItemExists(item_id, status_of(path)[0] or "?", created_at(path) or "?")
     base.mkdir(parents=True, exist_ok=True)
     ensure_excluded(root)
-    item_id = slug(name)
     n = 2
     while find(root, item_id):
         item_id = f"{slug(name, 36)}-{n}"
@@ -681,7 +706,19 @@ def main(argv=None):
         if not rest:
             print("items: new needs a name", file=sys.stderr)
             return 2
-        item_id = new(root, " ".join(rest), brief, source, kind)
+        again = "--again" in rest
+        rest = [a for a in rest if a != "--again"]
+        if not rest:
+            print("items: new needs a name", file=sys.stderr)
+            return 2
+        try:
+            item_id = new(root, " ".join(rest), brief, source, kind, again)
+        except ItemExists as exc:
+            item_id, status, created = exc.args
+            print(f"items: {item_id} is already an open item ({status}, created {created}): another session may "
+                  f"be working on it. Read its LOG.md ({item_path(root, item_id)}) first; `new --again` makes "
+                  f"a second, numbered item on purpose.", file=sys.stderr)
+            return 1
         print(f"{item_id}\t{item_path(root, item_id)}")
         return 0
     if cmd == "list":
