@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Proposal cards: candidate work found by read-only scouts, deduplicated, classed, on disk.
 
-    .claude/lead/proposals/<id>.md          one card per finding (frontmatter + Suggestion + Rationale)
-    .claude/lead/proposals/retired/<id>.md  taken into an item, or retired as stale
+    <state>/lead/proposals/<id>.md          one card per finding (frontmatter + Suggestion + Rationale)
+    <state>/lead/proposals/retired/<id>.md  taken into an item, or retired as stale
+(<state> is `.kit`, or `.claude` in a project the kit has not moved yet: kitlib.state_entry)
 
 A card's fingerprint is the sha256 of its normalized `origin|summary|rationale`, so the same
 finding never makes a second card and a scan can be re-run at any time. Classes: A, mechanical

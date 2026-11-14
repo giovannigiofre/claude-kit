@@ -5,11 +5,16 @@ Target: the prompt or role named in the request.
 Benchmarks and vendor claims don't predict how a model does on *this* task. The project's own
 eval suite does. (Anthropic: teams with evals adopt a new model in days instead of weeks.)
 
+Before adding a candidate model, sweep effort on the one in use: a gap that a level closes needs no
+second model.
+
 ## 0. Preconditions
 
 - A trusted eval suite per role (steps 0-5 of [SKILL.md](SKILL.md) if missing). Hard checks matter most here:
   grounding, format, language, forbidden content.
 - The current assignment of models to roles, read from config, with current cost per case.
+- Every grader has passed its self-check (step 4 of [SKILL.md](SKILL.md)) before the first
+  paid candidate run; a grader that passes the starting state ranks candidates on noise.
 - A budget. Default: ask before spending more than ~USD 10.
 
 ## 1. Candidates
@@ -32,7 +37,8 @@ eval suite does. (Anthropic: teams with evals adopt a new model in days instead 
 
 ## 3. Decide
 
-- Drop any candidate that fails a hard check the incumbent passes.
+- Drop any candidate that fails a hard check the incumbent passes, and any that misses
+  pass^k (all k runs pass) on a release-critical case; an average hides the run that fails.
 - Plot or tabulate quality vs cost per case; keep the Pareto frontier.
 - Pick per role, not globally: cheap fast models for routing/classification, strong models
   for long reasoning or user-visible writing, a stable pinned model for judges.

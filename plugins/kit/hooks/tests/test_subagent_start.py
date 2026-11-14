@@ -42,9 +42,16 @@ def main():
         gate_only = run(tree, config)
         assert gate_only.startswith(f"kit: in {repo} and its worktrees, run the project's gate with `python3 ") and "gate.py\" check`" in gate_only \
             and gate_only.count("\n") == 0, gate_only
+        # proof goes where the gate's record goes, named in full: the main checkout's .kit/evidence
+        assert f"in {repo}/.kit/evidence/<branch>/, and other proof goes in `.kit/evidence/<branch>/` of the worktree you work in" in gate_only, gate_only
+        assert "/.kit/evidence/" in (repo / ".git" / "info" / "exclude").read_text().splitlines()
+        assert not (repo / ".kit").exists(), "the line names the folder; the gate makes it"
         # with items on the board, a thread is told how to log without writing in .claude itself
         (repo / ".claude" / "lead" / "items").mkdir(parents=True)
         both = run(tree, config).splitlines()
+        # a project not moved yet: the gate's record stays in .claude/, and the thread is not sent there
+        assert f"in {repo}/.claude/evidence/<branch>/, which only the gate writes" in both[0], both[0]
+        gate_only = both[0]
         assert len(both) == 2 and both[0] == gate_only and "items.py\" log <id> <status>" in both[1] \
             and f"any write inside {repo}/.claude" in both[1] and "put <id> <file>" in both[1] and len(both[1]) < 640, both
         (repo / ".claude" / "lead" / "items").rmdir()
@@ -81,7 +88,7 @@ def main():
             subprocess.run(["git", "-C", str(other), *args], check=True)
         subprocess.run(["git", "-C", str(other), "worktree", "add", "-q", "-b", "w", str(otree)], check=True)
         (otree / "services" / "api").mkdir(parents=True)
-        folder = other / ".claude" / "agent-memory" / "kit-verifier"
+        folder = other / ".kit" / "agent-memory" / "kit-verifier"  # a fresh project: the state goes to .kit
         for cwd in (otree / "services" / "api", otree, other):
             got = run(cwd, config, "kit:verifier")
             assert got.startswith(f"kit: your memory folder is {folder} (") and "is empty so far" in got, got

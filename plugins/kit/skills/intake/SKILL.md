@@ -1,7 +1,6 @@
 ---
 name: intake
-description: Evaluates a third-party skill, plugin or tool before it joins the setup - licence, what it runs as the user, context cost, overlap with the kit - then writes the CATALOG.md entry and proposes a pinned marketplace entry and a trial. Use when the user mentions adopting, installing or trying an outside skill/plugin/tool ("should we use X", "add Y to the kit", "install Z").
-disable-model-invocation: true
+description: Use when the user mentions adopting, installing or trying an outside tool, skill or plugin ("should we use X", "add Y to the kit", "install Z"). Evaluates it before it joins the setup - licence, what it runs as the user, context cost, overlap with the kit - then writes the CATALOG.md entry and proposes a pinned marketplace entry and a trial.
 argument-hint: <github owner/repo, URL or name>
 ---
 
@@ -24,6 +23,9 @@ The kit lives at the marketplace named `claude-kit` (find its directory with
    - every hook config and the scripts they call, every MCP server, every command that runs a
      process: what runs, when, what it writes where, and whether anything leaves the machine
      (network calls, webhooks, telemetry) and if so whether it is opt-in;
+   - how each MCP server or package it runs is selected: only an exact version or a digest is
+     a pin. A bare name, `@latest` or a Docker tag can point at different code tomorrow, and
+     "pin to whatever is latest today" pins nothing until that version is written down;
    - its always-on text: SessionStart/SubagentStart injections, skill descriptions. Estimate
      the per-session context cost (after a trial install, `claude plugin details <name>` gives
      the real figure).
@@ -40,15 +42,16 @@ The kit lives at the marketplace named `claude-kit` (find its directory with
    not evidence that it helps in this user's projects.
 7. **Decide a proposal**: `adopted-user`, `adopted-project` (which repos), `vendored`, `trial`
    (default for anything plausible), or `rejected`, with the reason in one or two sentences.
-8. **Write it down**: add or update the row in `CATALOG.md` (date = today). For `trial`/adopted
-   plugins, add a marketplace entry pinned to the reviewed commit:
-   `{"name": "<name>", "source": {"source": "github", "repo": "<owner/repo>", "sha": "<sha>"}, "description": "..."}`
-   and run `claude plugin validate <kit dir>`.
-9. **Propose the trial** (do not run it without the user's go-ahead): the project, the install
-   command `claude plugin install <name>@claude-kit --scope local`, any config to change
-   (e.g. turn off telemetry or ledgers), what to watch for a week, and - if feasible - a
-   `claude plugin eval` comparison. Show the diff of CATALOG.md and marketplace.json; commit only
-   if asked.
+8. **Write it down**: add or update the row in `CATALOG.md` (date = today); the row records the
+   review, so it needs no question.
+9. **Propose the marketplace entry and the trial** in one question, with the CATALOG.md diff.
+   For `trial`/adopted plugins the entry is pinned to the reviewed commit:
+   `{"name": "<name>", "source": {"source": "github", "repo": "<owner/repo>", "sha": "<sha>"}, "description": "..."}`;
+   the trial names the project, the install command
+   `claude plugin install <name>@claude-kit --scope local`, any config to change (e.g. turn off
+   telemetry or ledgers), what to watch for a week, and - if feasible - a `claude plugin eval`
+   comparison. Only on yes, add the entry to marketplace.json, run
+   `claude plugin validate <kit dir>`, then install. Commit only if asked.
 
 ## Writing, adapting or rewriting a skill
 

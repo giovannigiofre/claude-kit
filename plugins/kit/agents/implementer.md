@@ -29,7 +29,7 @@ Keep it to the format below, about 25 lines; the detail lives in the PR body and
    the obvious test, lint and build commands. Where there is a surface, exercise
    it the way a user would (run the CLI, call the API, load the page; a project `verify` skill,
    or an older `e2e` one, says how, including setting up a fresh worktree). Save what proves it
-   under `.claude/evidence/<branch>/`. Run commands in the foreground with a `timeout` for how
+   in the evidence folder the kit's gate line names (`.kit/evidence/<branch>/` of your worktree). Run commands in the foreground with a `timeout` for how
    long they should take (up to 10 minutes), so a hang has a deadline. Only a longer one runs in
    the background, with a `timeout` too (`(server)` in the description of one meant to keep
    running), and it must end on its own: never one whose exit waits on something you do later,
@@ -63,7 +63,7 @@ Keep it to the format below, about 25 lines; the detail lives in the PR body and
    (`gh run view <id> --log-failed`), fix the root cause and push, for at most 3 rounds.
 6. Stop and report instead of guessing when the brief can be read in ways that change the work,
    sources contradict, a project rule says to stop, or the next step is destructive or outside
-   the repo. A project fact you had to find out that every thread needs (a setup step, a
+   the repositories the brief names. A project fact you had to find out that every thread needs (a setup step, a
    command) goes under OPEN, for the coordinator to add to `CLAUDE.local.md`.
 
 Your report:

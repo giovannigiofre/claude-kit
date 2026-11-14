@@ -27,3 +27,26 @@ NOT NEEDED is cut unless the user wants it; REUSE goes into PLACES. Ask the user
 decision the brief cannot make alone. Log it (`items.py log <id> queued "fresh eyes: <n> gaps
 fixed"`; the status word stays `queued`, so `next` still finds the item). Skip it for small, well-specified items: it costs a subagent, and the thread itself
 finds small gaps.
+
+## Effort and model
+
+Effort is a level you set; within it the model decides how much to think, and it does not raise the
+level on its own. Start at `medium` (Anthropic's guidance for the current models) and change it for a
+reason you can name:
+
+- **`medium`, the agent's own model:** the default, and anything with an open question in it.
+- **`model: sonnet`, `medium`:** a small item with a checkable DONE WHEN and its PLACES listed. On three
+  fixtures here it passed 18 of 18 at about 40% of the cost and half the time (2026-11-13; small
+  sample, easy tasks). The strongest model at `low` is not the cheap option: it cost twice as much and
+  gave the one miss seen.
+- **`high`:** a bug in existing code, a flaky test, a change that has to find every caller or reader:
+  work where edge cases decide the result. An ambiguous item gets a better brief first, not more effort.
+- **After a `FAIL` that is not `scope=local`, or a `BLOCKED`:** read the brief again before anything
+  else; two failed rounds mean the brief is wrong. An item that went to the smaller model goes back
+  to the agent's own. Raise to `high` once, and only when the defect was a missed edge case or reader.
+  A new level or model is a new thread started from the rewritten brief: a message to the old thread
+  keeps the level it was started with.
+- `EXPECT:` is for the stall watchdog. Size it to the item, and do not present it to the thread as
+  time to fill or to beat: a stated time budget changes how carefully a model works.
+- The user said "use the strongest model for everything" (or the opposite): a RULES line on the board.
+

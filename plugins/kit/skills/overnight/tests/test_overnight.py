@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -101,8 +102,20 @@ def run(d, fake, *args, env_extra=None):
                           "--rate-limit-wait", "0", *args],
                          cwd=d, capture_output=True, text=True, timeout=120, env={**env(d), **(env_extra or {})})
     assert out.returncode == 0, out.stderr + out.stdout
-    run_dir = sorted((d / ".claude" / "overnight").iterdir())[-1]
+    run_dir = sorted(runs(d).iterdir())[-1]
     return out.stdout, json.loads((run_dir / "end-state.json").read_text()), run_dir
+
+
+def runs(d):
+    """Where the runs went: `.kit/overnight`, or `.claude/overnight` in a project not moved yet."""
+    for name in (".kit", ".claude"):
+        if (d / name / "overnight").is_dir():
+            return d / name / "overnight"
+    raise AssertionError(f"no run directory under {d}")
+
+
+def excluded(d):
+    return (d / ".git" / "info" / "exclude").read_text().splitlines()
 
 
 def commits(d):
@@ -313,7 +326,7 @@ def test_session_limit_waits_instead_of_failing():
                           "--gate", "true", "--rate-limit-wait", "1"],
                          cwd=d, capture_output=True, text=True, timeout=120, env=env(d))
     assert out.returncode == 0 and "waiting 1s" in out.stdout, out.stdout + out.stderr
-    run_dir = sorted((d / ".claude" / "overnight").iterdir())[-1]
+    run_dir = sorted(runs(d).iterdir())[-1]
     end = json.loads((run_dir / "end-state.json").read_text())
     assert len(end["commits"]) == 2 and end["iteration"] == 2, end
 
@@ -379,7 +392,7 @@ def test_dry_run_creates_nothing():
     out = subprocess.run([sys.executable, str(SCRIPT), "x", "--dry-run", "--agent-cmd", "false"],
                          cwd=d, capture_output=True, text=True, env=env(d))
     assert out.returncode == 0 and "iteration 1" in out.stdout, out.stderr
-    assert not (d / ".claude").exists() and len(commits(d)) == 1
+    assert not (d / ".claude").exists() and not (d / ".kit").exists() and len(commits(d)) == 1
     branch = subprocess.run(["git", "-C", str(d), "branch", "--show-current"], capture_output=True, text=True).stdout.strip()
     assert branch == "main", branch
 
@@ -399,6 +412,219 @@ def test_worktree_gate_comes_from_the_main_checkout():
     assert mod.kit_gate(wt) == "make test", mod.kit_gate(wt)
     (d / ".claude" / "kit.json").unlink()
     assert mod.kit_gate(wt) is None, "no kit.json anywhere: no gate"
+
+def test_fresh_project_runs_under_kit_and_excludes_them_first():
+    d, fake = repo(["bad", "done"])  # the failed first iteration undoes with git clean -fd
+    _, end, run_dir = run(d, fake)
+    assert run_dir.parent == d / ".kit" / "overnight" and not (d / ".claude").exists(), run_dir
+    assert (run_dir / "notes.md").exists() and len(end["commits"]) == 1, end
+    lines = excluded(d)
+    assert "/.kit/overnight/" in lines and "/.kit/evidence/" in lines and "/.kit/" not in lines, lines
+    assert clean(d)
+
+
+def test_exclude_lines_are_appended_under_the_kits_lock():
+    # the same rule as kitlib.add_exclude_lines, and the same lock file, so the two never race
+    import fcntl
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("overnight_under_test", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    d = Path(tempfile.mkdtemp())
+    info = d / "info" / "exclude"
+    info.parent.mkdir()
+    info.write_text("/owner-secret.env\n/notes-private/")  # no final newline
+    info.chmod(0o640)
+    mod.add_lines(info, ["/.kit/overnight/", "/owner-secret.env", "/.kit/evidence/"])
+    assert info.read_text() == "/owner-secret.env\n/notes-private/\n/.kit/overnight/\n/.kit/evidence/\n", info.read_text()
+    assert info.stat().st_mode & 0o777 == 0o640
+    with open(info.parent / "exclude.kit-lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        try:
+            mod.add_lines(info, ["/late/"], wait=0.2)
+            assert False, "a held lock must stop it"
+        except RuntimeError:
+            pass
+    assert "/late/" not in info.read_text()
+
+
+def test_project_with_legacy_state_keeps_its_runs_in_claude():
+    d, fake = repo(["change", "done"])
+    (d / ".claude" / "lead").mkdir(parents=True)  # state from before the move to .kit
+    _, end, run_dir = run(d, fake)
+    assert run_dir.parent == d / ".claude" / "overnight" and not (d / ".kit").exists(), run_dir
+    assert "/.claude/overnight/" in excluded(d) and len(end["commits"]) == 2 and clean(d)
+
+
+def test_a_symlinked_kit_folder_is_not_where_runs_go():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("overnight_under_test", SCRIPT)
+    overnight = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(overnight)
+    d = Path(tempfile.mkdtemp())
+    elsewhere = Path(tempfile.mkdtemp())
+    (d / ".kit").symlink_to(elsewhere)
+    assert overnight.runs_dir(d) == d / ".claude" / "overnight", overnight.runs_dir(d)
+    main = Path(tempfile.mkdtemp())
+    (main / ".kit").symlink_to(elsewhere)
+    tree = Path(tempfile.mkdtemp())
+    assert overnight.runs_dir(tree, main) == tree / ".claude" / "overnight", "a worktree follows the main checkout"
+
+
+def test_push_sends_the_branch_to_origin_once_at_the_end():
+    d, fake = repo(["change", "done"])
+    remote = Path(tempfile.mkdtemp()) / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    subprocess.run(["git", "-C", str(d), "remote", "add", "origin", str(remote)], check=True)
+    out, end, run_dir = run(d, fake, "--push")
+    branch = end["branch"]
+    assert end["pushed"] == f"pushed {branch} to origin", end
+    on_remote = subprocess.run(["git", "-C", str(remote), "rev-parse", branch], capture_output=True, text=True).stdout.strip()
+    here = subprocess.run(["git", "-C", str(d), "rev-parse", branch], capture_output=True, text=True).stdout.strip()
+    assert on_remote == here and on_remote, (on_remote, here)
+    assert "push: pushed" in (run_dir / "notes.md").read_text()
+    d, fake = repo(["change", "done"])
+    _, end, _ = run(d, fake, "--push")
+    assert end["pushed"] == "skipped: no origin remote", end
+    d, fake = repo(["noop", "noop", "noop"])
+    _, end, _ = run(d, fake, "--push")
+    assert "pushed" not in end and not end["commits"], end  # nothing to push: no push at all
+    _, end, _ = run(*repo(["change", "done"]))
+    assert "pushed" not in end, end  # without --push the run never pushes
+
+
+def test_detach_returns_at_once_and_the_run_goes_on():
+    d, fake = repo(["change", "change", "done"])  # a 3 s gate per step keeps it running past the launcher's wait
+    started = time.monotonic()
+    out = subprocess.run([sys.executable, str(SCRIPT), "improve work.txt", "--agent-cmd", f"{sys.executable} {fake}",
+                          "--gate", "sleep 3", "--rate-limit-wait", "0", "--detach"],
+                         cwd=d, capture_output=True, text=True, timeout=60, env=env(d))
+    assert out.returncode == 0 and time.monotonic() - started < 20, out.stdout + out.stderr
+    assert "started in the background, pid" in out.stdout and "overnight: branch overnight/" in out.stdout, out.stdout
+    logs = list((runs(d) / "launch").iterdir())
+    assert len(logs) == 1 and str(logs[0]) in out.stdout, logs
+    deadline = time.monotonic() + 90
+    ends = []
+    while time.monotonic() < deadline and not ends:
+        ends = [r / "end-state.json" for r in runs(d).iterdir() if (r / "end-state.json").exists()]
+        time.sleep(0.5)
+    assert ends, logs[0].read_text()
+    end = json.loads(ends[0].read_text())
+    assert len(end["commits"]) == 3 and "stop condition met" in end["stop_reason"], end
+    assert "overnight: stopped" in logs[0].read_text()
+    state = json.loads((ends[0].parent / "state.json").read_text())
+    assert "detach" not in state["args"], state["args"]
+    # no caps named: a detached run, which nobody watches, gets the skill's 40 iterations and USD 25
+    assert state["args"]["max_iterations"] == 40 and state["args"]["max_usd"] == 25, state["args"]
+    assert "stops at 40 iterations or USD 25" in out.stdout, out.stdout
+    # it ended with nobody there: one line waits for the next interactive session start to say it
+    untold = runs(d) / "untold.jsonl"
+    while time.monotonic() < deadline and not untold.exists():
+        time.sleep(0.2)
+    lines = untold.read_text().splitlines()
+    assert len(lines) == 1, lines
+    told = json.loads(lines[0])
+    assert told["run"] == state["run_id"] and told["iterations"] == 3 and told["cost"] == 1.5, told
+    assert told["branch"] == state["branch"] and told["pushed"] is False and "stop condition" in told["stop_reason"], told
+    assert state["detached"] is True and isinstance(state["pid"], int), state
+    assert clean(d), "the marker sits in the excluded runs folder"
+
+
+def test_a_foreground_run_leaves_nothing_to_tell():
+    d, fake = repo(["change", "done"])
+    _, _, run_dir = run(d, fake)
+    assert not (run_dir.parent / "untold.jsonl").exists()
+    state = json.loads((run_dir / "state.json").read_text())
+    assert state["detached"] is False and isinstance(state["pid"], int), state
+
+
+def test_the_end_line_waits_for_the_readers_lock():
+    """tell_later appends under an exclusive flock on untold.jsonl, the one the session start
+    holds while it reads and cuts the file in place, so neither loses the other's line."""
+    import fcntl
+    runs_dir = Path(tempfile.mkdtemp()) / "overnight"
+    (runs_dir / "r1").mkdir(parents=True)
+    untold = runs_dir / "untold.jsonl"
+    untold.write_text('{"run": "r0"}\n')
+    code = ("import importlib.util, sys\n"
+            "spec = importlib.util.spec_from_file_location('overnight', sys.argv[1])\n"
+            "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+            "m.tell_later(sys.argv[2], {'run_id': 'r1', 'stop_reason': 'done', 'iteration': 2, 'cost': 0.5,"
+            " 'branch': 'b', 'pushed': ''})\n")
+    with open(untold, "r+b") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        writer = subprocess.Popen([sys.executable, "-c", code, str(SCRIPT), str(runs_dir / "r1")])
+        time.sleep(1.0)
+        assert writer.poll() is None and untold.read_text() == '{"run": "r0"}\n', "the writer waits for the lock"
+        held.seek(0)
+        held.truncate()  # the reader's cut, in place
+    assert writer.wait(timeout=30) == 0
+    lines = untold.read_text().splitlines()
+    assert len(lines) == 1 and json.loads(lines[0])["run"] == "r1", lines
+
+
+def dry(d, fake, *args):
+    return subprocess.run([sys.executable, str(SCRIPT), "improve work.txt", "--agent-cmd", f"{sys.executable} {fake}",
+                           "--dry-run", *args], cwd=d, capture_output=True, text=True, timeout=60, env=env(d))
+
+
+def test_detach_without_caps_gets_the_defaults():
+    d, fake = repo(["change"])
+    out = dry(d, fake, "--detach")
+    assert out.returncode == 0 and "caps: 40 iterations, USD 25.00" in out.stdout, out.stdout + out.stderr
+    out = dry(d, fake, "--detach", "--max-usd", "5")
+    assert "caps: USD 5.00;" in out.stdout and "40 iterations" not in out.stdout, out.stdout  # a cap named wins
+    out = dry(d, fake, "--detach", "--no-caps")
+    assert "caps: NONE" in out.stdout and "WARNING no budget" in out.stdout, out.stdout
+    out = dry(d, fake)
+    assert "caps: NONE" in out.stdout, out.stdout  # in the foreground the user watches it: no default
+
+
+def test_protected_branch_is_refused():
+    d, fake = repo(["change"])
+    for branch in ("main", "master"):
+        out = dry(d, fake, "--branch", branch)
+        assert out.returncode != 0 and f"{branch} is a protected branch" in out.stderr, out.stdout + out.stderr
+    subprocess.run(["git", "-C", str(d), "update-ref", "refs/remotes/origin/trunk", "HEAD"], check=True)
+    subprocess.run(["git", "-C", str(d), "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk"],
+                   check=True)
+    out = dry(d, fake, "--branch", "trunk")
+    assert out.returncode != 0 and "trunk is a protected branch" in out.stderr, out.stdout + out.stderr  # the remote's default
+    (d / ".git" / "info" / "exclude").write_text(".claude/\n")
+    (d / ".claude").mkdir()
+    (d / ".claude" / "kit.json").write_text(json.dumps({"guard": {"protectedBranches": ["release"]}}))
+    out = dry(d, fake, "--branch", "release")
+    assert out.returncode != 0 and "release is a protected branch" in out.stderr, out.stdout + out.stderr
+    out = dry(d, fake, "--branch", "overnight/mine")
+    assert out.returncode == 0 and "branch overnight/mine" in out.stdout, out.stdout + out.stderr
+    # nothing was created or checked out by a refusal
+    head = subprocess.run(["git", "-C", str(d), "branch", "--show-current"], capture_output=True, text=True).stdout
+    assert head.strip() == "main", head
+
+
+def test_push_ask_keeps_the_branch_local():
+    d, fake = repo(["change", "done"])
+    remote = Path(tempfile.mkdtemp()) / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    subprocess.run(["git", "-C", str(d), "remote", "add", "origin", str(remote)], check=True)
+    (d / ".git" / "info" / "exclude").write_text(".claude/\n")
+    (d / ".claude").mkdir()
+    (d / ".claude" / "kit.local.json").write_text(json.dumps({"lead": {"unattended": {"push": "ask"}}}))
+    out, end, run_dir = run(d, fake, "--push")
+    assert end["pushed"].startswith("skipped: push=ask in ") and "git push -u origin" in end["pushed"], end
+    assert len(end["commits"]) == 2, end
+    on_remote = subprocess.run(["git", "-C", str(remote), "branch", "--list"], capture_output=True, text=True).stdout
+    assert not on_remote.strip(), on_remote
+    assert "push: skipped: push=ask" in (run_dir / "notes.md").read_text() and "push=ask" in out, out
+
+
+def test_detach_reports_a_run_that_stops_at_once():
+    d, fake = repo(["change"])
+    (d / "work.txt").write_text("uncommitted\n")
+    out = subprocess.run([sys.executable, str(SCRIPT), "improve work.txt", "--agent-cmd", f"{sys.executable} {fake}",
+                          "--detach"], cwd=d, capture_output=True, text=True, timeout=60, env=env(d))
+    assert out.returncode != 0 and "working tree not clean" in out.stdout and "ended at once" in out.stdout, out.stdout
+
 
 if __name__ == "__main__":
     os.environ.pop("KIT_OVERNIGHT_AGENT", None)

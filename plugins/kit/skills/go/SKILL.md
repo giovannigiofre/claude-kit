@@ -1,7 +1,6 @@
 ---
 name: go
-description: Finishes work end to end - intent, sync with the base, test it the way a user would, review, simplify, risk rating, PR, then keeps CI green. Use when the user appends "/go" or says the work is ready to ship; "/kit:go babysit [PR]" only watches open PRs.
-disable-model-invocation: true
+description: Use when the user says a branch or change is ready to ship, or asks to finish it ("ship it", "open the PR", "/go"). Finishes the work end to end - intent, sync with the base, test it the way a user would, review, simplify, risk rating, PR, CI kept green, then merge per the project's policy (the user merges unless kit.json says otherwise); "babysit [PR]" only watches open PRs.
 argument-hint: "[optional: what was built, PR title hint, 'no-pr', 'no-babysit', 'babysit [PR]']"
 ---
 
@@ -27,7 +26,8 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
    and records the tree it passed on, for the Evidence section), else the project's tests,
    lint, build. Then exercise the change: run the CLI, call the API, load the
    page (a project `verify` skill, or an older `e2e` one, says how). Save proof under
-   `.claude/evidence/<branch>/` and write one line per scenario: `<scenario> | pass/fail |
+   `.kit/evidence/<branch>/` of the checkout you work in (`gate.py` keeps its own record in the
+   main checkout's) and write one line per scenario: `<scenario> | pass/fail |
    <evidence file>`. A test that mocks the changed path, or reading the code, is not evidence.
    Fix failures and repeat.
 5. **Review, then simplify.** Run the `code-review` skill on the branch with the intent from step
@@ -40,7 +40,7 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
 6. **Risk and PR.** Rate the risk low, medium or high in one or two lines: blast radius (shared
    modules, auth, money, migrations, data deletion, public API), how much the evidence covers,
    how hard it is to roll back. Branch first if on the default branch. Stage only the files this
-   work changed (no secrets, `.env`, large data or `.claude/evidence/`), commit as the repo's
+   work changed (no secrets, `.env`, large data or `.kit/`), commit as the repo's
    configured git user with a message that says why (no AI co-author lines or footers), push
    and `gh pr create` (unless `no-pr`) with sections **Intent**, **Changes**,
    **Evidence**, **Fixed along the way**, **Risk**, **Open**; attach screenshots and logs with
@@ -60,8 +60,8 @@ kunchenguid/no-mistakes, MIT. Nothing copied.)
 8. **Merge per the project's policy** (`.claude/kit.json` `lead.merge`): `agent` merges once CI
    is green, nothing from the review is open and the risk is not high (`gh pr merge --squash
    --delete-branch`, or the method the repo allows); `user`, or a high risk, leaves the PR for
-   the user. Not set: ask "In this project, do I merge PRs once they're green, or do you always
-   review them first?" and save the answer there.
+   the user. Not set means `user`: leave the PR for the user without asking; when they say
+   otherwise, save their answer there.
 9. **Report** in a few lines: branch, PR, evidence verdict, risk, CI state, merged or waiting,
    what the user still has to decide.
 

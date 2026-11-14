@@ -62,7 +62,15 @@ Platform guides:
 
 **Yourself:** run the pipeline on a tiny failing sample; log row counts, schema and a sample record at each step boundary; model/prompt/version and parameters.
 **Ask:** a failing input sample and a working one (redacted), the run ID, the trace from the observability tool if any (Langfuse/LangSmith/OTel export as JSON), expected vs actual output.
-**Check the plug:** schema drift, nulls/encoding/timezones, silent truncation, model or prompt version changed, nondeterminism (temperature, retries), rate limits returning partial results.
+**Check the plug:** schema drift, nulls/encoding/timezones, silent truncation, model or prompt version changed, nondeterminism (temperature, retries), rate limits returning partial results. An LLM feature that still runs but answers worse: the next section.
+
+---
+
+## An LLM feature got worse
+
+**Yourself:** before blaming the model, replay one failing input as a single bare call outside the application: same model id and parameters, but no wrapper prompt, no tools, no memory, no retries. If the bare call answers badly too, the model (or the input itself) is the suspect. If the bare call is fine, the fault is in a layer the application adds; walk them in order, comparing what each one hands to the next on the failing input and on a working one: input assembly (what the user sent, what the code actually put in the request), retrieval (which chunks came back, and whether the right one was among them), the prompt template (what the rendered prompt says, not the template file), tool definitions and tool results, hidden retries and fallbacks (a second call or another model that answered instead), output parsing, rendering. The first layer whose input is right and output is wrong holds the fault.
+**Ask:** the failing conversation or trace and a working one (redacted), when it started, and any prompt, model, provider or library change around then.
+**Check the plug:** a model id that an alias moved, a fallback that quietly took over, a template variable left empty, retrieval returning stale or no chunks, a parser that drops a field. Fix code before prompts: a prompt edit that hides a broken layer comes back as a new failure later. Read each tool or API result the way `techniques.md` ("Reading a result") describes.
 
 ---
 

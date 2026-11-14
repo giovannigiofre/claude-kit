@@ -8,7 +8,8 @@ system. It reads shell text, so it is a guardrail, not a boundary: an obfuscated
 slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety profile).
 
   rm-outside       recursive delete (rm -r, find -delete/-exec rm, rmtree in python -c ...) of
-                   /, the home folder, the repo root, .git, or anything outside the repo except
+                   /, the home folder, the repo root, .git, the main checkout's .kit, .kit/lead
+                   or .kit/agent-memory (the board and every item), or anything outside the repo except
                    its other linked worktrees, the temp folders and the cache folders; after
                    `cd <dir> &&` into another work tree, that repository counts as inside too
                    (its root and .git do not). A variable set once by a plain NAME=value
@@ -20,6 +21,18 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    root counts as deleting the root
   push-protected   a push to a protected branch (main, master, the remote's default), a force
                    push to one, a mirror push, or deleting one
+  push-force       asked about: a push with --force, -f or a +refspec (not --force-with-lease,
+                   which stays free on a branch that is not protected), or with --all; from a
+                   subagent also a push that deletes a remote branch (`:branch`, --delete, -d)
+  merge-thread     from a subagent: merging a PR (gh pr merge, a gh api call to .../merge or
+                   the mergePullRequest mutation, a GitHub MCP merge tool); the coordinator merges,
+                   and from the main session the merge is left to the permission system
+  owner-settings   from a subagent: the kit's items.py commands that change the owner's settings
+                   (`away` and `sandbox` with on or off, `unattended` with any argument), and
+                   `machine_setup.py --apply|--decline`, `migrate_state.py undo` and `migrate
+                   --again|--force`; judged on what a simple command runs (directly, or a
+                   shell function or variable bound to it), never on mentioned text; `away status`, `sandbox status`, a
+                   bare `unattended`, a bare `migrate` and `status` only read
   discard-work     git reset --hard, checkout/restore of the whole tree, clean, stash drop/clear
                    while there are uncommitted changes; git clean -x/-X always
   system           sudo/su/doas, mkfs, dd to a device, disk erase, shutdown/reboot, recursive
@@ -46,9 +59,15 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
   memory           the kit verifier (agent type kit:verifier only) writing a memory file (a
                    MEMORY.md in any case, anything in an agent-memory folder; by redirect, tee,
                    cp/mv/install/ln/rsync, dd, sed -i/perl -i/truncate, or interpreter code that
-                   opens a quoted path) outside <main checkout>/.claude/agent-memory/kit-verifier;
+                   opens a quoted path) outside <main checkout>/.kit/agent-memory/kit-verifier
+                   (`.claude/` in a project the kit has not moved yet: kitlib.state_entry);
                    quoted text and here-document bodies are data, not writes; checked in every
                    repo, kit.json or not, guard off too, since the verifier is the kit's
+  hook-bypass      a git commit, push, merge, rebase, cherry-pick or am that skips the repository's
+                   hooks: --no-verify, -n on commit and am (on push it is --dry-run, on merge and
+                   rebase --no-stat), -c core.hooksPath=<elsewhere>, HUSKY=0 or HUSKY_SKIP_HOOKS=1
+                   set for it; and git config pointing core.hooksPath away from the repository's
+                   hooks (its current folder or an existing folder in its work tree are its own)
   retry            the same push, rebase or PR merge, as the same command text in the same folder at
                    the same commit, a fourth time within 30 minutes: it is refused and the thread
                    hands the step back; guard.retries = false turns this rule off
@@ -101,6 +120,7 @@ SECRET_PATHS = ["~/.ssh", "~/.aws", "~/.config/gh", "~/.netrc", "~/.docker/confi
                 "~/.config/gcloud", "~/.azure"]
 CACHE_PATHS = ["~/.cache", "~/Library/Caches", "~/.npm/_cacache", "~/.cargo/registry/cache"]
 UNKNOWN = object()
+PLUGIN = Path(__file__).resolve().parents[2]
 
 
 def home():
@@ -383,6 +403,36 @@ def tokenize(line):
         return line.split()
 
 
+SHELL_VALUE_OPTIONS = ("-o", "+o", "-O", "+O", "--rcfile", "--init-file")
+
+
+def shell_bodies(argv):
+    """The command strings a shell runs (`bash -c CMD`, `sh -xec CMD`, `bash -euo pipefail -c CMD`),
+    [] for a script run. Fail safe: once a short-option cluster holds `c`, every later word that is
+    not an option is walked as a command (one word too many matches no rule; a skipped body would
+    let anything through). Before it, -o/-O/--rcfile/--init-file and a cluster ending in o or O
+    take the next word as their value, so `pipefail` is not taken for a script file."""
+    if not argv or Path(argv[0]).name not in SHELLS:
+        return []
+    bodies, after_c, i = [], False, 1
+    while i < len(argv):
+        word = argv[i]
+        if after_c:
+            if not word.startswith("-"):
+                bodies.append(word)
+        elif word in SHELL_VALUE_OPTIONS:
+            i += 1
+        elif re.fullmatch(r"[-+][A-Za-z]+", word):
+            if word[0] == "-" and "c" in word:
+                after_c = True
+            elif word[-1] in "oO":
+                i += 1
+        elif not word.startswith(("-", "+")):
+            return []  # a script file: what follows is its arguments
+        i += 1
+    return bodies
+
+
 def strip_wrappers(argv):
     argv = list(argv)
     while argv:
@@ -391,6 +441,10 @@ def strip_wrappers(argv):
             argv = argv[1:]
         elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", argv[0]):
             argv = argv[1:]
+        elif name == "env":  # env -i -u NAME -C DIR NAME=value command ...
+            argv = argv[1:]
+            while argv and (argv[0].startswith("-") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", argv[0])):
+                argv = argv[2:] if argv[0] in ("-u", "-C", "--unset", "--chdir") else argv[1:]
         elif name in WRAPPERS:
             argv = argv[1:]
             while argv and argv[0].startswith("-"):
@@ -498,6 +552,11 @@ def logical_lines(text, bodies=None):
     return [line for line in lines if line.strip()]
 
 
+def assignments(words):
+    """{NAME: value} of the NAME=value words among `words` (as the shell sees them, quotes removed)."""
+    return {m.group(1): w[m.end():] for w in words if (m := ASSIGN.match(w))}
+
+
 OPENERS, CLOSERS = {"if", "for", "while", "until", "case", "select", "{"}, {"fi", "done", "esac", "}"}
 ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\+?=")
 
@@ -532,9 +591,11 @@ def segments(command, inner=False):
                 argv = strip_wrappers(cur)
                 assigns = [ASSIGN.match(w).group(1) for w in words if ASSIGN.match(w)]
                 if words and (len(assigns) == len(words) or (words[0] == "export" and assigns)):
-                    out.append({"argv": argv, "piped_from": None, "assigns": assigns, "plain": plain})
+                    out.append({"argv": argv, "piped_from": None, "assigns": assigns, "plain": plain,
+                                "env": assignments(words)})
                 elif argv:
-                    out.append({"argv": argv, "piped_from": pipe_from, "plain": plain})
+                    out.append({"argv": argv, "piped_from": pipe_from, "plain": plain,
+                                "env": assignments(cur[:len(cur) - len(argv)])})
                 depth += tok.count("(") - tok.count(")")
                 pipe_from = argv if tok == "|" else None
                 prev, cur = tok, []
@@ -543,14 +604,15 @@ def segments(command, inner=False):
     nested = []
     for seg in out:
         argv = seg["argv"]
-        if argv and Path(argv[0]).name in SHELLS and "-c" in argv[1:-1]:
-            nested.extend(dict(s, nested=True, plain=False) for s in segments(argv[argv.index("-c") + 1], True))
+        for body in shell_bodies(argv):
+            nested.extend(dict(s, nested=True, plain=False) for s in segments(body, True))
     return out + nested
 
 
 def git(cwd, *args):
     try:
-        out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=10)
+        out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=10,
+                             env=kitlib.git_env())
         return out.stdout.strip() if out.returncode == 0 else ""
     except Exception:
         return ""
@@ -595,11 +657,30 @@ def delete_target(word, cwd, repos):
             return ("deny", f"delete inside .git ('{word}')")
         if any(t == r or under(r, t) for r in roots):
             return ("deny", f"delete of the repository root ('{word}')")
+        state = kit_state_roots(repos)
+        if t in state or (glob.has_magic(t.name) and t.parent in state):
+            return ("deny", f"delete of the kit's state folder ('{word}'): the board, items and memory of every thread")
     # what is allowed is decided on the real path, so a symlink cannot lead the delete elsewhere
     if any(under(real, c) for c in tilde(CACHE_PATHS)) or any(under(real, r) for r in roots) \
             or any(under(real, t) for t in temp_roots()) or any(in_sibling_worktree(real, r) for r in repos):
         return None
     return ("deny", f"delete outside the repository ('{word}' -> {real})")
+
+
+def kit_state_roots(repos):
+    """The main checkout's `.kit`, `.kit/lead`, its `items` and `proposals`, `.kit/agent-memory`
+    and the verifier's memory: once the state left the protected `.claude/`, nothing but this
+    stops a thread's `rm -rf .kit` from taking every item with it, from a worktree as well. A
+    glob directly inside one of them (`.kit/lead/*`) is refused too. One item's own folder and
+    its `out/` stay deletable."""
+    found = set()
+    for r in repos:
+        main = kitlib.main_checkout(r)
+        if main:
+            for base in {Path(main), Path(os.path.realpath(main))}:
+                found.update(base / kitlib.STATE_DIR / rel for rel in
+                             ("", "lead", "lead/items", "lead/proposals", "agent-memory", "agent-memory/kit-verifier"))
+    return {Path(os.path.normpath(p)) for p in found}
 
 
 def in_sibling_worktree(real, root):
@@ -691,7 +772,8 @@ def check_find(argv, cwd, repos):
         if raw is not UNKNOWN:
             real = resolved(raw)
             whole = reaches_git(args)
-            if any(under(real, r) and not (real == r and whole) for r in roots) and ".git" not in real.parts:
+            if any(under(real, r) and not (real == r and whole) for r in roots) and ".git" not in real.parts \
+                    and not (whole and real in kit_state_roots(repos)):
                 continue  # find deletes what matches below the path; with no name or path test, all of .git
         found = delete_target(word, cwd, repos)
         if found:
@@ -715,7 +797,7 @@ def check_interpreter(argv):
     return None
 
 
-def check_git(argv, cwd, opts):
+def check_git(argv, cwd, opts, agent=False):
     args = argv[1:]
     while args and args[0] in ("-C", "-c", "--git-dir", "--work-tree"):
         if args[0] == "-C" and len(args) > 1:
@@ -727,8 +809,11 @@ def check_git(argv, cwd, opts):
     sub, rest = args[0], args[1:]
     if sub == "push":
         branches = protected_branches(cwd, opts)
-        force = any(a in ("-f", "--force", "--force-with-lease", "--force-if-includes") or
-                    a.startswith("--force-with-lease=") for a in rest)
+        # --force and -f (also inside -uf) overwrite whatever the remote has; --force-with-lease only
+        # what this clone last saw. -o takes a value, so a word after it is not a flag.
+        plain_force = any(a == "--force" or re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", a) for a in rest)
+        force = plain_force or any(a in ("--force-with-lease", "--force-if-includes") or
+                                   a.startswith("--force-with-lease=") for a in rest)
         if "--mirror" in rest:
             return ("deny", "push-protected", "git push --mirror")
         positional = [a for a in rest if not a.startswith("-")]
@@ -738,8 +823,8 @@ def check_git(argv, cwd, opts):
             if current in branches:
                 return ("deny", "push-protected",
                         f"push from '{current}', a protected branch: work on a branch and open a PR")
-            return None
-        delete = "--delete" in rest or "-d" in rest
+            return push_ask(rest, [], False, plain_force, agent)
+        delete = "--delete" in rest or any(re.fullmatch(r"-[a-zA-Z]*d[a-zA-Z]*", a) for a in rest)
         for spec in refspecs:
             plus = spec.startswith("+")
             dst = re.sub(r"^refs/heads/", "", spec.lstrip("+").split(":")[-1])
@@ -751,7 +836,7 @@ def check_git(argv, cwd, opts):
                 if force or plus:
                     return ("deny", "push-protected", f"force push to the protected branch '{dst}'")
                 return ("deny", "push-protected", f"push to the protected branch '{dst}': open a PR instead")
-        return None
+        return push_ask(rest, refspecs, delete, plain_force, agent)
 
     def has_changes(untracked=False):
         return bool(git(cwd, "status", "--porcelain", "--untracked-files=" + ("all" if untracked else "no")))
@@ -770,6 +855,319 @@ def check_git(argv, cwd, opts):
         return ("deny", "discard-work", f"git {sub} of the whole tree would discard uncommitted changes")
     if sub == "stash" and rest[:1] in (["drop"], ["clear"]):
         return ("deny", "discard-work", f"git stash {rest[0]} deletes stashed work")
+    return None
+
+
+def push_ask(rest, refspecs, delete, plain_force, agent):
+    """A push to a branch that is not protected: asked about when it overwrites the remote
+    (--force, -f, a +refspec), pushes every branch (--all), or, from a subagent, deletes one."""
+    if plain_force or any(spec.startswith("+") for spec in refspecs):
+        return ("ask", "push-force", "a force push overwrites the remote branch whatever is on it; "
+                "--force-with-lease overwrites only what this clone last fetched")
+    if "--all" in rest:
+        return ("ask", "push-force", "git push --all pushes every local branch")
+    if agent and delete:
+        return ("ask", "push-delete", "a thread deleting a remote branch")
+    return None
+
+
+def check_gh(argv, agent):
+    """From a subagent, merging a PR: gh pr merge, or gh api to a .../merge path or with the
+    mergePullRequest mutation. `gh pr view`, `gh pr checks` and the like only read."""
+    if not agent:
+        return None
+    positional, values = gh_words(argv[1:])
+    if any(positional[i:i + 2] == ["pr", "merge"] for i in range(len(positional))):
+        return ("deny", "merge-thread", "gh pr merge from a thread")
+    if "api" in positional:
+        after = positional[positional.index("api") + 1:]
+        texts = after + [v for vs in values.values() for v in vs]
+        if any(re.search(r"/merges?(?:$|[/?])", w) for w in after[:1]) or \
+                any("mergePullRequest" in t or "enablePullRequestAutoMerge" in t for t in texts):
+            return ("deny", "merge-thread", "a gh api call that merges a PR, from a thread")
+    return None
+
+
+# The owner's commands: they change his settings or the kit's state, and the coordinator runs them
+# at his word, never a thread. A segment is one when it RUNS one of these scripts with these words
+# among its own arguments, read the way the script reads them (options may come first): directly
+# (`python3 .../items.py away on`, `python3 -m items away on`, the path alone), or through a shell
+# function or a variable bound in the same command to a command that runs it (`I(){ python3
+# .../items.py "$@"; }; I away on`, `"$1" "$2"` in the body, `I="python3 .../items.py"; $I away on`,
+# also after export, readonly or local). Each simple command is judged on its own, so a commit
+# message, a PR body, a grep pattern or words spread over a pipeline never match. Deliberate evasions
+# (a word in a variable, an array, xargs, find -exec python3 {}, uv run, $PYTHON, a script fed to sh,
+# an interpreter importing kitlib) are left to Claude Code's permission layer.
+OWNER_SCRIPTS = ("items", "machine_setup", "migrate_state")
+FUNCTION_DEF = re.compile(r"(?:^|(?<=[\s;&|(){}]))(?:function\s+([A-Za-z_][\w-]*)\s*(?:\(\s*\))?|([A-Za-z_][\w-]*)\s*\(\s*\))\s*\{")
+CALLED = re.compile(r"\$\{?([A-Za-z_]\w*)\}?")
+
+
+def owner_words(script, args):
+    """The owner words of `script` (items, machine_setup, migrate_state) in `args`, or None. The
+    words are looked for the way the script reads its arguments: options may come first."""
+    if script == "machine_setup":
+        found = [a for a in args if a in ("--apply", "--decline")]
+        return found[:1] or None
+    if script == "migrate_state":  # argparse: options anywhere, --root takes a value, long names abbreviate
+        flags, positional, i = [], [], 0
+        while i < len(args):
+            a = args[i]
+            if len(a) > 2 and a.startswith("--") and "--root".startswith(a.split("=")[0]):
+                i += 1 if "=" in a else 2
+                continue
+            if len(a) > 2 and a.startswith("--") and ("--again".startswith(a) or "--force".startswith(a)):
+                flags.append(a)
+            elif not a.startswith("-"):
+                positional.append(a)
+            i += 1
+        if positional[:1] == ["undo"]:
+            return ["undo"]
+        if positional[:1] == ["migrate"] and flags:
+            return ["migrate"] + flags
+        return None
+    if script == "items":  # the subcommand is the first word that is not an option
+        words = [a for a in args if not a.startswith("-")]
+        if words[:1] in (["away"], ["sandbox"]) and words[1:2] in (["on"], ["off"]):
+            return words[:2]
+        if words[:1] == ["unattended"] and any(re.fullmatch(r"[A-Za-z_][\w-]*=.*", a) for a in words[1:]):
+            return words
+    return None
+
+
+def runs_script(argv):
+    """(script, its arguments) when argv runs one of the owner scripts, else None."""
+    argv = strip_wrappers(argv)
+    if not argv:
+        return None
+    args = list(argv)
+    if re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(args[0]).name):
+        args = args[1:]
+        while args and args[0].startswith("-") and args[0] != "-m":
+            if args[0] == "-c":
+                return None
+            args = args[2:] if args[0] in ("-X", "-W") else args[1:]
+        if args[:1] == ["-m"]:
+            return (args[1], args[2:]) if len(args) > 1 and args[1] in OWNER_SCRIPTS else None
+    name = Path(args[0]).name if args else ""
+    if name.endswith(".py") and name[:-3] in OWNER_SCRIPTS:
+        return name[:-3], args[1:]
+    return None
+
+
+def function_bodies(command):
+    """{name: body} of the shell functions the command defines (`I(){ ...; }`, `function I { ...; }`)."""
+    code = "\n".join(logical_lines(command.replace("\\\n", " ")))
+    mask = quote_mask(code)
+    out = {}
+    for m in FUNCTION_DEF.finditer(code):
+        if mask[m.start()] != " ":
+            continue
+        depth, i = 1, m.end()
+        while i < len(code) and depth:
+            if mask[i] == " ":
+                depth += {"{": 1, "}": -1}.get(code[i], 0)
+            i += 1
+        out[m.group(1) or m.group(2)] = code[m.end():i - 1]
+    return out
+
+
+def called(binding, args):
+    """The argv a call of a bound name with `args` runs. A variable's words come first and the args
+    after; a function's body gets them in place of "$@", "$*", "$1", "${2}" and so on."""
+    if not (isinstance(binding, tuple) and binding[0] == "function"):
+        return list(binding) + list(args)
+    out = []
+    for word in binding[1]:
+        if word in ("$@", "$*", "${@}", "${*}"):
+            out.extend(args)
+        elif m := re.fullmatch(r"\$(\d)|\$\{(\d+)\}", word):
+            n = int(m.group(1) or m.group(2))
+            out.extend(args[n - 1:n] if n else [])
+        else:
+            out.append(word)
+    return out
+
+
+def owner_run(command, cwd=None, bound=None):
+    """`items.py away on` (or another owner command) when a simple command of `command` runs it,
+    else None. `bound` carries the names bound so far ({name: argv prefix}) into an eval."""
+    bound = dict(bound or {})
+    for name, body in function_bodies(command).items():
+        for seg in segments(body):
+            if runs_script(seg["argv"]):
+                bound[name] = ("function", seg["argv"])
+                break
+    env = {}
+    for seg in segments(command):
+        declared = seg["argv"][:1] in (["export"], ["readonly"], ["local"], ["declare"], ["typeset"])
+        if declared:  # `readonly I=...`, `local I=...`: bindings like a bare assignment
+            seg = dict(seg, assigns=True, env=dict(a.split("=", 1) for a in seg["argv"][1:]
+                                                    if re.match(r"^[A-Za-z_]\w*=", a)))
+        if seg.get("assigns"):
+            for var, value in (seg.get("env") or {}).items():
+                env[var] = value
+                try:
+                    words = shlex.split(value)
+                except ValueError:
+                    words = value.split()
+                if runs_script(words):
+                    bound[var] = words
+                else:
+                    bound.pop(var, None)
+            continue
+        argv = list(seg["argv"])
+        if not argv:
+            continue
+        call = CALLED.fullmatch(argv[0])
+        if argv[0] in bound or (call and call.group(1) in bound):
+            argv = called(bound[argv[0] if argv[0] in bound else call.group(1)], argv[1:])
+        argv = [with_vars(a, env) for a in argv]
+        if argv and " " in argv[0]:  # a command held in a variable: the shell splits it
+            argv = argv[0].split() + argv[1:]
+        name = Path(argv[0]).name if argv else ""
+        if name == "eval":
+            found = owner_run(" ".join(argv[1:]), cwd, bound)
+            if found:
+                return found
+            continue
+        runs = [argv]
+        if name == "find":
+            runs = [argv[i + 1:] for i, a in enumerate(argv) if a in ("-exec", "-execdir", "-ok", "-okdir")]
+        for run in runs:
+            found = runs_script(run)
+            words = owner_words(*found) if found else None
+            if words:
+                return f"{found[0]}.py {' '.join(words)}"
+    return None
+
+
+HOOK_SUBS = {"commit", "push", "merge", "rebase", "cherry-pick", "am"}
+# -n is --no-verify only on commit and am; on push it is --dry-run, on merge and rebase --no-stat,
+# on cherry-pick --no-commit (git <sub> -h, git 2.43)
+SHORT_NO_VERIFY = {"commit", "am"}
+# short options that take a value: the rest of the cluster (-mfix) or the next word is that value
+SHORT_VALUES = {"commit": "mFcCt", "push": "o", "merge": "mFsX", "rebase": "CsxX", "cherry-pick": "mX",
+                "am": "Cp"}
+SHORT_OPTIONAL = {"commit": "Su", "merge": "S", "rebase": "Sr", "cherry-pick": "S", "am": "S"}  # value only attached
+LONG_VALUES = {"--message", "--file", "--reedit-message", "--reuse-message", "--trailer", "--template", "--author",
+               "--date", "--cleanup", "--fixup", "--squash", "--pathspec-from-file", "--strategy",
+               "--strategy-option", "--into-name", "--exec", "--onto", "--push-option", "--repo", "--receive-pack",
+               "--mainline", "--quoted-cr", "--directory", "--exclude", "--include", "--patch-format",
+               "--resolvemsg"}
+CONFIG_VALUE_FLAGS = {"-f", "--file", "--blob", "--type", "--default", "--comment", "--value"}
+HOOKS_FIX = ("The hooks are the repository's own checks: skipping one hides what it found instead of fixing "
+             "it. Run the step without the bypass and fix what the hook reports; if you cannot, hand the step "
+             "back with the hook's output")
+
+
+def skips_verify(sub, rest):
+    """Whether a git commit/push/merge/rebase/cherry-pick/am argument list asks git to skip the hooks:
+    --no-verify (or an abbreviation git accepts), or -n alone or in a cluster where -n means that.
+    Option values (`-m "--no-verify"`, `-mn`) are text, not flags; the last of --verify/--no-verify wins."""
+    skip, i = False, 0
+    while i < len(rest):
+        a = rest[i]
+        i += 1
+        if a == "--":
+            break
+        if a.startswith("--"):
+            name = a.split("=", 1)[0]
+            if "=" not in a and name in LONG_VALUES:
+                i += 1
+            elif len(name) >= len("--no-ve") and "--no-verify".startswith(name):
+                skip = True
+            elif name == "--verify":
+                skip = False
+        elif a.startswith("-") and len(a) > 1:
+            for k, ch in enumerate(a[1:]):
+                if ch in SHORT_VALUES.get(sub, ""):
+                    i += k == len(a) - 2  # nothing attached: the next word is the value
+                    break
+                if ch in SHORT_OPTIONAL.get(sub, ""):
+                    break
+                if ch == "n" and sub in SHORT_NO_VERIFY:
+                    skip = True
+    return skip
+
+
+def hooks_elsewhere(cwd, value):
+    """Whether core.hooksPath = `value` would run hooks from another folder than the repository's
+    own: its current hooks folder, or an existing folder in its work tree (outside .git), as husky's
+    .husky or a .githooks folder are. An unset value means git's default, <common dir>/hooks."""
+    current = git(cwd, "rev-parse", "--path-format=absolute", "--git-path", "hooks")
+    if not current:
+        return False  # not a repository: no hooks to skip
+    if value is None:
+        common = git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        new = os.path.join(common, "hooks") if common else ""
+    elif "$" in value or "`" in value:
+        return True
+    else:
+        new = git(cwd, "-c", f"core.hooksPath={value}", "rev-parse", "--path-format=absolute", "--git-path", "hooks")
+    if not new:
+        return True
+    new, current = os.path.realpath(new), os.path.realpath(current)
+    if new == current:
+        return False
+    top = git(cwd, "rev-parse", "--show-toplevel")
+    inside = top and under(new, os.path.realpath(top)) and ".git" not in Path(new).relative_to(os.path.realpath(top)).parts
+    return not (inside and os.path.isdir(new) and value is not None)
+
+
+def check_hooks(argv, cwd, env):
+    """hook-bypass: a git step that skips the repository's hooks (--no-verify, commit's or am's -n,
+    core.hooksPath pointed elsewhere for the command or in the config, HUSKY=0 or HUSKY_SKIP_HOOKS=1).
+    A thread that meets a red pre-commit or pre-push hook can turn it green by not running it, and
+    the problem the hook found then reaches the branch unseen."""
+    args, configs = argv[1:], []
+    while args and args[0].startswith("-"):
+        a = args[0]
+        if a in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path") and len(args) > 1:
+            if a == "-C":
+                target = expand(args[1], cwd)
+                cwd = cwd if target is UNKNOWN else target
+            elif a == "-c":
+                configs.append(args[1])
+            args = args[2:]
+            continue
+        if a.startswith("--config-env="):  # the value comes from an environment variable: unknown here
+            key = a.split("=", 1)[1].split("=", 1)[0]
+            configs.append(key + "=$" + key)
+        args = args[1:]
+    if not args:
+        return None
+    sub, rest = args[0], args[1:]
+    if sub == "config":
+        unset, words, i = False, [], 0
+        while i < len(rest):
+            a = rest[i]
+            i += 1
+            if a in ("--unset", "--unset-all"):
+                unset = True
+            elif a in CONFIG_VALUE_FLAGS:
+                i += 1
+            elif not a.startswith("-"):
+                words.append(a)
+        if words[:1] in (["set"], ["unset"]):
+            unset = unset or words[0] == "unset"
+            words = words[1:]
+        if words and words[0].lower() == "core.hookspath" and (unset or len(words) >= 2):
+            if hooks_elsewhere(cwd, None if unset else words[1]):
+                return ("deny", "hook-bypass", "git config points core.hooksPath away from the repository's hooks")
+        return None
+    if sub not in HOOK_SUBS:
+        return None
+    if skips_verify(sub, rest):
+        return ("deny", "hook-bypass", f"git {sub} with --no-verify" + (" (-n)" if sub in SHORT_NO_VERIFY else "")
+                + " skips the repository's hooks")
+    for item in configs:
+        key, _, value = item.partition("=")
+        if key.lower() == "core.hookspath" and hooks_elsewhere(cwd, value):
+            return ("deny", "hook-bypass", f"git -c core.hooksPath={value} {sub} runs no hooks of this repository")
+    if env.get("HUSKY") == "0" or env.get("HUSKY_SKIP_HOOKS", "").lower() in ("1", "true"):
+        name = "HUSKY=0" if env.get("HUSKY") == "0" else "HUSKY_SKIP_HOOKS"
+        return ("deny", "hook-bypass", f"{name} makes git {sub} skip the repository's husky hooks")
     return None
 
 
@@ -1011,7 +1409,7 @@ def check_secrets(argv, cwd):
     return None
 
 
-def check_bash(command, cwd, root, opts):
+def check_bash(command, cwd, root, opts, agent=False):
     if allowed(command, opts):
         return None
     for decision, key in (("deny", "denyCommands"), ("ask", "askCommands")):
@@ -1023,11 +1421,14 @@ def check_bash(command, cwd, root, opts):
                     return (decision, "project", f"{reason} (kit.json guard.{key})")
             except re.error:
                 continue
+    owned = owner_run(command, cwd) if agent else None
+    if owned:
+        return ("deny", "owner-settings", owned)
     if re.search(r":\(\)\s*\{\s*:\|:&\s*\};\s*:", command):
         return ("deny", "system", "fork bomb")
     if re.search(r">\s*/dev/(sd|disk|nvme|hd)", command):
         return ("deny", "system", "write to a disk device")
-    asked, env, repos, lost_cwd = None, {}, [root], False
+    asked, env, repos, lost_cwd, shell_env = None, {}, [root], False, {}
     code = "\n".join(logical_lines(command.replace("\\\n", " ")))  # no comments, no here-document bodies
     mask = quote_mask(code)
     # a $NAME escaped or in single quotes stays as written: the shell does not put the value in
@@ -1037,6 +1438,8 @@ def check_bash(command, cwd, root, opts):
     unseen = any(seg["argv"] and (seg["argv"][0] == "." or Path(seg["argv"][0]).name in ("eval", "source"))
                  for seg in segs)
     for seg in segs:
+        if seg.get("assigns"):
+            shell_env.update(seg.get("env") or {})  # `export HUSKY=0; git commit`: as the commands after it see it
         for var in seg.get("assigns") or []:
             value = assigned_value(code, var, env) if seg["plain"] and not unseen else None
             if value is not None:
@@ -1080,8 +1483,11 @@ def check_bash(command, cwd, root, opts):
                 found = ("ask", "rm-outside", "delete in a folder only known when the command runs")
             checks.append(found)
         elif name == "git":
-            checks.append(check_git(argv, cwd, opts))
-        elif name in INTERPRETERS:
+            checks.append(check_git(argv, cwd, opts, agent))
+            checks.append(check_hooks(argv, cwd, {**shell_env, **(seg.get("env") or {})}))
+        elif name == "gh":
+            checks.append(check_gh(argv, agent))
+        elif name in INTERPRETERS or re.fullmatch(r"python3\.\d+", name):
             checks.append(check_interpreter(argv))
         else:
             checks.append(check_system(argv, cwd, root))
@@ -1253,7 +1659,7 @@ def record_denial(cwd, rule, why, session):
         pass
 
 
-MEMORY_DIR = Path(".claude") / "agent-memory" / "kit-verifier"
+MEMORY_NAME = "agent-memory/kit-verifier"  # a kit state entry, where kitlib.state_entry finds it
 MEMORY_COPIERS = {"cp", "mv", "install", "ln", "rsync", "ditto"}
 MEMORY_EDITORS = {"sed", "gsed", "perl"}  # in place (-i): the files they name are written
 MEMORY_CODE = re.compile(r"\bopen\s*\(|write_text|write_bytes|writeFile|appendFile|shutil\.(?:copy|move)|\.rename\(")
@@ -1285,10 +1691,11 @@ def memory_words(command):
         argv = seg.get("argv") or []
         if seg.get("nested") or not argv:
             continue
-        if Path(argv[0]).name in SHELLS and "-c" in argv[1:-1]:
-            more = memory_words(argv[argv.index("-c") + 1])
-            targets, code = targets + more[0], code + more[2]
-            env.update(more[1])
+        if shell_bodies(argv):
+            for body in shell_bodies(argv):
+                more = memory_words(body)
+                targets, code = targets + more[0], code + more[2]
+                env.update(more[1])
         elif INTERPRETER.fullmatch(Path(argv[0]).name):
             code += [argv[i + 1] for i, a in enumerate(argv[:-1]) if a in CODE_FLAGS]
     for opener, body in bodies:  # a here-document read by a shell is commands, by an interpreter code
@@ -1304,7 +1711,7 @@ def memory_words(command):
 
 def memory_write(command, cwd):
     """For the kit verifier (in every repo): the memory file this command writes outside its one
-    memory folder, <main checkout>/.claude/agent-memory/kit-verifier (subagent_start.py names it),
+    memory folder, <main checkout>/.kit/agent-memory/kit-verifier (subagent_start.py names it),
     else None. A write counts when its target (a redirection, tee, the destination of cp/mv/install/
     ln/rsync, dd's of=, a file sed -i/perl -i/truncate names, or a quoted path in code given to an
     interpreter that opens or writes a file: best effort) is a MEMORY.md (any case: macOS), lies in
@@ -1315,7 +1722,7 @@ def memory_write(command, cwd):
     if "memory.md" not in flat and "agent-memory" not in flat:
         return None
     main = kitlib.main_checkout(cwd)
-    stable = Path(os.path.realpath(str(Path(main) / MEMORY_DIR))) if main else None
+    stable = Path(os.path.realpath(str(kitlib.state_entry(main, MEMORY_NAME)))) if main else None
     targets, env, code = memory_words(command)
     base = Path(cwd)
     segs = [s for s in segments(command) if s.get("argv")]
@@ -1371,7 +1778,7 @@ def main():
             stray = None
         if stray:
             main_dir = kitlib.main_checkout(cwd)
-            where = Path(main_dir) / MEMORY_DIR if main_dir else "the folder the kit named at start-up"
+            where = kitlib.state_entry(main_dir, MEMORY_NAME) if main_dir else "the folder the kit named at start-up"
             print(f"kit guard (memory): this writes {stray}, outside your memory folder {where}. Write the "
                   "pitfall there, by that absolute path: a memory written anywhere else is lost with its "
                   "worktree, or left untracked in the repo.", file=sys.stderr)
@@ -1396,7 +1803,8 @@ def main():
         except Exception:  # the wait rule never stops a command on its own failure
             found = None
         try:
-            found = found or check_bash(str(tool_input.get("command") or ""), cwd, root, opts)
+            found = found or check_bash(str(tool_input.get("command") or ""), cwd, root, opts,
+                                        bool(data.get("agent_id")))
         except Exception as error:  # a crash would let the command run unchecked
             found = ("ask", "guard", f"the guard could not judge this command ({type(error).__name__})")
         if not found and not monitor:
@@ -1412,8 +1820,14 @@ def main():
             found = ("deny", "secrets", "globs a credential store")
     elif tool in ("Agent", "Task"):
         found = check_agents(data, opts)
-    elif tool.startswith("mcp__") and "github" in tool.lower() and opts.get("attribution") != "allow":
-        found = check_github_tool(tool_input)
+    elif tool.startswith("mcp__") and "github" in tool.lower():
+        # any merge tool from a thread (merge_pull_request, enable_pr_auto_merge, ...) except one
+        # that only turns merging off; update_pull_request_branch has no "merge" in its name
+        short = tool.split("__")[-1].lower()
+        if data.get("agent_id") and "merge" in short and not short.startswith("disable_"):
+            found = ("deny", "merge-thread", f"{tool.split('__')[-1]} from a thread")
+        elif opts.get("attribution") != "allow":
+            found = check_github_tool(tool_input)
     if not found:
         return 0
     decision, rule, why = found
@@ -1427,6 +1841,19 @@ def main():
         print(f"kit guard (retry): {why}; another try will go the same way. Stop retrying: say what the last "
               "attempt printed and hand the step back (`needs push`, `needs rebase`, `needs merge`), or change "
               "what is wrong first. A new commit or a different command is a fresh start.", file=sys.stderr)
+        return 2
+    if rule == "hook-bypass":
+        print(f"kit guard (hook-bypass): {why}. {HOOKS_FIX}. Blocked whatever the "
+              "permission mode; a project can allow a specific command with guard.allowCommands in "
+              ".claude/kit.json.", file=sys.stderr)
+        return 2
+    if rule == "merge-thread":
+        print(f"kit guard (merge-thread): {why}. Merging is the coordinator's step, whatever the permission "
+              "mode: leave the PR open and report it under OPEN as `needs merge`.", file=sys.stderr)
+        return 2
+    if rule == "owner-settings":
+        print(f"kit guard (owner-settings): {why} changes the owner's settings or the kit's state, and only the coordinator "
+              "runs it, at the owner's word. Say in your report what you need changed and why.", file=sys.stderr)
         return 2
     if rule == "wait":
         print(f"kit guard (wait): {why} holds this turn with no progress and no alarm if it hangs. "

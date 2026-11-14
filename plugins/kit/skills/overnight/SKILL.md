@@ -26,18 +26,22 @@ benchmark score up, no failing e2e scenario) or ones where the user trusts Claud
 - **Gate:** the command that must pass before a step is committed: `.claude/kit.json` `verify`
   by default, else `check`. Without either, the agent only checks itself; say so. A measurable
   objective deserves a gate that checks the measure.
+- **Boundary:** beside the stop condition and the gate, what must not change to reach them: no
+  test deleted, skipped or weakened, no gate or lint config edited, no expected output
+  rewritten. Put it in the objective, since an unattended agent that cannot reach a target
+  can still reach it by moving the target. A check against an outside reference (a golden
+  sample, an upstream total, a diff against a reference file within a stated tolerance) beats
+  one the worker can edit.
 
 If the objective is vague, use `kit:shape` first.
 
-## 2. Budget: ask
+## 2. Budget: defaults
 
-Ask with AskUserQuestion (header "Budget"); if nobody can answer (a non-interactive run), pick
-caps, write them in the command and say they are your assumption:
-
-1. **Caps (Recommended):** max iterations and/or USD, e.g. `--max-iterations 40 --max-usd 25`.
-2. **Iterations only:** e.g. `--max-iterations 40`.
-3. **No budget:** the run ends only on the stop condition, 3 failed iterations in a row, or
-   Ctrl-C. Fine on a subscription the user is happy to spend; say plainly that nothing caps it.
+Do not ask. Unless the user named caps, use `--max-iterations 40 --max-usd 25`, and say so in
+your reply in one line, with how to change them. When the user says no budget, leave the caps
+out and pass `--no-caps`: the run then ends only on the stop condition, 3 failed iterations in a
+row, or Ctrl-C, and the reply says plainly that nothing caps it. A `--detach` run given no caps and
+no `--no-caps` takes 40 iterations and USD 25 by itself.
 
 Other knobs: `--max-tokens` (input + cache-write + output), `--iteration-usd` (cap per
 iteration), `--max-turns` (per iteration), `--max-failures` (default 3), `--effort` (`medium` is a
@@ -55,7 +59,7 @@ runs from the system prompt, to measure whether the model still needs it.
 - The gate passes on the starting commit: run it once. A red gate at the start fails every
   iteration.
 - No production credentials in the environment the agent will see.
-- Safety: with the project on **Sandbox** (`/kit-safety sandbox`) the runner
+- Safety: with the project on **Sandbox** (`items.py sandbox on`) the runner
   passes the Bash sandbox to every iteration, worktrees included (`--no-sandbox` to skip); on
   **Host** the kit guard still blocks irreversible actions. For `--permission-mode
   bypassPermissions`, only inside a microVM or devcontainer, never on the bare machine.
@@ -65,13 +69,21 @@ runs from the system prompt, to measure whether the model still needs it.
 
 ## 4. Launch
 
-It runs for hours, so start it where it survives the session: give the user the line to run in
-a terminal or a tmux window, or, if they ask you to start it, launch it with Bash
-`run_in_background`. Example:
+It runs for hours, so start it yourself where it survives the session. First run
+`python3 ${CLAUDE_SKILL_DIR}/../../hooks/scripts/items.py away on` (a permission prompt becomes a
+denial until the user writes again). Then launch with `--detach`: the runner starts again
+in its own process session, output in a log under the runs folder, and the Bash call returns
+within about 5 seconds with the pid and the log path, or with the error and exit code of a run
+that stopped at once; when it ends, the next interactive session start says so once. Add
+`--push` unless the user said not to push in this repo: when the run ends with commits it pushes the branch once, so the result can be read from a phone; with
+`push=ask` in the unattended settings it leaves the branch local and the log says so. The runner
+refuses a protected `--branch` (main, master, the guard's `protectedBranches`, origin's default). Do not use
+Bash `run_in_background` for it: that run ends with the session. A user who wants it in their own
+terminal or tmux window gets the same line without `--detach`. Example:
 
 ```
 python3 <kit>/skills/overnight/scripts/overnight.py "Pretend you are a 7-year-old, use the app end to end, fix the first usability problem you meet" \
-  --worktree ../app-overnight --max-iterations 40 --max-usd 25 --permission-mode auto
+  --worktree ../app-overnight --max-iterations 40 --max-usd 25 --push --detach
 ```
 
 What each iteration does: one small step, the gate, then commit (`overnight #N: <summary>`)
@@ -94,10 +106,11 @@ sign-in, 2.1.318) and stops before the next iteration once the sign-in ends with
 it with `claude auth login`, or use `claude setup-token` for unattended jobs. A missing or
 unreadable field changes nothing.
 
-Run files in `.claude/overnight/<run id>/` (kept out of git through `.git/info/exclude`):
+Run files in `.kit/overnight/<run id>/` of the checkout the run is in, as the runner prints it
+(kept out of git through `.git/info/exclude`):
 `objective.md`, `notes.md` (memory between iterations; the runner adds one line per outcome),
 `log.jsonl`, `state.json`, `end-state.json`. Continue a stopped run with
-`--resume .claude/overnight/<run id>` (flags given again override the saved ones).
+`--resume <that folder>` (flags given again override the saved ones).
 
 ## 5. The morning after
 
@@ -106,4 +119,5 @@ Run files in `.claude/overnight/<run id>/` (kept out of git through `.git/info/e
    interactive rebase or cherry-pick the good ones onto a fresh branch.
 3. Have `kit:verifier` review the branch against the objective, then `/kit:go` to open the PR
    with evidence and a risk rating. The overnight commits are first-pass work, not reviewed work.
-4. If a failure repeated in the notes, suggest `/kit:learn` so the next run avoids it.
+4. If a failure repeated in the notes, run the `kit:learn` review yourself so the next run avoids
+   it; ask the user only before it changes a committed instruction file.

@@ -1,21 +1,13 @@
-// The kit's one hooks module: light/loop mode, host/sandbox safety and a status line entry.
+// The kit's one hooks module: a status line entry, the stall watchdog and the interim-notice drop.
 //
-// - Mode, per project: `light` (a normal session; the lead only when asked), `loop` (every
-//   prompt goes to the coordinator, kit:lead) or `ask` (a discussion about the repository: read
-//   and reason, change no code; documentation may be edited; /kit:handoff sends the outcome where
-//   the work gets done). Stored in $.store. Without a choice: the personal default in
-//   ~/.claude/kit.json ({"mode": "light"} or "loop"), else loop in a project that has
-//   .claude/kit.json and light elsewhere.
-// - Safety, per project: `host` (no OS sandbox; the kit's guard hook still blocks the
-//   irreversible actions) or `sandbox` (Claude Code's Bash sandbox, written by the kit into
-//   .claude/settings.local.json, which the overnight runner passes to its iterations too), and
-//   `unattended on|off` for an evening nobody is watching: permissions.denyInsteadOfPrompting in
-//   the same file (a permission prompt becomes a denial and the turn goes on). Off unless asked.
-// - The status line: mode, safety, session cost, threads running and waiting for an answer, live
-//   overnight runs, board items queued, ready for review and questions for the person, and
-//   `unattended` while that flag is on for the project, re-read
-//   every 15 seconds; one native notification when the board gains a ready item or a question,
-//   skipped while the person is typing at this terminal (a prompt of theirs in the last minute).
+// The coordinator's routing is not here: session_start.py prints it in a kit project, so a cloud
+// session or Remote Control without this mod still has it, and the coordinator's own
+// PushNotification reaches the phone (this mod's native notification for board changes showed
+// on the computer the person was away from, and is gone with the light/loop/ask modes, 2026-11).
+// - The status line: `sandbox` while Claude Code's Bash sandbox is on, `away` while
+//   permissions.denyInsteadOfPrompting is (items.py `away on`), session cost, threads running and
+//   waiting for an answer, live overnight runs, board items queued, ready for review and questions
+//   for the person, re-read every 15 seconds.
 // - The stall watchdog, on the same tick (watchdog.ts decides, this module gathers and acts): a
 //   thread silent too long or past its brief's EXPECT, a background command past its deadline, a
 //   thread that ended without a report, a thread waiting on a permission prompt, and a turn that
@@ -27,57 +19,6 @@
 import type { EngineInterface, Register, Timer } from 'claude-code'
 import { CONTINUE_NOTE, RETRY_DELAYS_MS, bound, expectedMs, failureKind, isHolder, isInterimNotice, outputEnd, permissionWaits, stalls, watchConfig } from './watchdog'
 import type { Job, PermissionWait, Strike, Thread } from './watchdog'
-
-type KitMode = 'light' | 'loop' | 'ask'
-const MODES: KitMode[] = ['light', 'loop', 'ask']
-type KitSafety = 'host' | 'sandbox'
-
-const SANDBOX = {
-  enabled: true,
-  // where the sandbox cannot start, commands run unsandboxed (with a warning) rather than all
-  // failing; /sandbox shows whether it is really on
-  failIfUnavailable: false,
-  allowUnsandboxedCommands: false,
-  network: {
-    allowedDomains: [
-      'github.com', '*.github.com', '*.githubusercontent.com',
-      'registry.npmjs.org', '*.npmjs.org', 'registry.yarnpkg.com',
-      'pypi.org', 'files.pythonhosted.org',
-      'crates.io', 'index.crates.io', 'static.crates.io',
-      'proxy.golang.org', 'sum.golang.org', 'rubygems.org',
-      'api.anthropic.com',
-    ],
-  },
-  filesystem: {
-    denyRead: ['~/.ssh', '~/.aws', '~/.config/gh', '~/.netrc', '~/.docker', '~/.kube', '~/.gnupg'],
-  },
-}
-
-const LOOP_CONTEXT =
-  'Kit loop mode: you are this project\'s coordinator. Handle this message with the kit:lead ' +
-  'skill (load it first if this conversation has not, or if its rules are gone after a compaction). ' +
-  'The kit mod notifies the user when the board gains a ready or needs-you row; do not send ' +
-  'PushNotification for that yourself.'
-
-// Over Remote Control the person is on a phone: no status line, and the mod's notification shows
-// on the computer they are away from. There the coordinator's own push is the only one that
-// reaches them.
-const REMOTE_CONTEXT =
-  ' Except now: this message came over Remote Control, so the user is on their phone and sees ' +
-  'neither the status line nor that notification. While they are remote, send one ' +
-  'PushNotification yourself when an item becomes ready or needs them, naming the item and the ' +
-  'question, and none for progress.'
-
-const ASK_CONTEXT =
-  'Kit ask mode: this session is a discussion about the repository. Explore, explain, reason and ' +
-  'propose; change no code. Documentation files (Markdown, docs/) may be edited when the user asks. ' +
-  'When something worth doing emerges, offer /kit:handoff: it turns the conclusion into a brief ' +
-  'and hands it to the coordinator, another session or a new background session.'
-
-const OFF_CONTEXT =
-  'Kit loop mode was just switched off. Stop coordinating: delete the cron jobs you created for ' +
-  'it (CronList, CronDelete), let working threads finish, rewrite the board once, and answer as ' +
-  'a normal session from now on. Say so in one line.'
 
 type $ = EngineInterface
 
@@ -147,118 +88,18 @@ async function readJsonForWrite($: $, path: string): Promise<{ exists: boolean; 
   }
 }
 
-async function userKit($: $): Promise<any> {
-  const home = await $.env.get('HOME')
-  if (!home) return undefined
-  return readJson($, `${home}/.claude/kit.json`)
-}
-
-async function getMode($: $, root: string): Promise<KitMode> {
-  const stored = await $.store.get(`mode:${root}`)
-  if (MODES.includes(stored as KitMode)) return stored as KitMode
-  const user = await userKit($)
-  if (user && (user.mode === 'loop' || user.mode === 'light')) return user.mode
-  // a project that opted into the kit talks to the coordinator unless someone chose otherwise
-  return (await readJson($, await kitJsonPath($, root))) !== undefined ? 'loop' : 'light'
-}
-
-async function setMode($: $, root: string, mode: KitMode): Promise<string> {
-  const before = await getMode($, root)
-  await $.store.set(`mode:${root}`, mode)
-  if (before === 'loop' && mode !== 'loop') await $.store.set(`loopOff:${root}`, true)
-  if (mode === 'loop') await $.store.delete(`loopOff:${root}`)
-  await refreshStatus($)
-  if (mode === 'loop') return 'Loop mode on: from your next message you talk to the coordinator (kit:lead); it starts a thread for each piece of work.'
-  if (mode === 'ask') return 'Ask mode on: a discussion about this repository. Claude reads and reasons, changes no code (documentation may be edited when you ask); /kit:handoff turns a conclusion into a brief for the coordinator, another session or a new background session.'
-  return 'Light mode on: a normal session. The coordinator stops its loops at your next message; /kit:lead still works when you ask.'
-}
-
-async function getSafety($: $, root: string): Promise<{ safety: KitSafety; from: 'kit' | 'settings' | 'none' }> {
-  const local = await readJson($, `${root}/.claude/settings.local.json`)
-  const ours = (await $.store.get(`sandbox:${root}`)) === true
-  if (local && local.sandbox && local.sandbox.enabled === true && ours) return { safety: 'sandbox', from: 'kit' }
-  let merged: any
-  try {
-    merged = await $.settings.read({ key: 'sandbox' })
-  } catch {
-    merged = undefined
-  }
-  if (merged && merged.enabled === true) return { safety: 'sandbox', from: 'settings' }
-  return { safety: 'host', from: 'none' }
-}
-
-async function setSafety($: $, root: string, safety: KitSafety): Promise<string> {
-  const path = `${root}/.claude/settings.local.json`
-  const file = await readJsonForWrite($, path)
-  if (file.isBroken) {
-    return '.claude/settings.local.json is not valid JSON; the kit did not touch it. Fix the file, then try again.'
-  }
-  const local = file.value
-  const ours = (await $.store.get(`sandbox:${root}`)) === true
-  if (safety === 'sandbox') {
-    if (local.sandbox && !ours) {
-      await refreshStatus($)
-      return 'This project already has its own sandbox settings in .claude/settings.local.json; the kit left them as they are.'
+// What the merged settings say about the sandbox and the away switch, for the status line only.
+async function settingFlags($: $): Promise<{ sandbox: boolean; away: boolean }> {
+  const read = async (key: string) => {
+    try {
+      return (await $.settings.read({ key })) as any
+    } catch {
+      return undefined
     }
-    local.sandbox = SANDBOX
-    await $.fs.write(path, JSON.stringify(local, null, 2) + '\n')
-    await $.store.set(`sandbox:${root}`, true)
-    await refreshStatus($)
-    return 'Sandbox on for this project (.claude/settings.local.json): Bash runs inside the OS sandbox, writes only in the project and temp, network limited to GitHub and the main package registries plus the Anthropic API, credential folders unreadable. New hosts are asked for (or reviewed in auto mode); add your own under sandbox.network.allowedDomains in that file. Check with /sandbox; if it does not show it yet, start a new session.'
   }
-  if (ours && local.sandbox) {
-    delete local.sandbox
-    await $.fs.write(path, JSON.stringify(local, null, 2) + '\n')
-  }
-  await $.store.delete(`sandbox:${root}`)
-  const now = await getSafety($, root)
-  await refreshStatus($)
-  return now.safety === 'sandbox'
-    ? 'Kit sandbox removed, but your own settings still turn the sandbox on (see /sandbox).'
-    : 'Host mode: no OS sandbox. The kit guard still blocks irreversible actions (deletes outside the repo, pushes to main, reading credentials).'
-}
-
-// Unattended, for an evening nobody is watching: permissions.denyInsteadOfPrompting (Claude Code
-// 2.1.319) in .claude/settings.local.json makes a tool call that would wait on a permission
-// prompt a denial instead, and the turn goes on, in this session and its threads. Only this
-// command sets it; a denied action lowers what a thread gets done, so it is off unless asked.
-const UNATTENDED_KEY = 'denyInsteadOfPrompting'
-
-async function getUnattended($: $, root: string): Promise<{ on: boolean; from: 'kit' | 'settings' | 'none' }> {
-  const local = await readJson($, `${root}/.claude/settings.local.json`)
-  if (local && local.permissions && local.permissions[UNATTENDED_KEY] === true) return { on: true, from: 'kit' }
-  let merged: any
-  try {
-    merged = await $.settings.read({ key: 'permissions' })
-  } catch {
-    merged = undefined
-  }
-  if (merged && merged[UNATTENDED_KEY] === true) return { on: true, from: 'settings' }
-  return { on: false, from: 'none' }
-}
-
-async function setUnattended($: $, root: string, on: boolean): Promise<string> {
-  const path = `${root}/.claude/settings.local.json`
-  const file = await readJsonForWrite($, path)
-  if (file.isBroken) {
-    return '.claude/settings.local.json is not valid JSON; the kit did not touch it. Fix the file, then try again.'
-  }
-  const local = file.value
-  const perms = local.permissions && typeof local.permissions === 'object' && !Array.isArray(local.permissions) ? local.permissions : {}
-  if (on) {
-    local.permissions = { ...perms, [UNATTENDED_KEY]: true }
-    await $.fs.write(path, JSON.stringify(local, null, 2) + '\n')
-    await refreshStatus($)
-    return 'Unattended on for this project (.claude/settings.local.json, permissions.denyInsteadOfPrompting): a tool call that would wait on a permission prompt is denied instead and the turn continues, in this session and its threads. For an evening nobody is watching; /kit-safety unattended off when you are back, since a denied action lowers what a thread gets done.'
-  }
-  if (UNATTENDED_KEY in perms) {
-    delete perms[UNATTENDED_KEY]
-    if (Object.keys(perms).length === 0) delete local.permissions
-    else local.permissions = perms
-    await $.fs.write(path, JSON.stringify(local, null, 2) + '\n')
-  }
-  await refreshStatus($)
-  return 'Unattended off: a tool call that needs permission asks you again (permissions.denyInsteadOfPrompting removed from .claude/settings.local.json).'
+  const sandbox = await read('sandbox')
+  const permissions = await read('permissions')
+  return { sandbox: !!(sandbox && sandbox.enabled === true), away: !!(permissions && permissions.denyInsteadOfPrompting === true) }
 }
 
 // What the coordinator's board says, by item id: what needs the person (with the question when
@@ -330,23 +171,42 @@ function named(label: string, ids: string[]): string {
   return `${label} ${ids.length}: ${ids.slice(0, SHOWN_IDS).map(cut).join(', ')}${more}`
 }
 
+// The kit's working state lives in `.kit/` at the repo root; a project the kit has not moved yet
+// still has it in `.claude/` (Claude Code protects that folder, so threads stalled on prompts
+// writing there). Both are read, `.kit` first, as kitlib.state_entry does.
+const STATE_DIRS = ['.kit', '.claude']
+// A kit.json `lead.board` inside the old lead folder (the default /kit:init wrote,
+// `.claude/lead/board.md`, or a name of the owner's own there) moves with that folder: reading
+// it only from `.claude/lead` showed no board once the folder had moved.
+const LEGACY_LEAD = '.claude/lead/'
+
 // The board from kit.json `lead.board` or the default path: null when there is no board,
 // undefined when it (or kit.json) exists but could not be read this time.
 async function readBoard($: $, root: string): Promise<Board | null | undefined> {
   const kitJson = await readJsonForWrite($, await kitJsonPath($, root))
   if (kitJson.isBroken) return undefined
   const lead = kitJson.value.lead
-  const boardPath = (lead && lead.board) || '.claude/lead/board.md'
-  const path = boardPath.startsWith('/') ? boardPath : `${root}/${boardPath}`
-  try {
-    return readBoardText(await $.fs.read(path))
-  } catch {
+  let custom = typeof (lead && lead.board) === 'string' ? lead.board.trim().replace(/^\.\//, '') : ''
+  if (custom.startsWith(`${root}/${LEGACY_LEAD}`)) custom = custom.slice(root.length + 1)
+  const inLead = custom.startsWith(LEGACY_LEAD) ? custom.slice(LEGACY_LEAD.length) : custom ? '' : 'board.md'
+  const paths = inLead
+    ? STATE_DIRS.map(dir => `${root}/${dir}/lead/${inLead}`)
+    : [custom.startsWith('/') ? custom : `${root}/${custom}`]
+  for (const path of paths) {
     try {
-      return (await $.fs.exists(path)) ? undefined : null
+      return readBoardText(await $.fs.read(path))
+    } catch {
+      // the next place, or none
+    }
+  }
+  for (const path of paths) {
+    try {
+      if (await $.fs.exists(path)) return undefined
     } catch {
       return undefined
     }
   }
+  return null
 }
 
 // Overnight runs still going, in the project and each of its worktrees.
@@ -360,16 +220,18 @@ async function liveOvernightRuns($: $, root: string): Promise<number> {
   }
   let live = 0
   for (const r of roots) {
-    let entries: { name: string; kind: string }[] = []
-    try {
-      entries = (await $.fs.list(`${r}/.claude/overnight`)) as any
-    } catch {
-      continue
-    }
-    for (const entry of entries) {
-      if (entry.kind !== 'dir') continue
-      const state = await readJson($, `${r}/.claude/overnight/${entry.name}/state.json`)
-      if (state && !state.stop_reason) live++
+    for (const dir of STATE_DIRS) {
+      let entries: { name: string; kind: string }[] = []
+      try {
+        entries = (await $.fs.list(`${r}/${dir}/overnight`)) as any
+      } catch {
+        continue
+      }
+      for (const entry of entries) {
+        if (entry.kind !== 'dir') continue
+        const state = await readJson($, `${r}/${dir}/overnight/${entry.name}/state.json`)
+        if (state && !state.stop_reason) live++
+      }
     }
   }
   return live
@@ -389,33 +251,6 @@ async function agentCounts($: $): Promise<{ running: number; waiting: number }> 
   }
 }
 
-// One native notification when the board gains something for the person (a thread finished and
-// its PR is ready, or a question appeared) while they may be away. The loop-mode context tells
-// the coordinator to leave this to the mod, so the person gets one ping, not two. Not while the
-// person is typing here: a prompt of theirs in the last minute means they see the status line.
-// (The main session's own activity is no such sign: the coordinator's tool calls after a thread's
-// report are exactly what puts the ready row on the board while the person is away.)
-const PERSON_HERE_MS = 60_000
-let personAt = 0 // when the person last typed a prompt here (terminal or Remote Control)
-
-async function notifyBoardChange($: $, before: Board | null, after: Board): Promise<void> {
-  if (!before) return
-  // by id, not by count: one item leaving review as another enters is news, a count of 1 and 1 is not
-  const gained = (now: string[], then: string[]) => now.filter(id => !then.some(x => x.toLowerCase() === id.toLowerCase()))
-  const needs = gained(after.needs, before.needs)
-  const ready = gained(after.ready, before.ready)
-  if (!needs.length && !ready.length) return
-  if (personAt && (await $.clock.now()) - personAt < PERSON_HERE_MS) return
-  const parts: string[] = []
-  if (needs.length) {
-    const q = after.questions[needs[0].toLowerCase()]
-    const first = q ? `${needs[0]} (${q.length > 70 ? `${q.slice(0, 69)}…` : q})` : needs[0]
-    parts.push(`needs you: ${[first, ...needs.slice(1)].join(', ')}`)
-  }
-  if (ready.length) parts.push(`ready for review: ${ready.join(', ')}`)
-  await notify($, `kit: ${parts.join(' · ')}`)
-}
-
 async function notify($: $, text: string): Promise<void> {
   try {
     // an engine without $.ui.notify, or without a channel, throws here: the line still shows it
@@ -431,8 +266,7 @@ let lastBoard: Board | null = null
 // could not be read keeps the last counts, a board that is gone clears them.
 async function refreshStatus($: $): Promise<void> {
   const root = await projectRoot($)
-  const mode = await getMode($, root)
-  const { safety } = await getSafety($, root)
+  const flags = await settingFlags($)
   let costUsd: number | null = null
   try {
     const usage = await $.session.usage()
@@ -441,15 +275,13 @@ async function refreshStatus($: $): Promise<void> {
     // spend unavailable: draw without it
   }
   const board = await readBoard($, root)
-  if (board !== undefined) {
-    await notifyBoardChange($, lastBoard, board)
-    lastBoard = board
-  }
+  if (board !== undefined) lastBoard = board
   const { running, waiting } = await agentCounts($)
   const live = await liveOvernightRuns($, root)
-  const parts: string[] = [mode, safety]
-  // a forgotten `unattended on` shows here the next morning (project file, else merged settings)
-  if ((await getUnattended($, root)).on) parts.push('unattended')
+  const parts: string[] = []
+  if (flags.sandbox) parts.push('sandbox')
+  // a forgotten `away on` shows here the next morning
+  if (flags.away) parts.push('away')
   if (costUsd !== null) parts.push(`$${costUsd.toFixed(2)}`)
   // what needs the person first, by name; the board's own rows for work in hand, so the numbers
   // are the ones the coordinator reports. Without a board, the engine's threads.
@@ -654,8 +486,6 @@ async function onFailure($: $, who: string, error: string, details: string): Pro
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'kit-mode', description: 'Kit mode for this project: light, loop or ask', argumentHint: '[light|loop|ask]' })
-    await $.command.register({ name: 'kit-safety', description: 'Kit safety for this project: host or sandbox; unattended on|off for an evening', argumentHint: '[host|sandbox|unattended on|off]' })
     const result = await next(e)
     // panes outlive a module reload, and the kit has none since 1.2.0: close what an older one left
     try {
@@ -784,50 +614,12 @@ export const register: Register = on => {
     return r
   })
 
-  on('command.run', { command: 'kit-mode' }, async ($, e) => {
-    const root = await projectRoot($)
-    const arg = e.args.trim().toLowerCase()
-    if (MODES.includes(arg as KitMode)) return { text: await setMode($, root, arg as KitMode) }
-    return { text: `Kit mode for this project: ${await getMode($, root)}. Use /kit-mode light, loop or ask.` }
-  })
-
-  on('command.run', { command: 'kit-safety' }, async ($, e) => {
-    const root = await projectRoot($)
-    const arg = e.args.trim().toLowerCase()
-    if (arg === 'host' || arg === 'sandbox') return { text: await setSafety($, root, arg) }
-    const [verb, value] = arg.split(/\s+/)
-    if (verb === 'unattended') {
-      if (value === 'on' || value === 'off') return { text: await setUnattended($, root, value === 'on') }
-      const u = await getUnattended($, root)
-      return { text: `Unattended is ${u.on ? 'on' : 'off'} for this project${u.from === 'settings' ? ' (from your settings)' : ''}. Use /kit-safety unattended on or off.` }
-    }
-    const now = await getSafety($, root)
-    const u = await getUnattended($, root)
-    return { text: `Kit safety for this project: ${now.safety}${now.from === 'settings' ? ' (from your settings)' : ''} · unattended: ${u.on ? 'on' : 'off'}${u.from === 'settings' ? ' (from your settings)' : ''}. Use /kit-safety host or /kit-safety sandbox; /kit-safety unattended on|off for an evening nobody is watching.` }
-  })
-
-  // Loop mode: every prompt the person types reaches the coordinator. And a thread's interim
-  // notice ("waiting on its own background work") is held: it would be a turn that changes nothing.
+  // A thread's interim notice ("waiting on its own background work") is held: it would be a turn
+  // that changes nothing.
   on('prompt.submit', async ($, e, next) => {
     const kind = e.origin ? e.origin.kind : 'composer'
     if (kind === 'task-notification' && !e.command && isInterimNotice(e.text)) {
       return { drop: 'kit: held an interim notice from a thread waiting on its own background work; its report, or a stall, still reaches the coordinator' }
-    }
-    if (e.command || e.isMeta || (kind !== 'composer' && kind !== 'bridge')) return next(e)
-    try {
-      personAt = await $.clock.now() // the person is here: the board's changes need no notification
-      const root = await projectRoot($)
-      const extra: string[] = []
-      if (await $.store.get(`loopOff:${root}`)) {
-        extra.push(OFF_CONTEXT)
-        await $.store.delete(`loopOff:${root}`)
-      }
-      const mode = await getMode($, root)
-      if (mode === 'loop') extra.push(kind === 'bridge' ? LOOP_CONTEXT + REMOTE_CONTEXT : LOOP_CONTEXT)
-      if (mode === 'ask') extra.push(ASK_CONTEXT)
-      if (extra.length) return next({ ...e, context: [...(e.context ?? []), ...extra] })
-    } catch {
-      // never block a prompt over the kit
     }
     return next(e)
   }).catch(($, e, next) => next(e))

@@ -17,7 +17,8 @@ it is written into the line the classifier reads.
 Every run rebuilds `autoMode.environment` in settings.json: the user's own lines stay as they are,
 the kit's lines (its exact scoped form, ending in MARKER) are replaced, each scoped to its repo by origin and paths. A new
 list starts with "$defaults" so the built-in entries stay current; a non-list is left alone.
-Writes happen under a lock, atomically, only when something changed, after a backup
+Writes go through kitlib.update_settings (the file's lock in the kit's temp state folder, a re-read under it, an atomic replace
+of a symlink's target), only when something changed, after a backup
 (settings.json.kit-auto-mode-backup; the first one ever is also kept as .orig). A read-only
 settings.json is never replaced. Standard library only.
 
@@ -37,12 +38,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 from urllib.parse import urlsplit
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from kitlib import read_json  # noqa: E402
+import kitlib  # noqa: E402
+from kitlib import git_env, read_json  # noqa: E402
 
 MARKER = "[kit auto-mode]"
 MAX_LINES = 20       # per repo
@@ -51,8 +52,6 @@ MAX_LINE = 1000      # characters of one line in settings, scope included
 MAX_PATHS = 3
 MAX_ORIGIN = 200     # characters of a normalized origin
 MAX_PATH = 300       # characters of one checkout path
-LOCK_WAIT = 2.0      # seconds to wait for the lock before giving up
-RETRIES = 5          # rebuilds when another writer changes settings.json meanwhile
 BACKUP = "settings.json.kit-auto-mode-backup"
 # what may reach the classifier as a repo's identity: one token, no prose, no markup
 ORIGIN_OK = re.compile(r"[a-z0-9.-]+(?::[0-9]+)?(?:/[a-z0-9._~-]+)+")
@@ -71,7 +70,7 @@ class Refused(Exception):
 
 
 class Busy(OSError):
-    """Another process holds the lock for longer than LOCK_WAIT."""
+    """Another process holds the settings lock for longer than kitlib.SETTINGS_LOCK_WAIT."""
 
 
 def config_dir():
@@ -88,23 +87,20 @@ def settings_file():
 
 @contextlib.contextmanager
 def locked():
-    import fcntl  # here, so a platform without it cannot break importing this module
-    config_dir().mkdir(parents=True, exist_ok=True)
-    with open(config_dir() / "kit-auto-mode.lock", "w") as fh:
-        deadline = time.monotonic() + LOCK_WAIT
-        while True:  # never wait forever: a stuck holder must not stall session start
-            try:
-                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() > deadline:
-                    raise Busy("settings busy") from None
-                time.sleep(0.05)
+    """settings.json's lock (kitlib.settings_lock), shared with every other kit writer of that file."""
+    try:
+        lock = kitlib.settings_lock(settings_file())
+        lock.__enter__()
+    except kitlib.SettingsBusy:
+        raise Busy("settings busy") from None
+    try:
         yield
+    finally:
+        lock.__exit__(None, None, None)
 
 
 def write_atomic(path, text):
-    """Replace the file's target (a symlinked settings.json stays a symlink) in one step."""
+    """Replace a block file's target in one step (settings.json goes through kitlib.update_settings)."""
     path = path.resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
@@ -126,7 +122,8 @@ def dumps(value):
 
 def git(start, *args):
     try:
-        out = subprocess.run(["git", "-C", str(start), *args], capture_output=True, text=True, timeout=5)
+        out = subprocess.run(["git", "-C", str(start), *args], capture_output=True, text=True, timeout=5,
+                             env=git_env())
     except Exception:
         return None
     return out.stdout.strip() if out.returncode == 0 else None
@@ -257,51 +254,46 @@ def load_blocks():
     return lines, count, warnings
 
 
-def signature(path):
-    try:
-        st = path.stat()
-        return st.st_mtime_ns, st.st_size, st.st_ino
-    except OSError:
-        return None
-
-
 def rebuild():
     """Bring settings.json in line with the blocks. Call under the lock. Returns lines to show."""
     kit_lines, count, out = load_blocks()
     path = settings_file()
-    for _ in range(RETRIES):
-        before = signature(path)
-        settings, ok = read_json(path)
-        if not ok:
-            return out + ([f"kit: {path} is not a valid JSON object; auto mode lines not synced."] if kit_lines else [])
+    notes = []
+
+    def merge(settings):
         auto = settings.get("autoMode", {})
         if not isinstance(auto, dict):
-            return out + [f"kit: autoMode in {path} is not an object; left as is, auto mode lines not synced."]
+            notes.append(f"kit: autoMode in {path} is not an object; left as is, auto mode lines not synced.")
+            return False
         current = auto.get("environment")
         if current is not None and not isinstance(current, list):
-            return out + [f"kit: autoMode.environment in {path} is not a list; left as is, auto mode "
-                          "lines not synced."]
+            notes.append(f"kit: autoMode.environment in {path} is not a list; left as is, auto mode "
+                         "lines not synced.")
+            return False
         if isinstance(current, list):
             env = [x for x in current if not is_kit(x)] + kit_lines
         else:
             env = ["$defaults"] + kit_lines if kit_lines else None
         if env is None or env == current:
-            return out
+            return False
         if path.exists() and not os.access(path, os.W_OK):
-            return out + [f"kit: {path} is read-only; auto mode lines not synced (left as is)."]
+            notes.append(f"kit: {path} is read-only; auto mode lines not synced (left as is).")
+            return False
+        target = path.resolve()
+        if target.exists() and not path.with_name(BACKUP + ".orig").exists():  # before the kit's first write
+            shutil.copy2(target, path.with_name(BACKUP + ".orig"))
         auto["environment"] = env
         settings["autoMode"] = auto
-        if signature(path) != before:
-            continue  # someone else wrote settings.json meanwhile: merge again from their version
-        if path.exists():
-            shutil.copy2(path, path.with_name(BACKUP))
-            if not path.with_name(BACKUP + ".orig").exists():  # settings before the kit's first write
-                shutil.copy2(path, path.with_name(BACKUP + ".orig"))
-        write_atomic(path, dumps(settings))
+
+    result = kitlib.update_settings(path, merge, backup=BACKUP)
+    if result == "broken":
+        return out + ([f"kit: {path} is not a valid JSON object; auto mode lines not synced."] if kit_lines else [])
+    if result == "busy":
+        return out + [f"kit: {path} kept changing; auto mode lines not synced, next session start retries."]
+    if result == "written":
         out.append(f"kit: auto mode environment in {path} rebuilt: {len(kit_lines)} repo-scoped line(s) "
                    f"from {count} repo(s) (backup {BACKUP}).")
-        return out
-    return out + [f"kit: {path} kept changing; auto mode lines not synced, next session start retries."]
+    return out + notes
 
 
 def sync():

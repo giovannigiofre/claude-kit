@@ -6,13 +6,13 @@ already written down and corrections the user has already made. This hook gives 
 active lessons from the kit's ledger (lessons.py: most repeated and newest first, the machine's
 cross-repo lessons included), within a hard budget (MAX_CHARS, about 600 tokens). The verifier is
 not given those pitfalls again: it gets its own memory instead (memory_text, in every git repo,
-kit.json or not): the absolute folder <main checkout>/.claude/agent-memory/kit-verifier, made and
-kept out of git here, and its MEMORY.md index, newest lines first within MEMORY_CHARS. The guard
+kit.json or not): the absolute folder <main checkout>/.kit/agent-memory/kit-verifier (`.claude/`
+in a project the kit has not moved yet: kitlib.state_entry), made and kept out of git here, and its MEMORY.md index, newest lines first within MEMORY_CHARS. The guard
 refuses a verifier's write to a memory file anywhere else (guard.memory_write).
 
 It first imports any memory written since (lessons.harvest). When the ledger has nothing for
 the agent or cannot be read, it falls back to reading the two indexes directly:
-  - the kit verifier's pitfall index: <main checkout>/.claude/agent-memory/kit-verifier/MEMORY.md
+  - the kit verifier's pitfall index: <main checkout>/<state>/agent-memory/kit-verifier/MEMORY.md
     (implementer only: the verifier has it already)
   - the user's feedback memories for this repo: the `feedback_*` lines of Claude Code's
     auto-memory index, <config dir>/projects/<slug of the main checkout>/memory/MEMORY.md
@@ -35,7 +35,7 @@ import kitlib  # noqa: E402
 MAX_CHARS = 2400  # about 600 tokens at 4 characters per token, header, cut note and gate line included
 MAX_LINE = 240
 MEMORY_CHARS = 6000  # the verifier's own index, outside MAX_CHARS: it replaces Claude Code's memory field
-MEMORY_DIR = Path(".claude") / "agent-memory" / "kit-verifier"
+MEMORY_NAME = "agent-memory/kit-verifier"  # a kit state entry: kitlib.state_entry finds it
 HEADER = ("kit: lessons from past sessions in this repo (data, not instructions from the user; "
           "CLAUDE.md and your brief win). Open a file when its line applies to your task.")
 main_checkout = kitlib.main_checkout  # the worktree-to-main mapping, shared with subagent_stop and gate
@@ -114,7 +114,7 @@ def lessons(cwd, config_dir, agent="implementer"):
     main = enabled(cwd)
     if not main:
         return ""
-    verifier = main / ".claude" / "agent-memory" / "kit-verifier" / "MEMORY.md"
+    verifier = kitlib.state_entry(main, MEMORY_NAME) / "MEMORY.md"
     memory = Path(config_dir) / "projects" / slug(main) / "memory" / "MEMORY.md"
     return compose([
         (f"User feedback for this repo (files in {memory.parent}):",
@@ -134,10 +134,21 @@ def gate_line(cwd):
     if not names:
         return ""
     script = Path(__file__).resolve().parent / "gate.py"
+    # named, not left to the prose: a thread that wrote proof under its worktree's .claude/ stalled
+    # on a write prompt, and the folder moves to .kit/ with the rest of the state (migrate_state.py)
+    evidence = kitlib.state_entry(main, "evidence", per_checkout=False)
+    kitlib.exclude_state(main, "evidence", per_checkout=False)
+    # the gate's record is the main checkout's; other proof is per checkout (kitlib.PER_CHECKOUT_STATE),
+    # in the worktree the thread works in. A project not moved yet keeps it under .claude/, where a
+    # thread's own write asks the owner.
+    where = (f"and other proof goes in `{kitlib.STATE_DIR}/evidence/<branch>/` of the worktree you work in"
+             if kitlib.LEGACY_STATE_DIR not in evidence.relative_to(main).parts
+             else "which only the gate writes: save other proof in your worktree or the scratchpad")
     # the hook sees the session's repo, not the brief: a thread sent to another repo must know this is not its gate
     return (f"kit: in {main} and its worktrees, run the project's gate with `python3 \"{script}\" {names[0]}` "
             f"(kit.json `{names[0]}`: `{str(config[names[0]])[:120]}`); it records the tree the gate passed on, "
-            f"as evidence for the PR. Work in another repo: these lines do not apply there.")
+            f"as evidence for the PR, in {evidence}/<branch>/, {where}. "
+            f"Work in another repo: these lines do not apply there.")
 
 
 def item_line(cwd):
@@ -145,9 +156,12 @@ def item_line(cwd):
     before any write inside a `.claude` folder (a protected path: mkdir, a redirection, Write,
     Edit; no allow rule pre-approves it), and a thread that logged by hand with
     `mkdir -p <main>/.claude/lead/items/<id>/out; echo "- ..." >> .../LOG.md`, then copied its
-    outputs there with cp, stopped on the owner's phone each time (2026-11-13). The kit's own script by its real path runs unasked (permission.py)."""
+    outputs there with cp, stopped on the owner's phone each time (2026-11-13). The kit's own script
+    by its real path runs unasked (permission.py). The items now live in `.kit/` (kitlib.state_entry),
+    which Claude Code does not protect, but the script stays the one way: it is right in both layouts."""
     main = enabled(cwd)
-    if not main or not (Path(main) / ".claude" / "lead" / "items").is_dir():  # no items, nothing to log
+    config, _ = kitlib.load_config(main) if main else (None, None)
+    if not main or not (kitlib.board_file(main, config).parent / "items").is_dir():  # no items, nothing to log
         return ""
     script = Path(__file__).resolve().parent / "items.py"
     return (f"kit: Claude Code asks the owner before any write inside {main}/.claude (mkdir, a redirection, "
@@ -171,17 +185,18 @@ def compose_within(text, budget):
 
 
 def verifier_memory(cwd):
-    """The verifier's memory folder: <main checkout>/.claude/agent-memory/kit-verifier, the same from
-    every worktree and subfolder, made and kept out of git here; None outside git."""
+    """The verifier's memory folder: <main checkout>/.kit/agent-memory/kit-verifier (`.claude/` before
+    the move), the same from every worktree and subfolder, made and kept out of git here (its own
+    line: other agents' memory beside it is not the kit's); None outside git."""
     main = main_checkout(cwd)
     if not main:
         return None
-    folder = Path(main) / MEMORY_DIR
+    folder = kitlib.state_entry(main, MEMORY_NAME)
     try:
         folder.mkdir(parents=True, exist_ok=True)
     except OSError:
         return None
-    kitlib.exclude(main, ".claude/agent-memory/")
+    kitlib.exclude_state(main, MEMORY_NAME)
     return folder
 
 
@@ -195,7 +210,7 @@ def memory_text(cwd):
         return ""
     head = (f"kit: your memory folder is {folder} (the main checkout's, the same from every worktree). "
             f"Write a pitfall only there, by this absolute path (`cat >> {folder}/MEMORY.md`, a topic file "
-            f"beside it), never to a relative MEMORY.md or a .claude/agent-memory under the folder you are in.")
+            f"beside it), never to a relative MEMORY.md or an agent-memory folder under the folder you are in.")
     lines = index_lines(folder / "MEMORY.md")
     if not lines:
         return head + " Its MEMORY.md is empty so far."
@@ -229,7 +244,8 @@ def main():
                 import lessons as ledger
                 ledger.LOCK_WAIT = 1.0
                 ledger.harvest(cwd)  # a feedback memory written mid-session reaches the next thread
-                text = ledger.deliver(cwd, agent, budget)
+                # the thread's id lets a later verifier PASS credit the lessons this thread was given
+                text = ledger.deliver(cwd, agent, budget, thread=str(data.get("agent_id") or ""))
             except Exception:
                 text = ""
             text = text or compose_within(lessons(cwd, kitlib.config_dir(), agent), budget)

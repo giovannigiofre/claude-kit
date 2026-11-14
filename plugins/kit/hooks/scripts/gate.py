@@ -6,13 +6,13 @@
     python3 gate.py status [verify|check]     does the last record cover the tree as it is now?
 
 A gate that ran is a claim until something records what it ran on. The record,
-.claude/evidence/<branch>/gate-<name>.json, holds the command, its exit code, how long it took,
-the hash of the tree it ran on (committed and uncommitted content, ignored files left out) and the
+<state>/evidence/<branch>/gate-<name>.json (<state> is `.kit`, or `.claude` in a project the kit
+has not moved yet: kitlib.state_entry), holds the command, its exit code, how long it took, the hash of the tree it ran on (committed and uncommitted content, ignored files left out) and the
 last lines of its output: the evidence a PR body and a reviewer can cite, and `status` tells
 whether the last run still covers the tree as it is now. Threads, /kit:go and the verifier run
 the gate through this script for that reason. Nothing blocks on it. Run from a linked worktree,
 the gate runs on that worktree's tree and branch, and the record is written under the main
-checkout's .claude/evidence/, so it outlives the worktree.
+checkout's evidence folder, so it outlives the worktree.
 
 The gate command gets KIT_CHANGED_FILES (the files this branch touched, shell-quoted) and
 KIT_CHANGED_COUNT, so a `check` can be diff-aware. Its timeout is kit.json `checkTimeout` /
@@ -32,7 +32,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kitlib  # noqa: E402
 
-EVIDENCE = Path(".claude") / "evidence"
 TAIL_LINES = 25
 NAMES = ("check", "verify")
 
@@ -85,25 +84,10 @@ def head_tree(root, ref="HEAD"):
 
 
 def ensure_excluded(root):
-    """Evidence stays out of git: add /.claude/evidence/ to .git/info/exclude unless the project
-    ignores it already (the overnight runner does the same for its run files)."""
-    root = Path(root)
-    probe = subprocess.run(["git", "-C", str(root), "check-ignore", "-q", ".claude/evidence/probe"],
-                           capture_output=True)
-    if probe.returncode == 0:
-        return
-    exclude = kitlib.git_out(root, "rev-parse", "--git-path", "info/exclude")
-    if not exclude:
-        return
-    exclude = Path(exclude) if Path(exclude).is_absolute() else root / exclude
-    try:
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-        if "/.claude/evidence/" not in text.splitlines():
-            exclude.write_text(text + ("" if not text or text.endswith("\n") else "\n") + "/.claude/evidence/\n",
-                               encoding="utf-8")
-    except OSError:
-        pass
+    """Evidence stays out of git: its line (`/.kit/evidence/`, or `/.claude/evidence/` before the
+    move) in .git/info/exclude unless the project ignores it already (the overnight runner does the
+    same for its run files)."""
+    kitlib.exclude_state(root, "evidence", per_checkout=False)
 
 
 def evidence_root(root):
@@ -112,7 +96,8 @@ def evidence_root(root):
 
 
 def record_path(root, name, branch=None):
-    return evidence_root(root) / EVIDENCE / (branch or branch_name(root)) / f"gate-{name}.json"
+    # the main checkout's, also from a worktree: the record outlives the worktree (kitlib.PER_CHECKOUT_STATE)
+    return kitlib.state_entry(root, "evidence", per_checkout=False) / (branch or branch_name(root)) / f"gate-{name}.json"
 
 
 def read_record(root, name, branch=None):
@@ -166,7 +151,11 @@ def status(root, name, branch=None, head_ref=None, exclude=()):
     that are not part of the work (the PR body file) and do not make the tree dirty."""
     root = Path(root)
     rec = read_record(root, name, branch)
-    where = (EVIDENCE / (branch or branch_name(root)) / f"gate-{name}.json").as_posix()
+    path = record_path(root, name, branch)
+    try:
+        where = path.relative_to(evidence_root(root)).as_posix()
+    except ValueError:
+        where = str(path)
     if not rec:
         return False, f"no record of `{name}` for this branch ({where})"
     if not rec.get("ok"):

@@ -4,8 +4,15 @@ kit.json names them, offer the kit's machine settings once (not in a cloud conta
 ~/.claude is ephemeral: CLAUDE_CODE_REMOTE=true), re-apply the user's approved per-repo auto
 mode lines to user settings, import new memories into the kit's lesson ledger and hand the main
 session its lessons, the news of what the kit changed in them and, every lessons.REVIEW_DAYS, a
-line that the lesson review is due (lessons.py), and after a compaction put the coordinator's
-board back into context (stdout is added to context).
+line that the lesson review is due (lessons.py), move an older project's kit state out of
+.claude/ into .kit/ when nothing is at work (migrate_state.py: one line when it moves, one with
+the reason when it waits), and after a compaction put the coordinator's board back into context
+(stdout is added to context).
+
+In a kit project every interactive start, and every compaction, also prints COORDINATOR: this
+session is the project's coordinator (kit:lead), routed by this hook rather than by the kit mod,
+which a cloud session or Remote Control may not load. `"mode": "light"` in the personal kit.json
+(~/.claude/kit.json) is the one off switch; a headless run (KIT_HEADLESS) and a subagent get none.
 
 A kit.json that exists is the opt-in, even `{}`: the "kit harness active" line is always printed
 then, with one line per key the kit does not know (and the closest known key), one per key of
@@ -22,7 +29,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kitlib  # noqa: E402
 import machine_setup  # noqa: E402
 
-BOARD = ".claude/lead/board.md"
 SESSION_LESSONS = 1600  # about 400 tokens of the ledger's lessons for the main session
 MAX_BOARD_CHARS = 8000  # the contract's size: a board within it comes back whole
 BOARD_LINES, BOARD_BYTES = 60, 8000  # the board's contract (kit:lead)
@@ -39,6 +45,16 @@ KNOWN_KEYS = {
 TYPED_KEYS = {"check": (str, "a string (the shell command)"), "verify": (str, "a string (the shell command)"),
               "protect": (list, "a list of rules"), "onEdit": (list, "a list of rules")}
 MAX_NOTES = 8
+# The one routing line. Until 2026-11 the kit mod added it to every prompt in "loop mode"; a cloud
+# session without the mod then had no coordinator, no threads and no push. Printed at start and
+# after a compaction (when the skill's rules may be gone), within the session-start budget: the
+# lessons get what it leaves of SESSION_LESSONS.
+COORDINATOR = (
+    "kit: this session coordinates this project. Handle each message with the kit:lead skill (load it "
+    "before your first answer, and again after a compaction): answer a question in place, make a change "
+    "of a handful of tool calls yourself, start background threads for the rest. Send one "
+    "PushNotification when an item becomes ready for review or needs the user, and when an unattended "
+    "run ends; none for progress.")
 
 
 def config_notes(config):
@@ -92,7 +108,7 @@ def asking_line(root):
             "such step once, in one command with its clean-up; never repeat one that is waiting on a prompt or was "
             "not answered (hand it back as `needs push`). The first time one of these prompts comes up in this "
             "session, tell the owner in one line that these rules are why, and ask once whether to change them "
-            "(lead/unattended.md steps 2-3: `items.py unattended` prints the PROPOSAL and its diff)."]
+            "(lead/unattended.md step 3: `items.py unattended --proposal` prints the diff)."]
 
 
 def queued_line(root):
@@ -108,15 +124,24 @@ def queued_line(root):
     return f"- {len(queued)} queued item(s) on disk: python3 \"{script}\" list --status queued"
 
 
+def coordinator_line(data):
+    """COORDINATOR, or "" in a headless run, a subagent, or with the personal `"mode": "light"`."""
+    if os.environ.get("KIT_HEADLESS") or data.get("agent_id") or kitlib.personal_mode() == "light":
+        return ""
+    return COORDINATOR
+
+
 def as_list(config, key):
     return config.get(key) if isinstance(config.get(key), list) else []
 
 
 def read_board(root, config):
     """(the board's path as configured, its text) or (rel, "") when there is none."""
-    lead = (config or {}).get("lead") if isinstance(config, dict) else None
-    rel = lead.get("board") if isinstance(lead, dict) and isinstance(lead.get("board"), str) else BOARD
-    path = Path(rel) if Path(rel).is_absolute() else Path(root) / rel
+    path = kitlib.board_file(root, config)  # .kit/lead/board.md, .claude/lead/ before the move
+    try:
+        rel = path.relative_to(root).as_posix()
+    except ValueError:
+        rel = str(path)
     try:
         return rel, path.read_text(encoding="utf-8").strip()
     except Exception:
@@ -130,7 +155,7 @@ def board_warning(text):
         return ""
     return (f"kit: the board is {len(lines)} lines, {size // 1000} KB, over its {BOARD_LINES}-line, "
             f"{BOARD_BYTES // 1000} KB contract: archive done rows (items.py done <id>), keep RULES to "
-            "standing rules and move dated decisions to .claude/lead/DECISIONS.md.")
+            "standing rules and move dated decisions to DECISIONS.md beside the board.")
 
 
 def print_board(root, config):
@@ -186,9 +211,17 @@ def quote(text):
 
 
 def offer_machine_setup():
-    """Until the user says yes or no on this machine, ask Claude to offer the kit's user settings."""
+    """Until the user says yes or no on this machine, ask Claude to offer the kit's user settings.
+    After a yes, another account here (CLAUDE_CONFIG_DIR) gets them without the question."""
+    done = machine_setup.auto_apply()
+    if done:
+        print(done + " Tell the user this line once; nothing waits on it.")
+        return
     todo = machine_setup.pending()
     if not todo:
+        broken = machine_setup.unreadable()
+        if broken:
+            print(broken + " Tell the user this line once; nothing waits on it.")
         return
     script = Path(__file__).resolve().parent / "machine_setup.py"
     print("kit: this machine's ~/.claude/settings.json is missing the kit's settings:\n"
@@ -199,6 +232,49 @@ def offer_machine_setup():
           f"(Recommended) or not. Yes: run `python3 \"{script}\" --apply`. No: run "
           f"`python3 \"{script}\" --decline`. Then carry on with the request. Without "
           "AskUserQuestion (a headless run), ignore this.")
+
+
+def away_back(data):
+    """The owner is back: an interactive start (not headless, not a subagent, not a compaction) takes
+    away the denyInsteadOfPrompting the kit set when he left (kitlib.away_on)."""
+    if os.environ.get("KIT_HEADLESS") or data.get("agent_id") or data.get("source") not in ("startup", "resume"):
+        return None
+    try:
+        if kitlib.away_state()[0] != "kit":
+            return None
+        kitlib.away_off()
+    except Exception as exc:
+        return f"kit: away could not be turned off ({exc}); run `items.py away off`."
+    return "kit: away is off again (it was on while the user was away): permission prompts ask again."
+
+
+def overnight_ended(root, data):
+    """A detached overnight run cannot send a push, so the next interactive start (a compaction
+    too) says each run that ended unseen, once (kitlib.overnight_news). A headless run or a
+    subagent leaves them for the owner. At most OVERNIGHT_SAY runs, the rest summed up in one line
+    and left for status. Before the kit.json check: a run is opt-in enough."""
+    if not root or os.environ.get("KIT_HEADLESS") or data.get("agent_id"):
+        return []
+    try:
+        news, left = kitlib.overnight_news(root, consume=True, limit=kitlib.OVERNIGHT_SAY)
+    except Exception as exc:
+        return [f"kit: overnight runs not checked: {exc}"]
+    lines = [kitlib.overnight_news_line(n) + ": tell the user once, with a push notification" for n in news]
+    if left:
+        lines.append(f"kit: and {left} more overnight runs ended: `items.py status` lists them")
+    return lines
+
+
+def away_line():
+    """While the kit's away is on (a session that started before it, a compaction, a /clear): the
+    owner is back when he writes, and the coordinator turns it off then."""
+    try:
+        if kitlib.away_state()[0] != "kit":
+            return None
+        since = kitlib.away_since() or "an unknown time"
+    except Exception:
+        return None
+    return f"kit: away is on since {since}: turn it off with `I away off` when the user writes."
 
 
 def version_key(version):
@@ -239,11 +315,29 @@ def main():
         print_board(root, config)
     elif not os.environ.get("KIT_HEADLESS") and os.environ.get("CLAUDE_CODE_REMOTE", "").lower() not in ("1", "true"):
         offer_machine_setup()  # a cloud container's ~/.claude does not outlive the session: nothing to set up
+    back = away_back(data)
+    if back:
+        print(back)
+    for line in overnight_ended(root, data):
+        print(line)
     if err:
         print(err)
         return 0
     if config is None:
         return 0  # project has not opted in: stay silent
+    coordinator = coordinator_line(data)
+    if coordinator:
+        print(coordinator)
+        still = away_line()
+        if still:
+            print(still)
+    if data.get("source") != "compact":  # not mid-session: the coordinator may be using the board
+        try:  # an older project's state leaves .claude/, where every write by a thread asked the owner
+            import migrate_state
+            for line in migrate_state.auto(root):
+                print(line)
+        except Exception as exc:
+            print(f"kit: moving the kit's state to .kit/ skipped: {exc}")
     if data.get("source") != "compact":  # after a compaction print_board says it
         warning = board_warning(read_board(root, config)[1])
         if warning:
@@ -281,21 +375,22 @@ def main():
         lines.append(queued)
     print("\n".join(lines))  # the header always: a kit.json of only unknown keys must not look like silence
     sys.stdout.flush()  # the gate lines stand even if the lessons run out of time
-    for line in learned(root):
+    for line in learned(root, len(coordinator)):
         print(line)
     return 0
 
 
-def learned(root):
+def learned(root, reserved=0):
     """Import new memories into the ledger; then what the kit changed and this repo's lessons for
-    the main session, together within SESSION_LESSONS."""
+    the main session, together with the `reserved` chars of the coordinator line within
+    SESSION_LESSONS."""
     try:
         import lessons
         lessons.LOCK_WAIT = 1.0  # within the hook's timeout, with the gate lines already printed
         lessons.harvest(root)
         news = lessons.take_news(root)
         block = "\n".join(t for t in (news_block(news), lessons.review_due(root)) if t)
-        text = lessons.deliver(root, "lead", SESSION_LESSONS - len(block))
+        text = lessons.deliver(root, "lead", SESSION_LESSONS - reserved - len(block))
     except Exception:
         return []  # lessons are a help, never a reason for a session not to start
     return [t for t in (text, block) if t]

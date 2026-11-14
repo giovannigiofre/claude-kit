@@ -23,5 +23,8 @@ brief at them; this list stays generic.
   wrap (`overflow-wrap: anywhere`, or the design system's way) and the evidence shows one at
   phone width.
 
+- **Work that needs another item first:** a `DEPENDS: <id>` line in the brief; the item shows as
+  `blocked-by` until that one is done, and starts only then.
+
 A defect a verifier finds twice that none of these covers: add a line for it to the project's
 `CLAUDE.local.md`, where every later brief picks it up.

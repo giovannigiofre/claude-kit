@@ -9,6 +9,10 @@ makes it active, and so does a PASS after that FAIL (the problem was real and is
 distiller then runs in the background). One seen again after it was delivered to a thread
 counts as a miss.
 
+Any subagent briefed with `ITEM: <id>` also gets a `cost` line on that item: the input, output,
+cache read and cache write tokens its transcript records, its tool calls, and the minutes from
+its first to its last line (usage_of).
+
 The verdict is parsed from the verifier's report (`VERDICT:` and the items under PROBLEMS):
 its final message, else, since a worker hands its report back through the SubagentHandback tool,
 the last such call in its transcript, else the last text there that holds a verdict. A thread's
@@ -18,7 +22,7 @@ headline is kept, never the evidence. A verdict is tied to the branch its brief 
 number), and a PASS confirms only the last FAIL on that same branch; with neither named it
 confirms nothing. The LOG line of a filed report names the agent (`..., agent <id>`) and, for a
 verifier, the `REVIEWED: <sha>` its report states. Items are looked up in the main checkout: a
-thread stopping in its worktree (the hook's cwd) has no `.claude/lead/` of its own. Apart from
+thread stopping in its worktree (the hook's cwd) has no `lead/` folder of its own. Apart from
 the missing report, silent and never blocks a stop. A project without .claude/kit.json does
 nothing, the nudge included. Standard library only. `subagent_stop.py --missing <transcript>`
 exits 1 when that transcript's last run delivered no report (the hooks module asks).
@@ -255,6 +259,68 @@ def from_transcript_any(path):
     return brief, handback or said
 
 
+def usage_of(path):
+    """A thread's token use from its transcript: {"in", "out", "cache_read", "cache_write", "tools",
+    "minutes"}, or None when the transcript holds no usage record. Claude Code writes one line per
+    content block of a reply, each carrying the whole reply's usage, so a reply is counted once by
+    its message id (else its request id). Tokens only: prices change, so no money figure."""
+    replies, tools, stamps = {}, set(), []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for n, line in enumerate(f):
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                stamp = row.get("timestamp")
+                if isinstance(stamp, str):
+                    stamps.append(stamp)
+                message = row.get("message")
+                if row.get("type") != "assistant" or not isinstance(message, dict):
+                    continue
+                if isinstance(message.get("usage"), dict):
+                    replies[message.get("id") or row.get("requestId") or n] = message["usage"]
+                for c in message.get("content") or []:
+                    if isinstance(c, dict) and c.get("type") == "tool_use":
+                        tools.add(c.get("id") or f"{n}:{len(tools)}")
+    except OSError:
+        return None
+    if not replies:
+        return None
+
+    def total(key):
+        return sum(u.get(key) for u in replies.values() if isinstance(u.get(key), int))
+
+    minutes = 0.0
+    try:
+        from datetime import datetime
+        times = sorted(datetime.fromisoformat(t.replace("Z", "+00:00")) for t in stamps)
+        minutes = round((times[-1] - times[0]).total_seconds() / 60, 1) if times else 0.0
+    except (ValueError, TypeError):
+        pass
+    return {"in": total("input_tokens"), "out": total("output_tokens"), "cache_read": total("cache_read_input_tokens"),
+            "cache_write": total("cache_creation_input_tokens"), "tools": len(tools), "minutes": minutes}
+
+
+def file_cost(root, transcript, agent_id=""):
+    """One `cost` LOG line on the item the thread's brief names: its token use so far (a resumed
+    thread's transcript grows, so each line is its total to date; items.py status counts the
+    latest line per agent). Nothing when the brief names no item or the transcript has no usage."""
+    try:
+        import items
+        brief, _ = from_transcript_any(transcript)
+        item_id = items.find_id(brief)
+        use = usage_of(transcript) if item_id and items.find(root, item_id) else None
+        if not use:
+            return
+        note = " ".join(f"{k}={use[k]}" for k in ("in", "out", "cache_read", "cache_write", "tools", "minutes"))
+        items.log(root, item_id, "cost", note + (f" agent={agent_id}" if agent_id else ""))
+    except Exception:
+        pass
+
+
 def file_report(root, brief, report, agent_type, agent_id=""):
     """A thread briefed with `ITEM: <id>` gets its report filed under the item (REPORT.md for a
     kit:implementer, VERDICT.md for a kit:verifier), with one LOG line that names the agent: the
@@ -284,7 +350,7 @@ def main():
     if sys.argv[1:2] == ["--missing"]:
         return 1 if len(sys.argv) > 2 and missing_report(sys.argv[2]) else 0
     data = kitlib.read_input()
-    # the items live in the main checkout: a thread stopping in its worktree (cwd) has no .claude/lead/
+    # the items live in the main checkout: a thread stopping in its worktree (cwd) has no lead/ of its own
     cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     root = kitlib.main_checkout(cwd) or kitlib.project_root(data)
     config, _ = kitlib.load_config(root)
@@ -296,6 +362,8 @@ def main():
         print(json.dumps({"decision": "block", "reason": NO_REPORT}))
         return 0
     agent_type = str(data.get("agent_type") or "")
+    if transcript:  # before the report line, so the item's last event stays the report
+        file_cost(root, transcript, str(data.get("agent_id") or ""))
     if agent_type not in KIT_TYPES:
         return 0
     report = data.get("last_assistant_message") or ""

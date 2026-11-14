@@ -8,7 +8,11 @@ After each iteration the runner, not the agent, decides what happens to the chan
   - agent reports done / stop condition met -> commit what passed and stop
   - agent reports blocked              -> undo, stop, a human must decide
 Caps are all optional: iterations, USD, tokens. With none set the run goes on until the stop
-condition holds or --max-failures consecutive iterations fail.
+condition holds or --max-failures consecutive iterations fail. A detached run with none set gets
+40 iterations and USD 25, since nobody is watching it; --no-caps runs it without.
+The run's branch is never a protected one (the kit guard's protectedBranches, main and master by
+default, and the remote's default branch), and --push honours the owner's unattended push choice
+(kit.local.json lead.unattended.push): with `ask` the branch stays local and the notes say so.
 Memory between iterations is a notes.md file in the run directory, which the runner also
 writes to (one line per iteration outcome) so the next session knows what failed and why.
 
@@ -29,7 +33,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-RUNS_DIR = Path(".claude") / "overnight"
+# The kit's working state lives in `.kit/` at the repo root. It used to live in `.claude/`, which
+# Claude Code protects, so a background thread's every write there waited on an owner prompt.
+# A project the kit has not moved yet keeps its runs where they are (kitlib.state_entry; this
+# script is standalone, so it repeats the rule here).
+STATE_DIR, LEGACY_STATE_DIR = ".kit", ".claude"
+LEGACY_STATE = ("lead", "evidence", "overnight", "agent-memory/kit-verifier")
 
 REPORT_SCHEMA = {
     "type": "object",
@@ -48,7 +57,8 @@ UNATTENDED = (
     "This is an unattended run: nobody reads your messages until it ends, and nobody will answer a "
     "question. A turn that ends with a summary announcing the next step, an offer to continue, or a "
     "list of decisions that don't block you ends this iteration with nothing done. Finish the step "
-    "you chose, check it, then give your report. Stop early only when nothing can move without a "
+    "you chose, then give your report. An error, a timeout or a failing tool is not a blocker: "
+    "diagnose it and work through it. Stop early only when nothing can move without a "
     "human; then report blocked and say what they must decide. Never take destructive or "
     "irreversible actions outside the repository."
 )
@@ -109,17 +119,68 @@ def undo(root, to="HEAD"):
     git(root, "clean", "-q", "-fd")  # excluded/ignored files (the run directory) survive
 
 
-def exclude_runs_dir(root):
-    """Keep run directories out of git without touching the project's .gitignore."""
+def runs_dir(root, main=None):
+    """`.kit/overnight` of this checkout, or `.claude/overnight` where runs already are. A new run in
+    a project whose main checkout still keeps its state in `.claude` (and has no `.kit`) goes
+    there too, so one project never has two layouts. A `.kit` that is a symlink, here or in the
+    main checkout, is not the kit's folder: runs stay in `.claude/overnight`."""
+    root = Path(root)
+    main = Path(main) if main else root
+    if (root / STATE_DIR).is_symlink() or (main / STATE_DIR).is_symlink():
+        return root / LEGACY_STATE_DIR / "overnight"  # a linked .kit is not the kit's folder
+    for name in (STATE_DIR, LEGACY_STATE_DIR):
+        if (root / name / "overnight").is_dir():
+            return root / name / "overnight"
+    if not (main / STATE_DIR).is_dir() and any((main / LEGACY_STATE_DIR / n).is_dir() for n in LEGACY_STATE):
+        return root / LEGACY_STATE_DIR / "overnight"
+    return root / STATE_DIR / "overnight"
+
+
+def exclude_runs_dir(root, runs=None):
+    """Keep run directories (and the gate's evidence) out of git without touching the project's
+    .gitignore. `undo` runs `git clean -fd`, so an unexcluded run directory would be deleted by the
+    first failed iteration: this runs before that one. One line per folder, never all of `.kit/`.
+    The same rule as the kit's kitlib.add_exclude_lines (this script stands alone): under a lock
+    in the git dir, read the file, append only the missing lines, replace it in one step."""
     exclude = Path(git(root, "rev-parse", "--git-path", "info/exclude"))
     if not exclude.is_absolute():
         exclude = Path(root) / exclude
-    exclude.parent.mkdir(parents=True, exist_ok=True)
-    text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-    missing = [line for line in (f"/{RUNS_DIR.as_posix()}/", "/.claude/evidence/") if line not in text.splitlines()]
-    if missing:
-        exclude.write_text(text + ("" if text.endswith("\n") or not text else "\n") + "\n".join(missing) + "\n",
-                           encoding="utf-8")
+    runs = Path(runs) if runs else runs_dir(root)
+    state = runs.parent.name
+    wanted = [f"/{state}/overnight/", f"/{state}/evidence/"]
+    if state != LEGACY_STATE_DIR and (Path(root) / LEGACY_STATE_DIR / "evidence").is_dir():
+        wanted.append(f"/{LEGACY_STATE_DIR}/evidence/")
+    add_lines(exclude, wanted)
+
+
+def add_lines(path, wanted, wait=2.0):
+    """Append the lines of `wanted` that `path` lacks, never removing or rewriting one."""
+    import fcntl
+    import tempfile
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name(path.name + ".kit-lock"), "a") as lock:
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"{path} is locked by another process; try again") from None
+                time.sleep(0.05)
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        missing = [line for line in dict.fromkeys(wanted) if line not in text.splitlines()]
+        if not missing:
+            return
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text + ("" if text.endswith("\n") or not text else "\n") + "\n".join(missing) + "\n")
+            os.chmod(tmp, (path.stat().st_mode & 0o777) if path.exists() else 0o644)
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
 
 
 def slugify(text, limit=32):
@@ -327,6 +388,115 @@ def cap_reached(args, state):
     return None
 
 
+UNTOLD = "untold.jsonl"  # in the runs folder: detached runs that ended, until a session start says so
+DETACHED_ENV = "KIT_OVERNIGHT_DETACHED"  # set by detach() for the run it starts
+DETACH_WAIT = 5  # seconds the launcher watches the run start, so an early refusal is not lost in a log
+DETACH_CAPS = (40, 25.0)  # iterations and USD for a detached run that names no cap (the skill's defaults)
+
+
+def main_of(root):
+    """The main checkout of `root` (a linked worktree resolves to it)."""
+    common = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", check=False)
+    return Path(common).parent if common and Path(common).name == ".git" else Path(root)
+
+
+def read_object(path):
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def protected_branches(root):
+    """The branches the kit guard protects: guard.protectedBranches from the project's kit.json,
+    else from ~/.claude/kit.json, else main and master; and the remote's default branch."""
+    names = None
+    for path in (kit_config(root), Path(os.environ.get("HOME") or Path.home()) / ".claude" / "kit.json"):
+        guard = read_object(path).get("guard")
+        if isinstance(guard, dict) and isinstance(guard.get("protectedBranches"), list):
+            names = {str(b) for b in guard["protectedBranches"]}
+            break
+    names = names or {"main", "master"}
+    head = git(root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD", check=False)
+    if head.startswith("origin/"):
+        names.add(head[len("origin/"):])
+    return names
+
+
+def push_choice(root):
+    """(choice, path): the owner's push choice for unattended runs, "ask" or "allow" (the default),
+    from kit.local.json in the main checkout (kitlib.unattended_prefs; this script is standalone)."""
+    path = main_of(root) / ".claude" / "kit.local.json"
+    lead = read_object(path).get("lead")
+    own = lead.get("unattended") if isinstance(lead, dict) else None
+    value = str((own if isinstance(own, dict) else {}).get("push", "")).strip().lower()
+    return (value if value in ("ask", "allow") else "allow"), path
+
+
+def detach(argv):
+    """Start this runner again with `argv` in a new process session (setsid), its output in a log
+    file under the runs folder, and return at once. The coordinator launches the night from one
+    Bash call that has to return: a run tied to that call's process group, or to a background
+    command, would end with the call or the session. A run that stops within DETACH_WAIT seconds
+    (a dirty tree, a bad flag) prints its log and exit code here instead."""
+    root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel"))
+    common = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    main = Path(common).parent if Path(common).name == ".git" else root
+    runs = runs_dir(root, main)
+    exclude_runs_dir(root, runs)  # before the log exists, so the run's clean-tree check passes
+    (runs / "launch").mkdir(parents=True, exist_ok=True)
+    log_path = runs / "launch" / f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}.log"
+    with open(log_path, "w", encoding="utf-8") as log, open(os.devnull) as nothing:
+        child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), *argv], cwd=Path.cwd(),
+                                 stdin=nothing, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                                 env=dict(os.environ, **{DETACHED_ENV: "1"}))
+    try:
+        code = child.wait(timeout=DETACH_WAIT)
+    except subprocess.TimeoutExpired:
+        print(f"overnight: started in the background, pid {child.pid}; log {log_path}")
+        print(log_path.read_text(encoding="utf-8", errors="replace").rstrip())
+        return 0
+    print(log_path.read_text(encoding="utf-8", errors="replace").rstrip())
+    print(f"overnight: the run ended at once (exit {code}); log {log_path}")
+    return code
+
+
+def tell_later(run_dir, state):
+    """A detached run that ended leaves one line in its runs folder's untold.jsonl; the next
+    interactive session start in the project says it once (kitlib.overnight_news) and drops it."""
+    pushed = str(state.get("pushed") or "").startswith("pushed")
+    line = {"run": state["run_id"], "dir": str(run_dir), "stop_reason": state["stop_reason"],
+            "iterations": state["iteration"], "cost": round(state["cost"], 2), "branch": state["branch"],
+            "pushed": pushed}
+    try:
+        with open(Path(run_dir).parent / UNTOLD, "a", encoding="utf-8") as fh:
+            try:
+                import fcntl  # the reader cuts the file in place under this lock (kitlib.overnight_news)
+                fcntl.flock(fh, fcntl.LOCK_EX)
+            except ImportError:
+                pass
+            fh.write(json.dumps(line) + "\n")
+            fh.flush()  # written before the lock goes with the close
+    except OSError as exc:  # the run's own end stands; only the morning line is lost
+        print(f"overnight: could not leave the end for the next session start: {exc}")
+
+
+def push_branch(root, branch):
+    """Push the run's branch to origin once, so the morning result can be read from a phone. A
+    missing remote or a refused push is recorded, never fatal: the commits stay on the branch."""
+    if not git(root, "remote", "get-url", "origin", check=False):
+        return "skipped: no origin remote"
+    try:
+        out = subprocess.run(["git", "-C", str(root), "push", "-q", "-u", "origin", branch],
+                             capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        return "failed: git push took over 300 s"
+    if out.returncode != 0:
+        return f"failed: {(out.stderr.strip().splitlines() or ['git push failed'])[-1][:200]}"
+    return f"pushed {branch} to origin"
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="kit:overnight - unattended loop of small verified steps")
     p.add_argument("objective", nargs="?", help="what to improve (or use --objective-file)")
@@ -362,6 +532,14 @@ def main(argv=None):
     p.add_argument("--agent-cmd", default=os.environ.get("KIT_OVERNIGHT_AGENT", "claude"))
     p.add_argument("--resume", help="run directory of an earlier run to continue")
     p.add_argument("--dry-run", action="store_true", help="print the plan and the first prompt, run nothing")
+    p.add_argument("--detach", action="store_true",
+                   help="start the run in its own process session, with its output in a log file, and return at once")
+    p.add_argument("--push", action="store_true",
+                   help="when the run ends with commits, push its branch to origin once (a failed push is noted, not fatal; "
+                        "push=ask in kit.local.json keeps it local)")
+    p.add_argument("--no-caps", action="store_true",
+                   help=f"with --detach, run without caps (a detached run that names none gets {DETACH_CAPS[0]} "
+                        f"iterations and USD {DETACH_CAPS[1]:g})")
     argv = sys.argv[1:] if argv is None else list(argv)
     args = p.parse_args(argv)
     if args.model and re.search(r"fable|mythos", args.model, re.I) and not args.allow_credits:
@@ -369,6 +547,15 @@ def main(argv=None):
                 "if that is what you want, or use an Opus model")
     given = {a.dest for a in p._actions
              if any(tok.split("=", 1)[0] in a.option_strings for tok in argv if tok.startswith("-"))}
+    if args.detach and not args.resume and not args.no_caps and \
+            args.max_iterations is None and args.max_usd is None and args.max_tokens is None:
+        args.max_iterations, args.max_usd = DETACH_CAPS
+        argv += ["--max-iterations", str(DETACH_CAPS[0]), "--max-usd", f"{DETACH_CAPS[1]:g}"]
+        print(f"overnight: no caps given for a detached run, so it stops at {DETACH_CAPS[0]} iterations or "
+              f"USD {DETACH_CAPS[1]:g}; name caps, or pass --no-caps to run without")
+    if args.detach and not args.dry_run:
+        return detach([a for a in argv if a != "--detach"])
+    detached = os.environ.pop(DETACHED_ENV, "") == "1"  # not passed on to the agent sessions
 
     root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel"))
     main_checkout = root
@@ -377,7 +564,7 @@ def main(argv=None):
         run_dir = Path(args.resume).resolve()
         state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
         for key, val in state["args"].items():  # a flag given now wins; an omitted one keeps the saved value
-            if key in ("resume", "dry_run"):
+            if key in ("resume", "dry_run", "detach"):
                 continue
             if key not in given:
                 setattr(args, key, val)
@@ -398,8 +585,15 @@ def main(argv=None):
             root = Path(args.worktree).resolve()
         state = {"root": str(root), "branch": branch, "run_id": run_id, "iteration": 0, "cost": 0.0,
                  "tokens": 0, "commits": [], "failures": 0, "stop_reason": None,
-                 "args": {k: v for k, v in vars(args).items() if k not in ("resume", "dry_run")}}
-        run_dir = root / RUNS_DIR / run_id
+                 "args": {k: v for k, v in vars(args).items() if k not in ("resume", "dry_run", "detach")}}
+        common = git(Path.cwd(), "rev-parse", "--path-format=absolute", "--git-common-dir")
+        main = Path(common).parent if Path(common).name == ".git" else root
+        run_dir = runs_dir(root, main) / run_id
+
+    protected = protected_branches(main_checkout)
+    if state["branch"] in protected:
+        raise SystemExit(f"overnight: {state['branch']} is a protected branch ({', '.join(sorted(protected))}): "
+                         "the run commits on a branch of its own; pick another --branch, or leave it out")
 
     # the gate comes from the checkout the run starts from (a worktree may not exist yet)
     gate = args.gate or kit_gate(root if root.exists() else main_checkout)
@@ -439,7 +633,7 @@ def main(argv=None):
         git(root, "checkout", "-q", "-b", state["branch"])
 
     run_dir.mkdir(parents=True, exist_ok=True)
-    exclude_runs_dir(root)
+    exclude_runs_dir(root, run_dir.parent)
     (run_dir / "objective.md").write_text(args.objective + "\n", encoding="utf-8")
     log = (run_dir / "log.jsonl").open("a", encoding="utf-8")
 
@@ -459,6 +653,9 @@ def main(argv=None):
         print(f"overnight: #{state['iteration']} failed ({state['failures']} in a row): {reason}")
         save()
 
+    # who runs it, so a session start can tell a run whose process is gone (kitlib.overnight_news)
+    state.update(pid=os.getpid(), detached=detached)
+    save()
     rate_waits = 0
     try:
         while True:
@@ -585,14 +782,24 @@ def main(argv=None):
             undo(root, start or "HEAD")
         finally:
             save()
+            if detached:
+                tell_later(run_dir, state)
         raise
     finally:
         log.close()
 
+    if args.push and state["commits"]:
+        choice, prefs = push_choice(root)
+        state["pushed"] = push_branch(root, state["branch"]) if choice == "allow" else \
+            f"skipped: push=ask in {prefs}, so the branch stays local; push it with `git push -u origin {state['branch']}`"
+        note(f"push: {state['pushed']}")
+        print(f"overnight: push {state['pushed']}")
     save()
     (run_dir / "end-state.json").write_text(json.dumps(
-        {k: state[k] for k in ("branch", "iteration", "cost", "tokens", "commits", "stop_reason")}, indent=2),
-        encoding="utf-8")
+        {k: state[k] for k in ("branch", "iteration", "cost", "tokens", "commits", "stop_reason", "pushed") if k in state},
+        indent=2), encoding="utf-8")
+    if detached:
+        tell_later(run_dir, state)
     print(f"overnight: stopped - {state['stop_reason']}")
     print(f"overnight: {len(state['commits'])} commits on {state['branch']} in {state['iteration']} iterations, "
           f"USD {state['cost']:.2f}, {state['tokens']} tokens; run dir {run_dir}")

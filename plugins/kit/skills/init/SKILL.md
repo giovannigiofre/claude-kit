@@ -1,6 +1,6 @@
 ---
 name: init
-description: Sets up the kit in the current project - writes .claude/kit.json (fast check, full verify, per-file onEdit commands, protected paths, coordinator settings) from what the repo actually uses, a project verify skill that says how to exercise the app, and proposes permissions and a safety profile. Use when starting to use the kit in a project or when the SessionStart notice says kit.json is missing.
+description: Sets up the kit in the current project - writes .claude/kit.json (fast check, full verify, per-file onEdit commands, protected paths, coordinator settings) from what the repo actually uses, a project verify skill that says how to exercise the app, and proposes permissions. Use when the user asks to set the kit up in a project, or wants a gate, checks or a coordinator where .claude/kit.json does not exist yet.
 disable-model-invocation: true
 ---
 
@@ -55,9 +55,10 @@ and its CI actually run, not guesses.
    every worktree it creates, and `"worktree": {"symlinkDirectories": ["node_modules"]}` in
    `.claude/settings.json` saves a reinstall per thread. A Next.js 16.3+ app writes its own agent block into `AGENTS.md`
    (bundled docs under `node_modules/next/dist/docs/`): check it is there.
-7. **gitignore**: `.claude/evidence/` (proof from `/kit:go` and threads), `.claude/overnight/`
-   (run logs), `.claude/kit.local.json` (this machine's unattended git choices) and
-   `.claude/lead/` (the board), unless the user wants the board shared.
+7. **gitignore**: `.kit/evidence/` (proof from `/kit:go` and threads), `.kit/overnight/`
+   (run logs), `.kit/lead/` (the board), `.kit/agent-memory/` (the verifier's pitfalls) and
+   `.claude/kit.local.json` (this machine's unattended git choices), unless the user wants the
+   board shared. The kit keeps each out of git itself too, in `.git/info/exclude`.
    `.claude/review-decisions.md` stays committed so every clone skips declined findings.
 8. **Compaction**: add a short `# Compact instructions` section to CLAUDE.md (keep the goal,
    constraints and decisions stated exactly, user preferences, in-flight work and branches, open
@@ -72,7 +73,7 @@ and its CI actually run, not guesses.
    repo, pushes to main, discarding uncommitted work, `sudo`, `curl | sh`, reading credentials;
    best effort, it reads shell text; `guard.denyCommands` / `askCommands` hold the project's own
    rules). Then ask which profile the project uses: **Host** (no OS sandbox) or **Sandbox**
-   (`/kit-safety sandbox`).
+   (`python3 ${CLAUDE_SKILL_DIR}/../../hooks/scripts/items.py sandbox on`).
 11. **Permissions and authorship**: propose (never write silently) allow rules in
     `.claude/settings.json` for the read-only, check and verify commands; suggest the built-in
     `/fewer-permission-prompts`. The user is the only author of commits and PRs: in the same file
@@ -125,6 +126,6 @@ without one uses its main checkout's):
   "learn": {"model": true}, "llm": "on",
   "author": "Name <email>",
   "lead": {"read": ["docs/backlog.md"], "backlog": "docs/backlog.md", "notes": "...", "ship": "pr",
-           "merge": "user", "parallel": 3, "budget": "none", "loops": [], "board": ".claude/lead/board.md"}
+           "merge": "user", "parallel": 3, "budget": "none", "loops": [], "board": ".kit/lead/board.md"}
 }
 ```

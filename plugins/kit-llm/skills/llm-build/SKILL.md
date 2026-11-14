@@ -62,11 +62,13 @@ item, or write `n/a: <reason>`. Sections:
 - **B** tools: few, task-shaped, strict schemas, actionable errors, risky actions gated.
 - **C** context: system prompt structure, just-in-time retrieval, compaction, errors fed back.
 - **D** structured output and grounding: schema + local validation, stop reasons, grounding
-  guard, citations.
+  guard, citations; RAG scored per layer and per slice, with an answer for missing context.
 - **E** guardrails and security: lethal trifecta, prompt injection, output rendering, scope,
-  PII.
+  PII; a no-side-effect test per consequential tool, a sentinel secret, path containment.
 - **F** evals-first loop: hard checks now, judges after error analysis (`kit-llm:llm-evals`).
-- **G** models, caching, cost and latency budgets (`kit-llm:llm-evals`, model choice).
+- **G** models, caching measured by the provider's counters, cost and latency budgets
+  (`kit-llm:llm-evals`, model choice); queue and worker designs against
+  [cost-burn.md](cost-burn.md).
 - **H** operations: logging without content, prompt hash, retries on 429/5xx, fallback
   provider, fake-LLM tests.
 

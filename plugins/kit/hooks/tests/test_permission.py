@@ -15,9 +15,11 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 
-def ask(repo, command):
+def ask(repo, command, agent=False):
     payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(repo), "session_id": "s",
                "hook_event_name": "PermissionRequest"}
+    if agent:
+        payload.update(agent_id="a1", agent_type="kit:implementer")
     out = subprocess.run([sys.executable, str(SCRIPTS / "permission.py")], input=json.dumps(payload),
                          capture_output=True, text=True, timeout=30)
     if not out.stdout.strip():
@@ -44,6 +46,18 @@ def main():
             (f'python3 "{SCRIPTS / "items.py"}" list --status queued', "allow"),
             (f"python3 {SCRIPTS / 'items.py'} new \"Login page\" --brief - --from lead", "allow"),
             (f"python3 {SCRIPTS / 'proposals.py'} take readme-install", "allow"),
+            # the move out of .claude: status and a bare migrate only, the rest is the owner's call
+            (f"python3 {SCRIPTS / 'migrate_state.py'} migrate", "allow"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} status", "allow"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} migrate --force", "prompt"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} undo", "prompt"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} migrate --again", "prompt"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} migrate --again --force", "prompt"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} migrate --root /other", "prompt"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} --root /other migrate", "prompt"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'} migrate --dry-run", "prompt"),
+            (f"python3 {SCRIPTS / 'migrate_state.py'}", "prompt"),
+            (f"python3 {Path(tmp) / 'migrate_state.py'} migrate", "prompt"),
             (f"python3 {Path(tmp) / 'items.py'} list", "prompt"),  # a script of that name elsewhere is not the kit's
             (f"python3 {SCRIPTS / 'machine_setup.py'} --apply", "prompt"), ("rm -rf /", "prompt"),
         ]
@@ -52,6 +66,42 @@ def main():
             if got != want:
                 failed += 1
                 print(f"FAIL {want} expected, got {got}: {command!r}")
+        # the items.py commands that change the owner's settings: unasked from the main session, never
+        # allowed here from a subagent (the guard denies them first; this holds with the guard off)
+        items = SCRIPTS / "items.py"
+        for args, main_want, thread_want in [
+            ("away on", "allow", "prompt"), ("away off", "allow", "prompt"), ("sandbox on", "allow", "prompt"),
+            ("unattended push=ask", "allow", "prompt"), ("away status", "allow", "allow"),
+            ("sandbox status", "allow", "allow"), ("unattended", "allow", "allow"), ("list", "allow", "allow"),
+        ]:
+            for agent, want in ((False, main_want), (True, thread_want)):
+                got = ask(repo, f"python3 {items} {args}", agent)
+                if got != want:
+                    failed += 1
+                    print(f"FAIL {want} expected from {'a subagent' if agent else 'the main session'}, "
+                          f"got {got}: items.py {args}")
+        # the function and variable spellings: never unasked from a subagent, even when the project's own
+        # check is written that way (guard.owner_run, so this holds with the guard off too)
+        for form in (f'I(){{ python3 {items} "$@"; }}; I away on', f'I="python3 {items}"; $I sandbox on',
+                     f'I(){{ python3 {items} "$@"; }}; I unattended push=allow',
+                     f"python3 {SCRIPTS / 'machine_setup.py'} --decline"):
+            (repo / ".claude" / "kit.json").write_text(json.dumps({"check": form}))
+            for agent, want in ((False, "allow"), (True, "prompt")):
+                got = ask(repo, form, agent)
+                if got != want:
+                    failed += 1
+                    print(f"FAIL {want} expected from {'a subagent' if agent else 'the main session'}, got {got}: {form!r}")
+        form = f'I(){{ python3 {items} "$@"; }}; I list'
+        (repo / ".claude" / "kit.json").write_text(json.dumps({"check": form}))
+        if ask(repo, form, True) != "allow":
+            failed += 1
+            print("FAIL a check that only reads the board stays unasked from a subagent")
+        # a check that only mentions the owner words, in a message or after a read, runs nothing of his
+        form = f'python3 {items} sandbox status | grep -q on && echo "sandbox on; items.py away on"'
+        (repo / ".claude" / "kit.json").write_text(json.dumps({"check": form}))
+        if ask(repo, form, True) != "allow":
+            failed += 1
+            print(f"FAIL a check that only mentions the owner words stays unasked from a subagent: {form!r}")
         (repo / ".claude" / "kit.json").unlink()
         if ask(repo, "make lint") != "prompt":
             failed += 1

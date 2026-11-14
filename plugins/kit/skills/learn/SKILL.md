@@ -1,8 +1,7 @@
 ---
 name: learn
-description: Tidies the kit's lesson ledger for this repo (merge, retire, propose hardening), shows or undoes what it learned, and turns a correction or a repeated mistake into a durable fix - a check, a hook entry, a project skill or a CLAUDE.md line. Use after the user corrects Claude, when the verifier caught the same defect twice, or with "undo", "news", "list" or "sweep".
-disable-model-invocation: true
-argument-hint: "[empty = distill + this session's corrections | undo <id> | retire <id> | news | list | stats | promote [id] | sweep [N] | the lesson to make stick]"
+description: Use when the ledger says a review is due, when the user asks what the kit has learned or to undo a lesson, after the user corrects Claude, or when the verifier caught the same defect twice. Tidies the lesson ledger for this repo (merge, retire, propose hardening), shows or undoes what it learned, and turns a repeated mistake into a durable fix - a check, a hook entry, a project skill or a CLAUDE.md line, asking first before it changes a committed instruction file or .claude/kit.json.
+argument-hint: "[empty = distill + this session's corrections | undo <id> | retire <id> | wrong <id> | news | list | stats | export | import <file> | promote [id] | sweep [N] | the lesson to make stick]"
 ---
 
 # /learn: the kit's lessons, kept small and true
@@ -17,19 +16,26 @@ expanded, the script is in the kit plugin's `hooks/scripts/`).
 
 ## Commands
 
-- **empty**: run `$L review --dry-run .` and show its lines; when it would drop a ledger or retire
-  a lesson, ask the user once before `$L review .`, then relay its lines as they are (each says
-  what changed and how to undo it). It drops ledgers of test and scratchpad repos, retires lessons
-  neither seen nor delivered for 90 days, merges duplicates, retires lessons whose fix shipped,
+- **empty**: run `$L review --dry-run .`, then `$L review .`, and relay its lines as they are
+  (each says what changed and how to undo it); the ledger is outside the repo and every change
+  has an undo, so this needs no question. It drops ledgers of test and scratchpad repos, retires lessons
+  not seen for 90 days (being delivered does not count), merges duplicates, retires lessons whose fix shipped,
   proposes retiring stale ones and writes hardening proposals; with a model allowed it also rewords
   unclear lessons and judges whether a lesson held by 2 repos is generic enough for all (haiku, at
   most $0.05 a call, one run a day per repo). `--no-model` skips the model, and a lesson waiting
   for the judge stays local; `--dry-run` changes nothing and previews all of it on a copy.
-  The session-start hook says once per 14 days that a review is due; declining waits for the next.
+  The session-start hook says once per 14 days that a review is due, and the coordinator runs it.
   Then take this session's corrections and repeated failures, if any, through the section below.
 - **undo <id>**: `$L undo <id> .`, then say what came back. On a proposal (to retire, or to
   harden) this keeps the lesson as it is, and the distiller does not ask again.
 - **retire <id>**: `$L retire <id> .`, for example to accept a proposal to retire a stale lesson.
+- **wrong <id>**: `$L wrong <id> .` when the user says a lesson is wrong; the second time the
+  distiller retires it. `undo` takes a mark back.
+- **export**, **import <file>**: move lessons to the user's other Claude account. `$L export
+  <file>` writes this machine's lessons (`--repo .` for this repo's), scrubbed of paths, repo
+  names and the account name, and says how many it skipped and why. On the other account run
+  `$L import <file> --dry-run .`, show what it would add, merge or ignore, then `$L import <file> .`.
+  Importing twice changes nothing; `undo <id>` takes one import back.
 - **promote [id]**: follow `promote.md` in this folder. Without an id, list the kit candidates.
 - **news**, **list**, **stats**: `$L news .`, `$L list --all .`, `$L stats .`; show the output,
   shortened to what the user asked about.
@@ -58,8 +64,11 @@ Nothing copied.)
 3. **Read the target first**, update rather than add, keep its tone. Look for lines no session
    needed and near-duplicates and propose removing them; keep always-loaded text (CLAUDE.md plus
    every skill description) under about 5k tokens.
-4. **At most 4 changes per run.** Show each as a diff with its evidence and ask with one
-   AskUserQuestion multi-select which to apply. Write only those; don't commit unless asked.
+4. **At most 4 changes per run.** Before changing an instruction file the repo commits (CLAUDE.md,
+   AGENTS.md, a skill), `.claude/kit.json` (a `check`, `onEdit`, `protect` or `guard` entry decides
+   what runs and what is refused in every session) or `~/.claude/CLAUDE.md`, show each change as a
+   diff with its evidence and ask with one AskUserQuestion multi-select which to apply; write only
+   those. Don't commit unless asked.
 5. Once a mechanism covers a lesson, retire it: `$L retire <id> .`.
 
 ## Sweep

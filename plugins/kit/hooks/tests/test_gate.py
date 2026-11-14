@@ -44,7 +44,7 @@ def main():
         sh(repo, "config", "user.email", "t@example.invalid")
         sh(repo, "config", "user.name", "t")
         (repo / "a.txt").write_text("a\n")
-        (repo / ".claude").mkdir()
+        (repo / ".claude" / "evidence").mkdir(parents=True)  # a project from before the move to .kit
         (repo / ".claude" / "kit.json").write_text(json.dumps({
             "check": "echo changed=$KIT_CHANGED_COUNT files=$KIT_CHANGED_FILES > check.log",
             "verify": "test -f a.txt"}))
@@ -132,6 +132,25 @@ def main():
         check(ok, f"status from the worktree reads the same record: {why}")
         check(gate_cmd(tree, "status")[0] == 0, "status from the command line in the worktree")
         check(sh(tree, "status", "--porcelain") == "", "the worktree stays clean: " + sh(tree, "status", "--porcelain"))
+
+    # a fresh project (kit.json only): the record goes to .kit/evidence and git stays clean
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / "fresh"
+        repo.mkdir()
+        sh(repo, "init", "-q", "-b", "main")
+        sh(repo, "config", "user.email", "t@example.invalid")
+        sh(repo, "config", "user.name", "t")
+        (repo / ".claude").mkdir()
+        (repo / ".claude" / "kit.json").write_text(json.dumps({"verify": "true"}))
+        (repo / ".gitignore").write_text(".claude/kit.json\n")
+        sh(repo, "add", "-A")
+        sh(repo, "commit", "-qm", "init")
+        code, out = gate_cmd(repo, "verify")
+        check(code == 0 and "recorded in .kit/evidence/main/gate-verify.json" in out, out)
+        check(not (repo / ".claude" / "evidence").exists(), "nothing new under .claude")
+        check(gate.status(repo, "verify")[0], "status reads the .kit record")
+        check(sh(repo, "status", "--porcelain") == "", "evidence excluded: " + sh(repo, "status", "--porcelain"))
+        check("/.kit/evidence/" in (repo / ".git" / "info" / "exclude").read_text().splitlines(), "its own line")
 
     print("gate: all checks passed" if not failed else f"gate: {failed} failures")
     return 1 if failed else 0

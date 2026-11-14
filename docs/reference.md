@@ -31,7 +31,7 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
     "read": ["docs/backlog.md"],
     "backlog": "docs/backlog.md",
     "notes": "one line of project-specific advice for the coordinator (threads never see it)",
-    "board": ".claude/lead/board.md",
+    "board": ".kit/lead/board.md",
     "ship": "pr",
     "merge": "user",
     "parallel": 3,
@@ -61,7 +61,7 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
 - `guard`: on by default in a project with `kit.json`; `"off"` turns it off. `protectedBranches`
   defaults to main, master and the remote's default branch. `denyCommands` / `askCommands`: the
   project's own rules, `{"pattern": "<regex over the whole command>", "reason": "..."}` each
-  (a plain string is a pattern); `/kit:learn` writes one when a lesson is "never run X here". `agentsAsk` / `agentsDeny` are an
+  (a plain string is a pattern); `/kit:learn` proposes one when a lesson is "never run X here" and writes it on your yes. `agentsAsk` / `agentsDeny` are an
   optional per-session cap on subagents (ask past one, refuse past the other); the native
   `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` caps how many run at once. `allowCommands`: regexes the
   guard lets through. `attribution` (default `"block"`): blocks AI credits in commit messages, PR,
@@ -81,10 +81,39 @@ checkout's; with neither the kit stays off. The owner's personal choices that ar
   the rule off. The `retry` rule refuses the same push, rebase or PR merge (the same command text, in
   the same folder, at the same commit) a fourth time within 30 minutes, per session and thread, and tells
   the thread to hand the step back; a new commit or another command starts afresh, and
-  `"retries": false` turns it off. One rule holds in every repo, with or without `kit.json` and with the guard off:
+  `"retries": false` turns it off. The `hook-bypass` rule refuses a git commit, push, merge,
+  rebase, cherry-pick or am that skips the repository's hooks: `--no-verify`, `-n` on commit and am
+  (on push `-n` is a dry run, on merge and rebase no diffstat, and those pass), `-c
+  core.hooksPath=…` pointing elsewhere, `HUSKY=0` or `HUSKY_SKIP_HOOKS=1` set for the command,
+  and `git config core.hooksPath` (or `--unset`) leaving the repository's hooks; its current
+  hooks folder and an existing folder in its work tree (`.husky`, `.githooks`) are its own. The
+  refusal says to fix what the hook reports, or hand the step back with the hook's output;
+  `allowCommands` can let a specific command through. Pushes: a push to a protected branch, a
+  force push to one, deleting one and `--mirror` are refused; a push with `--force`, `-f` or a
+  `+refspec`, or with `--all`, is asked about from any caller, while `--force-with-lease` on a
+  branch that is not protected stays free. From a subagent, a push that deletes a remote branch
+  (`:branch`, `--delete`) is asked about, and merging a PR (`gh pr merge`, a `gh api` call to
+  `…/merge` or the `mergePullRequest` mutation, any GitHub MCP tool with `merge` in its name
+  but `disable_pr_auto_merge`) is refused: the thread
+  reports `needs merge` and the coordinator merges; from the main session `gh pr merge` is left to
+  the permission system. Also from a subagent, the kit's `items.py` commands that change the
+  owner's settings (`away on|off`, `sandbox on|off`, `unattended` with any choice),
+  `machine_setup.py --apply|--decline`, and `migrate_state.py undo` or `migrate --again|--force`
+  are refused. The guard judges what runs, one simple command at a time: a command that runs
+  the script (by its path, `python3 -m items`, through `env` and its options, `eval`, `bash -c`
+  or `-lc`, or `find -exec`) with those words among its own arguments, options first or not, or a
+  shell function or variable bound in the same command to one that runs it (`I(){ python3
+  …/items.py "$@"; }; I away on`, the same with `"$1" "$2"`, `I="python3 …/items.py"; $I away on`,
+  also after `export`, `readonly` or `local`). A commit message, a PR body, a grep pattern or an
+  echo that only mentions them passes; deliberate evasions (a word held in a variable, an array
+  such as `"${cmd[@]}"`, `xargs`, `find -exec python3 {}`, `uv run`, `$PYTHON`, a script fed to
+  `sh`, `python3 -c`) are left to Claude Code's permission layer. `away status`, `sandbox status`, a bare `unattended`,
+  the board commands, a bare `migrate` and
+  `status` pass. permission.py never auto-allows those forms from a subagent.
+  One rule holds in every repo, with or without `kit.json` and with the guard off:
   a `kit:verifier` subagent (that agent type only, not another plugin's verifier) may write a
   memory file (a `MEMORY.md` in any case, anything in an `agent-memory` folder) only inside
-  `<main checkout>/.claude/agent-memory/kit-verifier`, so its pitfalls outlive the worktree. The
+  `<main checkout>/.kit/agent-memory/kit-verifier`, so its pitfalls outlive the worktree. The
   rule reads redirections, tee, cp/mv/install/ln/rsync, dd, `sed -i`/`perl -i`/truncate and the
   code given to an interpreter; quoted text and here-document bodies are data, not writes.
 - `watchdog`: the thresholds of the stall watchdog (see [Stalls](#stalls)), in minutes; `0`
@@ -110,7 +139,10 @@ they created for their own items, never on the default branch or someone else's.
 blocks history rewrites by default, and `autoMode` is read from user settings only, so the kit
 offers this rule (with `attribution` off) once per machine at session start and merges it into
 the account's `settings.json` on yes (`~/.claude`, or `CLAUDE_CONFIG_DIR` for a second account on the same
-machine, each checked and set up on its own; `hooks/scripts/machine_setup.py`; `--decline` stops the offer):
+machine; `hooks/scripts/machine_setup.py`; `--decline` stops the offer). The answer is kept for the
+machine in `~/.claude/kit.json` (`machineSetup`), so after a yes a second account is set up at its
+next session start without the question, and Claude says so in one line; an account whose own
+`settings.json` sets a different `attribution` is asked instead:
 
 ```json
 {"autoMode": {"allow": ["$defaults", "On a branch an agent created for its own task (not the default branch, not one someone else pushed to), rewriting its commits (amend, rebase, setting the user's authorship) and pushing it with --force-with-lease"]}}
@@ -121,9 +153,54 @@ Also per project, committed: `CLAUDE.md` (the project's rules, which win over th
 that name before each commit), `.claude/loop.md` (what a bare `/loop` does for this project's
 PR: fix CI, answer reviews, sync with the base, reschedule itself while the PR is open; it never
 merges), `.claude/review-decisions.md`
-(findings you declined, so reviews don't raise them again). Gitignored: `.claude/evidence/`,
-`.claude/overnight/`, `.claude/lead/`, `.claude/kit.local.json` (the kit adds each to
-`.git/info/exclude` when it writes there and the project does not ignore it).
+(findings you declined, so reviews don't raise them again). Gitignored: `.claude/kit.local.json`
+and the kit's working state (the kit adds each to `.git/info/exclude` when it writes there and the
+project does not ignore it).
+
+### Working state: `.kit/`
+
+The kit's working state lives in `.kit/` at the root of the main checkout: `lead/` (the board,
+items, proposal cards) and `agent-memory/kit-verifier/`. `evidence/` and `overnight/` are per
+checkout: a thread saves its proof in its own worktree's `.kit/evidence/<branch>/`, and a run lives
+in the checkout it runs in. The gate's record is the exception: `gate.py` keeps it in the main
+checkout's `.kit/evidence/<branch>/gate-<name>.json`, so it outlives the worktree. The state used
+to live in `.claude/`, where Claude Code asks the owner before every write, so background threads
+waited on prompts nobody saw. Each entry is kept out of git by its own line (`/.kit/lead/`), never
+a blanket `/.kit/`. `kit.json`, `kit.local.json`, settings, skills, agents, `worktrees/`,
+`loop.md` and `review-decisions.md` stay in `.claude/`: the gate commands the kit runs unasked come
+from `kit.json`, so it stays behind the protected path. A kit.json `lead.board` inside
+`.claude/lead/` follows the folder (same name under `.kit/lead/`); one anywhere else stays as written.
+
+An older project moves at a session start when nothing is at work, and the session says so in one
+line (or, when an item is `working` or `landing` or an overnight run is live, why it waits, said
+once and again only when the reason changes). By
+hand: `python3 <kit>/hooks/scripts/migrate_state.py status|migrate|undo [--dry-run] [--force] [--again]`
+(`--force` moves anyway, for a thread that died and left `working`). Each entry moves on its own,
+one rename from `.claude/<entry>` to `.kit/<entry>` (across filesystems: copy, compare, delete),
+and the kit reads each entry from wherever it is, so a run that dies part-way loses nothing and the
+next session start carries on. The `/.kit/<entry>/` lines are added before anything moves, in one
+call, and the `/.claude/<entry>/` lines stay, so anything written to the old place later stays out
+of git too. Every exclude line the kit writes goes through one writer: it locks
+`.git/info/exclude.kit-lock` (waiting about two seconds, then giving up), appends only the missing
+lines and replaces the file, and never removes a line, so two session starts at once lose nothing.
+An entry in both places is left alone in both, the others move anyway, and the session start says
+so once (and again only if the set changes); a source another session already moved is not a
+conflict. `status` always lists them with both paths. What the session start said is kept in the
+git dir (`kit-migration-said.json`), not in the project. An entry tracked in git is not moved and
+gets no exclude line in either layout: the `git mv` to run is printed. An entry that is a symlink, or
+is reached through one (`.claude` itself, or a `.claude/agent-memory` that several checkouts
+share), is left where it is, gets no exclude line of its own
+and is said once; the other entries move anyway. When git cannot check a path, the exclude line is
+added anyway, and an entry whose line git still does not see stays put and is reported as not
+moved (`migrate` exits 1, `status` lists it to move). A `.kit` that is a symlink is not the kit's
+folder: that checkout stays on `.claude/`, nothing is written through the link (no log, no note),
+`/.kit` is excluded so the link stays out of `git status`, and the session start says so once. `undo` moves the known entries
+back and sets kit.local.json `lead.state` to `".claude"`; from then on the session start and a bare
+`migrate` (which runs unasked) leave them there, and the owner moves them again with
+`migrate --again`. A move leaves `.kit/migration.json` (a log of each run, merged under a lock,
+which `undo` does not read) and, only where `.claude/` still exists, `.claude/kit-state-moved.txt`. A `.kit.migrating/` left by the first version of the
+script is emptied into `.kit/` the same way.
+
 
 ### Auto mode environment, per repo
 
@@ -172,7 +249,22 @@ trusted, whatever it commits.
 - A new list starts with `"$defaults"` (`environment` supports it, as `allow` does), so the
   built-in entries stay current; a list without it is left that way, and a non-list
   `environment` is left alone with a one-line warning.
-- Writes happen under a lock (`kit-auto-mode.lock`, waited on for at most 2 seconds: a busy lock skips the sync at session start with one line, and `--set`/`--remove` store the block, exit 1 and leave it for the next session start), atomically, only when the result changes,
+- Writes go through the kit's one settings writer, `kitlib.update_settings`. It holds
+  a lock per file written, in the user's own lock folder (the system temp dir's `claude-kit-<uid>/`,
+  made with mode 0700, and tightened to 0700 when the user's own is looser, so a second user on a shared temp dir or a run as root does not block the
+  others; a folder of that name that belongs to another user ends the write in one line naming it,
+  with exit 1), named by a hash of the file's resolved path, which every kit write to that file
+  shares (writers with different `TMPDIR` values do not exclude each other, and the re-read under
+  the lock and the atomic replace still keep each change), so
+  nothing is written into the project or the config dir to lock and a symlinked settings file
+  leaves nothing in its target's folder (a `kit-settings.lock` an earlier version left beside a
+  file is removed at the next write of it), waiting at most 2 seconds (a busy lock skips the sync at session start with one line, and
+  `--set`/`--remove` store the block, exit 1 and leave it for the next session start). The owner's
+  commands that write settings (`items.py away on|off`, `sandbox on`, `unattended`,
+  `machine_setup.py --apply|--decline`) end a busy lock, or a folder that cannot be written such as
+  a read-only home, in one line saying what was not changed and what to do, with exit 1. It re-reads the file under the
+  lock, writes atomically only when the result changes, and replaces the target of a symlinked
+  settings.json, keeping its mode bits,
   after a backup to `settings.json.kit-auto-mode-backup`; the first backup ever is also kept as
   `settings.json.kit-auto-mode-backup.orig`. If another program writes settings.json during a
   rebuild, the rebuild starts again from that version. A settings file that is not valid JSON,
@@ -192,11 +284,11 @@ coordinator, its threads and the verifier (state in files you can `cat`, edit to
 resume from; the source of the idea is in CATALOG.md).
 
 ```
-.claude/lead/items/<id>/BRIEF.md     headed `ITEM: <id>`; the goal, DONE WHEN, scope; edit it to steer the next round
-.claude/lead/items/<id>/REPORT.md    the thread's final report (written by the SubagentStop hook, kit:implementer)
-.claude/lead/items/<id>/VERDICT.md   the verifier's report (SubagentStop, kit:verifier)
-.claude/lead/items/<id>/LOG.md       one line per event: queued, working, reported, verdict, review, done
-.claude/lead/items/done/<id>/        archived (a second item with the same id lands in done/<id>-2/)
+.kit/lead/items/<id>/BRIEF.md     headed `ITEM: <id>`; the goal, DONE WHEN, scope; edit it to steer the next round
+.kit/lead/items/<id>/REPORT.md    the thread's final report (written by the SubagentStop hook, kit:implementer)
+.kit/lead/items/<id>/VERDICT.md   the verifier's report (SubagentStop, kit:verifier)
+.kit/lead/items/<id>/LOG.md       one line per event: queued, working, reported, verdict, review, done
+.kit/lead/items/done/<id>/        archived (a second item with the same id lands in done/<id>-2/)
 ```
 
 ```bash
@@ -205,17 +297,24 @@ python3 <kit>/hooks/scripts/items.py list [--status queued]
 python3 <kit>/hooks/scripts/items.py log <id> <status> [note]
 python3 <kit>/hooks/scripts/items.py put <id> <file>...   # copy files into the item's out/ folder
 python3 <kit>/hooks/scripts/items.py show <id>
-python3 <kit>/hooks/scripts/items.py done <id>
-python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask|allow]
+python3 <kit>/hooks/scripts/items.py done <id> [--force]   # refuses an open or unmerged PR
+python3 <kit>/hooks/scripts/items.py status [--json]        # one read-only snapshot of the open items
+python3 <kit>/hooks/scripts/items.py conflicts [<id> ...]   # exit 0 clean, 1 conflict, 2 unknown
+python3 <kit>/hooks/scripts/worktrees.py [--json]           # classify linked worktrees, print a plan
+python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask] [--proposal]
 ```
 
 `unattended`: the owner's git preferences for unattended runs in this repo, in the main
-checkout's `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "ask", "rebase": "ask",
+checkout's `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "allow", "rebase": "allow",
 "merge": "ask"}}}`), which the command adds to `.git/info/exclude`: local to this machine and
 repo, never global, never committed. Without arguments it prints the brief line `UNATTENDED:
-push=ask rebase=ask merge=ask` and whether it is set; a missing, broken or misspelt value is
-`ask`. The coordinator asks only when an unattended run starts and nothing is set, saves the
-answer and briefs every thread of the run with that line ([unattended.md](../plugins/kit/skills/lead/unattended.md)).
+push=.. rebase=.. merge=..` and whether it is set; a missing, broken or misspelt value takes the
+default, push and rebase `allow` and merge `ask` (`kitlib.UNATTENDED_DEFAULTS`). The coordinator
+does not ask: it saves a choice only when the owner states one (push and rebase; `merge=allow` is
+refused, the owner merges and writes that value into the file himself), and briefs every thread of the run
+with that line ([unattended.md](../plugins/kit/skills/lead/unattended.md)). Until 2026-11 an unset
+step was `ask` and the coordinator asked before the first run; the owner gave the same answer
+each time, which is now the default.
 A thread does not run a step set to `ask` and hands back `needs push` (rebase, merge); `allow`
 runs it. The line carries the effective value, so a saved `allow` prints as `ask` with a note
 naming what to change. Claude Code checks deny, then ask, then allow rules, and the first match
@@ -231,7 +330,7 @@ the rules to add to `.claude/settings.local.json` (`Bash(git push:*)`, `Bash(git
 `Bash(gh pr merge:*)` and `Bash(git merge:*)`). A settings file that does not parse also keeps
 the step at `ask`. A deny rule refuses without a prompt, so one that refuses only some forms (a
 project that forbids force pushes) is named in the note and the step stays `allow`; one that
-refuses every form keeps it at `ask`. The command then prints a PROPOSAL, never applied by it: per
+refuses every form keeps it at `ask`. With `--proposal` the command also prints a PROPOSAL, never applied by it: per
 settings file, the ask rules to remove (never a deny rule) and the rules to add (to `settings.local.json`),
 a warning when a rule also matches other commands, whether the file is committed, and a diff. The
 coordinator applies it only when the owner asks, after an AskUserQuestion with the diff as a
@@ -260,18 +359,53 @@ files its report under the item (`reported | done, 2 decision(s), agent <id>` in
 the verifier finishes, its verdict (`verdict | FAIL scope=local:src/x.py, reviewed <sha>, agent
 <id>`; the sha is the branch head the verifier read, so a later push makes the verdict stale).
 The hook finds the item from the main checkout even when the thread stops inside its worktree
-(the default), where `.claude/lead/` does not exist. The report filed is the one the thread
+(the default), where `.kit/lead/` does not exist. The report filed is the one the thread
 handed back with SubagentHandback; its closing line is not the report. The lead reads BRIEF.md
 again before re-briefing (you may have edited it) and VERDICT.md; a `FAIL scope=local:<paths>`
 becomes a scoped fix sent to the thread, not a new brief. `DECISION:` lines in a report are the
 thread's judgment calls, shown to you once so you can veto them. `new` also appends a `queued`
 row to the board when one exists, so the status line and the coordinator see an item that
 `/kit:handoff` or `/kit:scout take` queued from another session; the session-start line says
-how many items wait on disk. `.claude/lead/` is added to `.git/info/exclude` when the project
+how many items wait on disk. `.kit/lead/` is added to `.git/info/exclude` when the project
 does not ignore it.
 
+The same hook writes a token ledger line before the report line: `cost | in=… out=… cache_read=…
+cache_write=… tools=… minutes=… agent=<id>`, read from the thread's transcript (each reply counted
+once by its message id, tools as distinct tool calls, minutes from the first to the last
+timestamp). Tokens only, no dollar figure, since prices change and differ by plan. A resumed
+thread writes a new line with its whole total, so `status` sums only the latest line per agent. A
+transcript without usage writes nothing and never fails the hook.
+
+`status` reads the item folders, not board.md, so it is right even when the board has drifted:
+per open item the id, kind, status, last event and its age, note, agent, branch and PR (from the
+LOG or the `BRANCH / PR:` line of REPORT.md) and summed cost; then counts per status and the
+board's NEEDS YOU line split into questions (only where a known item id starts the next
+`<id>:`, so a question with a colon in it stays whole). `--json` gives the same for a script.
+
+A brief line `DEPENDS: <id>[, <id>]` marks the item `blocked-by <id>` in `list` and `status`
+until that item is done (archived, or last logged `done`); an id that does not exist blocks too.
+
+`conflicts` checks each open item's branch (local, else `origin/`) against the default branch and
+every pair against each other with `git merge-tree --write-tree --name-only`, which touches no
+checkout, and prints the files in conflict. Without git 2.38 or a branch it says `unknown` and why.
+
+`done <id>` on an item whose LOG or report names a PR runs `gh pr view <n> --json state,mergedAt`
+and refuses an open or closed-unmerged PR; `--force` archives it anyway and says so. Without gh,
+or when the call fails or answers something unexpected, it prints "merge state unknown" and
+archives as before: it never calls a PR merged on an incomplete check. It does not check `gh auth
+status` first, since that is a network call of its own.
+
+`hooks/scripts/worktrees.py` lists every linked worktree (never the main checkout) as `merged`
+(nothing ahead of the default branch), `stale` (unmerged, no commit or file change for 7 days),
+`active` (uncommitted changes, one from the last hour), `dirty` (uncommitted, older), `conflict`,
+`ready` (merges cleanly) or `unknown` (folder gone, no default branch, merge not testable), with a
+plan: `remove` only for a merged worktree with nothing uncommitted, `salvage` (push or bundle the
+branch) for stale work, `keep` otherwise. It prints the commands and removes nothing. git runs
+with GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR and GIT_PREFIX cleared, so a run from
+inside a git hook reads this repository.
+
 `hooks/scripts/proposals.py`: candidate work found by read-only explorers (`/kit:scout`), one
-card per finding in `.claude/lead/proposals/<id>.md` (frontmatter: id, fingerprint, origin,
+card per finding in `.kit/lead/proposals/<id>.md` (frontmatter: id, fingerprint, origin,
 class, confidence, created, evidence; body: Suggestion, Rationale). The fingerprint is the
 sha256 of the normalized `origin|summary|rationale`, so a re-run never duplicates a card; a
 summary that is already an item is skipped, and so is anything that looks like a secret.
@@ -290,12 +424,17 @@ kit acts on:
 - **Effort per thread.** `kit:implementer` declares `effort: medium` (Opus 5.5's default): the
   level its threads run at whatever the session's, so an `xhigh` session does not spawn `xhigh`
   threads (and a `low` one still gets `medium` threads; since 2.1.317 a subagent on another
-  model falls back to that model's default anyway). The coordinator passes `effort` on the Agent
-  call: `low` for a brief with a checkable DONE WHEN, a small scope and its PLACES listed,
-  `medium` otherwise, `high` for ambiguous or architectural work; after a `FAIL` that is not
-  `scope=local`, or a `BLOCKED`, it re-dispatches one level higher, never past `high` without
-  asking (Sun et al. 2026: starting low and escalating on a verified failure matched or beat a
-  fixed top effort at lower cost). The call value overrides the frontmatter and stays in effect
+  model falls back to that model's default anyway). The coordinator passes effort and, for a small item, a model on the Agent
+  call (`skills/lead/fresh-eyes.md`, "Effort and model"): `medium` on the agent's own model by default,
+  which is where Anthropic's guidance for the current models starts (within a level the model decides
+  how much to think; it does not raise the level itself); `model: sonnet` at `medium` for a small item
+  with a checkable DONE WHEN and its PLACES listed (18 of 18 passes on three fixtures at about 40% of
+  the cost, 2026-11-13: a small sample of easy tasks, and the strongest model at `low` cost twice as
+  much with the one miss seen); `high` for a bug in existing code, a flaky test or a change that has
+  to find every caller, not for an ambiguous item, which gets a better brief instead. After a `FAIL`
+  that is not `scope=local`, or a `BLOCKED`, the brief is re-read first, an item on the smaller model
+  goes back to the agent's own, and effort goes to `high` once, when the defect was a missed edge
+  case or reader. A new level is a new thread: the call value overrides the frontmatter and stays in effect
   when the thread is resumed (sub-agents reference, Claude Code 2.1.292+); the values are `low`,
   `medium`, `high`, `xhigh`, `max`. Scouts run at `low`, `kit:verifier` at `medium` (declared in
   its frontmatter; it used to inherit the session's level). `CLAUDE_CODE_SUBAGENT_EFFORT`
@@ -325,14 +464,15 @@ python3 <kit>/hooks/scripts/gate.py check
 python3 <kit>/hooks/scripts/gate.py status [verify|check]  # does the last record cover the tree as it is now? (exit 0 / 1)
 ```
 
-The record, `.claude/evidence/<branch>/gate-<name>.json`, holds the command, exit code, duration,
+The record, `.kit/evidence/<branch>/gate-<name>.json`, holds the command, exit code, duration,
 the hash of the tree it ran on (committed and uncommitted content, ignored files left out, so a
 commit of the same content keeps the hash), whether the gate itself changed files (a formatter),
 and the last 25 lines of output: a gate that ran is a claim until something records what it ran
 on, and this is what the PR's Evidence section and the verifier cite. Nothing blocks on it.
 Threads and the verifier are told the exact command at start (SubagentStart) and `/kit:go` runs
 it in step 4. Run from a linked worktree, the record is written under the main checkout's
-`.claude/evidence/`, so it outlives the worktree. `.claude/evidence/` is added to
+`.kit/evidence/`, so it outlives the worktree; the thread's start-up line names that folder for
+its other proof too. `.kit/evidence/` is added to
 `.git/info/exclude` when the project does not ignore it. The Stop hook uses the same hash to know whether anything changed since its last
 passing check.
 
@@ -406,14 +546,15 @@ session that has not loaded it) each one still wakes the coordinator.
 
 `permission.py` (PermissionRequest, matcher Bash) allows, without a prompt, a command that is
 exactly kit.json `check` or `verify`, or the kit's own `gate.py`, `lessons.py`, `items.py`,
-`proposals.py` or `compact_logs.py` by their real path, unless the command changes a settings
+`proposals.py` or `compact_logs.py` by their real path, and `migrate_state.py status` or a bare
+`migrate_state.py migrate` (not `undo`, `--again`, `--force` or `--root`), unless the command changes a settings
 file (below). Nothing else is touched: the guard has already judged the
 command, and the permission system decides the rest. `/fewer-permission-prompts` (built in)
 writes a broader read-only allowlist to project settings if you want one.
 
 `.claude` is one of Claude Code's protected paths: a write inside it (mkdir, a redirection, Write, Edit) asks
 the owner in `default` and `acceptEdits`, goes to the classifier in `auto`, and no allow rule pre-approves it
-(only `.claude/worktrees/` is exempt). The kit keeps the board and the items under `.claude/lead/`, so its own
+(only `.claude/worktrees/` is exempt). The kit's working state is in `.kit/` for that reason (above); its own
 scripts write there (they run unasked, above) and a thread is told at start-up, when the project has items, to
 log with `items.py log` as a command on its own, to leave a file for the coordinator with `items.py put`
 (regular files, by name, into the item's `out/`; a symlink is never followed), and never to write in the main
@@ -423,7 +564,7 @@ An `ask` rule wins over every allow rule and over auto mode, in a compound comma
 settings scope (or the guard's `askCommands`) asks before a push, a rebase or a merge as the kit runs them, the
 start-up lines name the rules and their file (`kitlib.asking_rules`), tell Claude to run each such step once
 and never repeat one left waiting, and to tell the owner the cause at the first such prompt and ask once
-whether to change the rules, through `items.py unattended` and its PROPOSAL. The kit never changes them itself.
+whether to change the rules, through `items.py unattended --proposal`. The kit never changes them itself.
 
 `settings_guard.py` (PreToolUse: Write, Edit, MultiEdit, NotebookEdit, Bash, Monitor) answers
 `ask` in every permission mode for a change to a Claude Code settings file: `settings*.json` in
@@ -457,7 +598,7 @@ foreground to edit `~/.claude/settings.json`, gets `ask`. It never answers `allo
 kitlib missing included, answers `ask`. Limits: it reads shell text, so it does not see a name
 built at run time (from variables, a script's own code) or a command that rewrites the whole
 tree (`git checkout -- .`, `git stash`, `git reset --hard`); and `machine_setup.py --apply`
-(autoMode) and `/kit-safety` write settings without a tool call naming the file.
+(autoMode) and `items.py away on` / `sandbox on` write settings without a tool call naming the file.
 
 ## Lessons
 
@@ -468,6 +609,7 @@ config dir (`~/.claude` unless `CLAUDE_CONFIG_DIR` says otherwise):
 ~/.claude/kit-lessons/<slug>.jsonl        one lesson per line (id, kind, text, status, seen, misses, evidence)
 ~/.claude/kit-lessons/<slug>.events.jsonl raw captured events, capped
 ~/.claude/kit-lessons/<slug>.ops.jsonl    before-images of every change, for undo
+~/.claude/kit-lessons/<slug>.deliveries.jsonl  which thread was given which lessons, for scores
 ~/.claude/kit-lessons/_machine.jsonl      lessons that hold on this machine across repos
 ```
 
@@ -491,7 +633,7 @@ temp dir (`/tmp`, `/var/folders`, `$TMPDIR`; `KIT_TEMP_ROOTS` overrides the list
 tests and scratchpad probes teach nothing. Tests point `CLAUDE_CONFIG_DIR` at a temp dir.
 
 **Import**: at session start the kit imports, once and without touching the files, the
-kit:verifier memory index (`.claude/agent-memory/kit-verifier/MEMORY.md`) and your auto-memory
+kit:verifier memory index (`.kit/agent-memory/kit-verifier/MEMORY.md`) and your auto-memory
 `feedback_*` entries. A verifier pitfall about claude-kit itself (naming the kit's repo and one of its files) goes
 to claude-kit's ledger. Each imported lesson lists its source, so an entry is imported once; nothing is written
 inside the repo. Threads also run the import at start, so a memory written mid-session reaches the
@@ -499,8 +641,30 @@ next thread.
 
 **Delivery**: kit:implementer and kit:verifier get this repo's active lessons at start (the
 verifier minus its own memory, which it already reads), the main session gets gate and guard
-lessons after the gate lines. Most repeated and newest first; about 600 tokens for a thread,
-400 for the session. With an empty ledger the thread gets the memory index lines directly.
+lessons after the gate lines. Lessons seen in the last 30 days come first, then the most repeated
+and newest (being delivered does not count as being seen); about 600 tokens for a thread, 400 for
+the session. With an empty ledger the thread gets the memory index lines directly.
+
+**Scores**: each lesson counts its deliveries and its misses (seen again after it was delivered).
+`lessons.py wrong <id>` adds one to `harmful` and drops a keep; at 2 the distiller retires it.
+A lesson scores `helpful` when a thread it was delivered to ends with a kit:verifier PASS and the
+lesson was not seen again in between; each delivery scores once. Only a delivery that names its
+thread (`deliver(..., thread=agent_id)`) is matched to the verdict's agent id; the SubagentStart
+hook does not pass that id yet, so until it does `helpful` stays at 0.
+`lessons.py stats` lists deliveries, misses, the miss rate, helpful and harmful per lesson.
+
+**Between accounts**: with two Claude accounts (each its own config dir) the ledgers are separate.
+`lessons.py export FILE` writes the machine lessons, `--repo DIR` that repo's, as JSON lines for
+the other account. The text is rewritten first (the home folder becomes `~`, the exported repo's
+checkout becomes repo-relative, the account name goes); a lesson that still holds something
+secret-shaped, an absolute path, an email address or a name from this machine's ledgers (and, for
+machine lessons, a file name, path or env var) is skipped. It prints how many it wrote and skipped,
+by reason, never the skipped text. `lessons.py import FILE [--dry-run]` on the other account counts
+each line as one sighting: a new lesson starts as a candidate, except one active in the source's
+machine ledger, which stays active in this one; a repo line goes to the ledger of DIR. Each lesson
+keeps the exported id, so importing a file twice changes nothing and a lesson does not come back to
+the account it left; `undo <id>` reverses an import, and `--dry-run` lists what would be added,
+merged or ignored. Scores are not carried over.
 
 **Distiller** (`distill.py`): runs after a kit:verifier PASS that follows a FAIL on the same branch (the FAIL's
 problems become active lessons), at SessionEnd once 5 new events are pending (in the background),
@@ -542,13 +706,14 @@ timeout or an unclear answer the lesson stays local and is asked about on a late
 a generic rewording, promoted only when that passes the structural check too.
 
 **Upkeep**: from 14 days after the last review (the first session starts the clock) the session
-start adds one line, "the lesson review is due", at most once per 14 days (a declined review comes
-back a period later), and `/kit:learn` runs `lessons.py review --dry-run`, which changes nothing
+start adds one line, "the lesson review is due", at most once per 14 days, and the coordinator
+runs the review itself (`kit:learn` loads on its own; it asks the user only before changing a
+committed instruction file or `.claude/kit.json`, and a skipped review comes back a period later). It runs `lessons.py review --dry-run`, which changes nothing
 and previews the distiller's merges, retires and promotions on a throwaway copy of the ledgers (its
 rewords too when the model is allowed: that one call counts for the day and the review applies its
-answer; `--no-model` says rewords are skipped), then, once the user agrees, `lessons.py review`: it
+answer; `--no-model` says rewords are skipped), then `lessons.py review` (every change has an undo): it
 drops the ledgers of test and scratchpad repos and retires the machine lessons only they held
-(`prune`), retires lessons neither seen nor delivered for 90 days, then runs the distiller. Every
+(`prune`), retires lessons not seen for 90 days (delivered or not; a kept one stays), then runs the distiller. Every
 retire can be undone; a dropped ledger cannot. The dry run writes only metadata to `_repos.json`
 (`model_runs`, and `model_preview`, the answers the review applies), never a lesson; its judge
 verdicts are kept the same way, so the review promotes what it listed.
@@ -559,7 +724,10 @@ python3 <kit>/hooks/scripts/lessons.py render implementer|verifier|lead [DIR]
 python3 <kit>/hooks/scripts/lessons.py add pitfall KEY "one line" [DIR]
 python3 <kit>/hooks/scripts/lessons.py retire L4 [DIR]
 python3 <kit>/hooks/scripts/lessons.py undo L4 [DIR]
+python3 <kit>/hooks/scripts/lessons.py wrong L4 [DIR]
 python3 <kit>/hooks/scripts/lessons.py stats [DIR]
+python3 <kit>/hooks/scripts/lessons.py export [--machine | --repo DIR] [FILE|-]
+python3 <kit>/hooks/scripts/lessons.py import FILE|- [--dry-run] [DIR]
 python3 <kit>/hooks/scripts/lessons.py news [DIR]
 python3 <kit>/hooks/scripts/lessons.py distill [--no-model] [DIR]
 python3 <kit>/hooks/scripts/lessons.py review [--dry-run] [--no-model] [DIR]
@@ -569,27 +737,32 @@ python3 <kit>/hooks/scripts/lessons.py promoted ID VERSION PR_URL [DIR]
 git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
 ```
 
-## Modes and the status line
+## Routing and the status line
 
-- **Light**: a normal session. `/kit:lead <work>` starts the coordinator when you want it.
-- **Loop**: every message you type (terminal or Remote Control) gets one line of context sending
-  it to the coordinator; headless runs, scheduled prompts and notifications never do. `/kit-mode
-  loop|light|ask`. Without a choice for the project, the personal default in
-  `~/.claude/kit.json` (`{"mode": "light"}` or `"loop"`) applies, else loop in a project with
-  `.claude/kit.json` and light elsewhere.
-- **Ask**: a discussion about the repository. Every typed message gets one line of context:
-  explore, explain, reason and propose; change no code; documentation (Markdown, `docs/`) may be
-  edited when you ask; offer `/kit:handoff` when something worth doing emerges. It is an
-  instruction, not a block: the guard keeps protecting the irreversible things, nothing else is
-  refused. `/kit:handoff [lead | session <name> | bg | save | card]` writes the brief
+- **One mode**: in a project with `.claude/kit.json`, session start (and the start after a
+  compaction) prints one line that makes the session the coordinator: every message is handled with
+  `kit:lead`, which answers a question in place, makes a small change itself and starts background
+  threads for the rest. It is a hook, not the mod, so it works in a cloud session and over Remote
+  Control as well. Not printed in a headless run (`KIT_HEADLESS`), in a subagent, or when
+  `~/.claude/kit.json` says `{"mode": "light"}` (the personal off switch: a normal session, with
+  `/kit:lead <work>` when you want the coordinator). Until 2026-11 the mod added this line per
+  prompt in a "loop" mode and had light and ask modes beside it; they were removed because the
+  routing must not depend on the mod loading.
+- **Skills that load on their own**: the coordinator loads `kit:go` (a change is ready to ship, or
+  "finish it"), `kit:learn` (the review is due, or "what has the kit learned?"), `kit:intake`
+  (adopting or trying an outside tool) and `kit:scout` ("what should we work on?") from what you
+  say, so nothing needs a slash command from a phone. `/kit:init` and `/kit:handoff` run only when
+  typed. Until 2026-11 all six were typed only.
+- **Discussion and handoff**: to think a change through first, say so; nothing changes until you
+  ask. `/kit:handoff [lead | session <name> | bg | save | card]` writes the brief
   (`kit:shape`'s format plus PLACES and DECISIONS), saves it as an item
-  (`.claude/lead/items/<id>/BRIEF.md`) and sends it: to this session's coordinator (queued; it
-  starts at the next message in loop mode), to another open session on this machine
+  (`.kit/lead/items/<id>/BRIEF.md`) and sends it: to this session's coordinator (queued and
+  started), to another open session on this machine
   (cross-session `SendMessage`; it arrives as a message from a peer and that session confirms with
   you first; the receiving session's `crossSessionInbound` setting must accept), to a new
   background session (`claude --bg --name <id>`, then `claude attach <id>` or `claude agents`),
   or nowhere (`save`); `card` makes a proposal card instead, for an idea with no checkable done.
-- **Board** (`.claude/lead/board.md`):
+- **Board** (`.kit/lead/board.md`):
 
   ```
   SHIP: pr | MERGE: user | PARALLEL: 3 | BUDGET: none
@@ -604,33 +777,72 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
   (`working` and `landing`; without a board, the engine's `N running`), `queued 3`. It shows two
   ids and then `+n`, re-reads the board every 15 seconds (a Markdown table, a capitalised status, a
   dropped cell or a `;` inside a question read the same), and adds `N waiting on a prompt` for
-  threads stopped on a question or a permission (the engine's agent list). When a tick finds an id
-  newly ready or newly needing you, the mod sends one native notification naming it, with its
-  question (`$.ui.notify`, Claude Code 2.1.295+; silently skipped where the engine lacks it), unless you
-  were active in the terminal within the last minute; in loop mode the coordinator is told the
-  mod notifies, so you get one notice per event, not two. A prompt that arrives over Remote Control
-  says the opposite for as long as you are remote: on a phone neither the line nor that notification
-  shows, so the coordinator sends one PushNotification itself when an item becomes ready or needs you.
-- **Safety**: `/kit-safety host|sandbox`. Sandbox writes the kit's block into
-  `.claude/settings.local.json`; check it with `/sandbox`, add hosts under
-  `sandbox.network.allowedDomains`. Where the sandbox can't start, commands run unsandboxed with
-  a warning rather than all failing. `/kit-safety unattended on|off` (Claude Code 2.1.319) writes
-  `permissions.denyInsteadOfPrompting` into the same file: a tool call that would wait on a
-  permission prompt is denied and the turn goes on, in this session and its threads. For an
-  evening nobody will watch; off by default, since a denied action lowers a thread's chances
-  silently; the status line shows `unattended` while it is on, so a forgotten switch is visible
-  the next morning. `permissions.blockWritesOutsideWorkingDirectories` (2.1.314) is not for a kit
-  project: it refuses a thread's edits in another repo and removes the worktree tools.
+  threads stopped on a question or a permission (the engine's agent list). It starts with `sandbox`
+  and `away` while those are on (the merged settings), then the session's cost. The coordinator sends
+  one PushNotification when an item becomes ready or needs you and when an unattended run ends
+  (it reaches the phone over Remote Control); the mod sends none of its own for board changes.
+- **Safety**, in plain words to the coordinator, which runs `items.py`:
+  - "I'm going to sleep" (or leaving for the evening): `items.py away on` sets Claude Code's
+    `permissions.denyInsteadOfPrompting` (2.1.319) in the account's own `settings.json` (backup
+    `settings.json.kit-away-backup`, other keys kept, a file that does not parse left alone): a
+    tool call that would wait on a permission prompt is denied and the turn goes on. The kit notes
+    that it set it (`kit-away.json` beside settings.json: the time, the file and a hash of the
+    value written). You are back when you write: the coordinator runs `away off` at your next
+    message, before anything else, and the next interactive session start (not a headless run,
+    not a compaction) does it too. While it is on, the coordinator line at a session start, after a
+    compaction or a `/clear` says since when, and `away status` does too. The key counts as the
+    kit's only while the marker matches it: a marker whose key you removed is dropped the first time
+    the kit reads the state, and a value you set yourself is never removed. The status line shows
+    `away` while it is on.
+  - "Use the sandbox": `items.py sandbox on` writes the kit's block into
+    `.claude/settings.local.json` (a block of your own is left alone): the registries' and GitHub's
+    hosts, no read of `~/.aws`, `~/.docker`, `~/.kube`, `~/.gnupg`, `~/.ssh`, `~/.config/gh` and
+    `~/.netrc`, Bash without a prompt inside it (`autoAllowBashIfSandboxed`), and `git push`, `fetch`
+    and `pull` (bare and with arguments) outside it, so they keep their credentials while a command
+    inside cannot read them. Check it with `/sandbox`; add hosts under `sandbox.network.allowedDomains`. Where
+    the sandbox can't start, commands run unsandboxed with a warning rather than all failing. The
+    status line shows `sandbox` while it is on. Unless git tracks or ignores that file, it also gets
+    `/.claude/settings.local.json` in `.git/info/exclude`, so the tree stays clean for an overnight
+    run. `sandbox off` changes nothing and prints the edit: loosening a setting is yours to approve.
+  - `permissions.blockWritesOutsideWorkingDirectories` (2.1.314) is not for a kit project: it
+    refuses a thread's edits in another repo and removes the worktree tools.
 
-The mod needs Claude Code with mods (2.1.287+). Without it, the skills and hooks still work; use
-`/kit:lead` directly instead of loop mode.
+The mod needs Claude Code with mods (2.1.287+). Without it, the skills, hooks and the routing
+line still work; only the status line, the watchdog and the interim-notice drop are missing.
 
 ## Overnight runner
 
 ```
 python3 <kit>/skills/overnight/scripts/overnight.py "<objective>" --stop-when "<condition>" \
-  --worktree ../app-overnight --max-iterations 40 --max-usd 25 --effort medium [--fallback-model sonnet] [--max-turns 60]
+  --worktree ../app-overnight --max-iterations 40 --max-usd 25 --effort medium [--fallback-model sonnet] [--max-turns 60] \
+  [--push] [--detach] [--no-caps]
 ```
+
+The coordinator starts a night itself, without an OK round or a budget question: `items.py away
+on`, then the runner with 40 iterations and USD 25 unless the owner named other caps (or none),
+stated in its reply. `--detach` starts the runner again in its own process session (setsid),
+with its output in `.kit/overnight/launch/<time>-<pid>.log`, and returns within about 5 seconds
+with the pid and the log path; a run that stops in that time (a dirty tree, a bad flag) prints its
+log and exit code instead. It is not a Bash `run_in_background` command, which ends with the
+session, and the guard's wait rule does not apply to it. `--push`: when the run ends with commits,
+the runner pushes its branch to `origin` once (`git push -u`), so the morning result can be read
+from a phone; `end-state.json` `pushed` says what happened, and a failed push never fails the run.
+With `push=ask` under `lead.unattended` in the main checkout's `.claude/kit.local.json`, read when
+the run ends, it does not push: `pushed` and `notes.md` say the branch stayed local, with the
+command to push it. A `--detach` run given no caps takes `--max-iterations 40 --max-usd 25` and
+prints that line; `--no-caps` runs it without. The runner refuses a `--branch` the guard protects
+(`guard.protectedBranches` in `.claude/kit.json`, else in `~/.claude/kit.json`, else `main` and
+`master`, plus `origin`'s default branch), since a run commits on a branch of its own.
+A detached run that ends appends one line (run, stop reason, iterations, spend, branch, pushed) to
+`untold.jsonl` in its runs folder, under an exclusive `flock` on that file; the next interactive
+session start in the project (a compaction too, not a headless run or a subagent) takes the same
+lock, says each such line once and cuts it from the file in place, and `items.py status` lists them
+without removing them. A start says at most five runs and sums up the rest in one line ("and N
+more"); those stay in the file for status and the next start. A run whose `state.json` has no
+`stop_reason` while its recorded `pid` is no longer a runner (it died with its container; without
+`/proc`, `ps` names the process) is said once the same way; the kit remembers it in
+`overnight/told.json` of the main checkout and leaves the run's own files alone. A record of the
+wrong shape is said with `?` for the fields it lacks.
 
 Each iteration runs `claude -p` in permission mode `auto` unless `--permission-mode` says
 otherwise, with `--permission-prompts none` (a headless session cannot answer a prompt: anything
@@ -652,7 +864,7 @@ commits it, or resets. It stops on the stop condition, a cap, a `blocked` report
 iterations in a row (no change counts as a failure). Every iteration's system prompt says nobody
 is there to answer; an iteration that reports progress without a change is resumed in the same
 session up to `--max-continuations` times (default 2). Rate limits are waited out. Run files:
-`.claude/overnight/<run>/` (`objective.md`, `notes.md`, `log.jsonl`, `state.json`,
+`.kit/overnight/<run>/` of the checkout it ran in (`objective.md`, `notes.md`, `log.jsonl`, `state.json`,
 `end-state.json`); `--resume <run dir>` continues a stopped run.
 
 ## Cloud sessions
@@ -665,7 +877,7 @@ offer is skipped where `CLAUDE_CODE_REMOTE=true`). With it, the gates, the guard
 items and the threads work as on your machine. Two things differ. The lesson ledger lives under
 `~/.claude`, which a container starts empty and loses at the end: cloud threads get no lessons
 and leave none (the ledger is per machine; a `/kit:learn promote` from your Mac is what carries a
-lesson across). And `.claude/lead/` is gitignored, so a cloud session and your Mac never see
+lesson across). And `.kit/` is kept out of git, so a cloud session and your Mac never see
 each other's board, items, evidence or proposal cards; two leads on one checkout both rewrite
 the board whole, last writer wins, while LOG appends and `done` are safe. The kit reads
 `CLAUDE_CODE_SESSION_ATTENDED=1` as "someone is at the keyboard" whatever the entrypoint, so an
@@ -686,7 +898,7 @@ makes it the kit's gate for the kit.
 The self-checks one by one (no tokens):
 
 ```bash
-python3 tests/test_budget.py
+python3 tests/test_budget.py                 # text budgets, calm words, hooks.json script paths, no personal paths or hidden Unicode
 python3 plugins/kit/hooks/tests/test_guard.py
 python3 plugins/kit/hooks/tests/test_gate.py
 python3 plugins/kit/hooks/tests/test_stop_check.py
@@ -729,7 +941,7 @@ same model.
 | kit | `lead-verifies-before-done` | a small goal ends with a checkable done and evidence from running it |
 | kit | `verifier-catches-bug` | a claimed-done change with a planted bug is rejected |
 | kit | `go-reports-risk-and-evidence` | `/kit:go` reports intent, evidence from running the CLI, a risk rating |
-| kit | `overnight-sets-budget` | an overnight request reaches `kit:overnight` with a gate, a stop condition and a budget choice |
+| kit | `overnight-sets-budget` | an overnight request reaches `kit:overnight` with a gate, a stop condition and stated caps |
 | kit | `investigate-asks-for-evidence` | console-only production logs: one batched request for failing and working exports |
 | kit | `investigate-logs-root-cause` | the fix lands where the bad data enters, with a regression test |
 | kit | `offers-domain-plugin` | a UI request in a project without kit-ui reaches `kit:extras` |

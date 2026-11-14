@@ -459,10 +459,19 @@ def test_upkeep():
             for r in state["rows"]:
                 r["last"] = r["created"] = old
                 r["last_delivered"] = lessons.today()
-        assert not lessons.idle(lessons.repo(a)["slug"]), "a lesson still delivered is not idle"
+        idle = lessons.idle(lessons.repo(a)["slug"])
+        assert idle and all(x.startswith("would retire") for x in idle), \
+            "a lesson delivered every day but not seen for IDLE_DAYS is proposed for retiring"
+        with lessons.change(lessons.repo(a)["slug"], log=False) as state:
+            for r in state["rows"]:
+                r["kept"] = lessons.today()
+        assert not lessons.idle(lessons.repo(a)["slug"]), "a lesson the user kept is not idle"
+        assert lessons.rank({"id": "L1", "seen": 9, "last": old, "last_delivered": lessons.today()}) < \
+            lessons.rank({"id": "L2", "seen": 1, "last": lessons.today()}), "seen lately beats only delivered"
         assert lessons.review_due(a) == "", "the first session starts the clock"
         lessons.register(lessons.repo(a), reviewed_ts=time.time() - (lessons.REVIEW_DAYS + 1) * 86400)
-        assert "lesson review for this repo is due" in lessons.review_due(a)
+        due = lessons.review_due(a)
+        assert "lesson review for this repo is due" in due and "review yourself" in due and "suggest" not in due, due
         assert lessons.review_due(a) == "", "the due line shows once per period; a declined review snoozes"
         slug = lessons.repo(a)["slug"]
         for key, text in (("t1", "run the integration tests with a fresh database before pushing"),
@@ -478,9 +487,117 @@ def test_upkeep():
         os.environ.pop("KIT_TEMP_ROOTS", None)
 
 
+def test_portable():
+    """Two accounts on one machine, each its own ledger dir: export from one, import into the other."""
+    one, two = TMP / "account-one", TMP / "account-two"
+    os.environ["KIT_LESSONS_DIR"] = str(one)
+    try:
+        src = make_repo("portable", "https://example.com/acme/portable.git")
+        info = lessons.repo(src)
+        lessons.register(info)
+        m = lessons.MACHINE
+        kept = lessons.observe(m, "rebase-first", "recipe", "rebase on the default branch before the gate", "user",
+                               activate_at=1)
+        lessons.observe(m, "dev-server", "pitfall", "wait for the dev server before loading the page", "gate")
+        lessons.observe(m, "seed", "recipe", f"run {src}/scripts/seed.sh first", "user", activate_at=1)
+        lessons.observe(m, "vpn", "pitfall", "the acme staging box needs the VPN", "user", activate_at=1)
+        lessons.append_row(lessons.file_of(m), {"id": "M9", "key": "pw", "kind": "recipe", "status": "active",
+                                                 "text": "set DB_PASS=Sup3rS3cret! before running"})
+        out_file = TMP / "lessons-export.jsonl"
+        out = subprocess.run([sys.executable, str(SCRIPTS / "lessons.py"), "export", str(out_file)],
+                             capture_output=True, text=True, timeout=60, env=dict(os.environ))
+        assert "exported 2, skipped 3" in out.stdout and "secret-shaped text" in out.stdout \
+            and "a path on this machine" in out.stdout and "names a repo or its setup" in out.stdout, out.stdout
+        assert "Sup3r" not in out.stdout + out_file.read_text() and str(src) not in out_file.read_text(), \
+            "what is skipped is counted, never echoed"
+        exported = [json.loads(x) for x in out_file.read_text().splitlines()]
+        assert {e["key"] for e in exported} == {"rebase-first", "dev-server"}, exported
+
+        lessons.observe(info["slug"], "seed", "recipe", f"run {src}/scripts/seed.sh before the tests", "user",
+                        activate_at=1)
+        repo_rows, skipped = lessons.export(info)
+        assert [r["text"] for r in repo_rows] == ["run scripts/seed.sh before the tests"] and not skipped, \
+            "a repo export makes the checkout's paths repo-relative"
+
+        os.environ["KIT_LESSONS_DIR"] = str(two)
+        dest = make_repo("portable-two", "https://example.com/acme/portable.git")
+        dry = subprocess.run([sys.executable, str(SCRIPTS / "lessons.py"), "import", str(out_file), "--dry-run",
+                              str(dest)], capture_output=True, text=True, timeout=60, env=dict(os.environ))
+        assert dry.stdout.count("would add:") == 2 and "would add 2, merge 0, ignore 0" in dry.stdout, dry.stdout
+        assert not lessons.file_of(m).exists(), "a dry run changes nothing"
+        assert lessons.main(["import", str(out_file), str(dest)]) == 0
+        here = {r["key"]: r for r in lessons.read_rows(lessons.file_of(m))}
+        assert here["rebase-first"]["status"] == "active" and here["dev-server"]["status"] == "candidate", \
+            "active in the source's machine ledger stays active; the rest start as candidates"
+        text = lessons.deliver(dest, "implementer", 2400)
+        assert "(all repos) rebase on the default branch" in text and "dev server" not in text, text
+        before = lessons.file_of(m).read_bytes()
+        assert lessons.main(["import", str(out_file), str(dest)]) == 0
+        assert lessons.file_of(m).read_bytes() == before, "importing twice changes nothing"
+        plan = lessons.import_plan([json.loads(x) for x in out_file.read_text().splitlines()], lessons.repo(dest))
+        assert [a for _, _, a, _ in plan] == ["ignore", "ignore"] and plan[0][3] == "already imported", plan
+
+        rebase = here["rebase-first"]["id"]
+        assert lessons.main(["undo", rebase, str(dest)]) == 0
+        assert not any(r["key"] == "rebase-first" for r in lessons.read_rows(lessons.file_of(m))), "undo reverses it"
+        lessons.import_rows(exported, lessons.repo(dest))
+        assert any(r["key"] == "rebase-first" for r in lessons.read_rows(lessons.file_of(m))), "and it can come back"
+
+        lessons.import_rows(repo_rows, lessons.repo(dest))
+        seed = next(r for r in rows(dest) if r["key"] == "seed")
+        assert seed["status"] == "candidate" and seed["text"] == "run scripts/seed.sh before the tests", seed
+
+        back, _ = lessons.export()
+        os.environ["KIT_LESSONS_DIR"] = str(one)
+        plan = lessons.import_plan(back, info)
+        assert {d for _, _, _, d in plan} == {"came from this account"}, plan
+        assert kept
+    finally:
+        os.environ.pop("KIT_LESSONS_DIR", None)
+
+
+def test_scores():
+    repo = make_repo("scores", "https://example.com/acme/scores.git")
+    slug = lessons.repo(repo)["slug"]
+    good = lessons.observe(slug, "good", "pitfall", "check the empty state too", "user", agents=("verifier",),
+                           activate_at=1)
+    again = lessons.observe(slug, "again", "pitfall", "check the dark theme too", "user", agents=("verifier",),
+                            activate_at=1)
+    assert "check the empty state" in lessons.deliver(repo, "verifier", 2400, thread="v7")
+    lessons.capture(repo, "verifier-fail", "again", "check the dark theme too", ref="v7")
+
+    def passed(agent, report):
+        path = TMP / f"{agent}-scores.jsonl"
+        path.write_text(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use",
+                        "name": "SubagentHandback", "input": {"message": f"VERDICT: PASS\n\nEVIDENCE:\n- {report}\n"}}]}})
+                        + "\n")
+        hook("subagent_stop.py", {"cwd": str(repo), "agent_type": "kit:verifier", "agent_id": agent,
+                                  "agent_transcript_path": str(path), "last_assistant_message": "done"})
+    passed("v7", "gate ok")
+    by_id = {r["id"]: r for r in rows(repo)}
+    assert by_id[good]["helpful"] == 1 and by_id[again]["helpful"] == 0, \
+        "a PASS scores the lessons its thread was given, not one repeated meanwhile"
+    passed("v7", "gate ok again")
+    assert {r["id"]: r for r in rows(repo)}[good]["helpful"] == 1, "a delivery scores once"
+    per = {p["id"]: p for p in lessons.stats(lessons.repo(repo))["per_lesson"]}
+    assert per[again]["deliveries"] == 1 and per[again]["misses"] == 1 and per[again]["miss_rate"] == 1.0, per
+
+    with lessons.change(slug, log=False) as state:
+        for r in state["rows"]:
+            if r["id"] == good:
+                r["kept"] = lessons.today()  # the user had brought it back once
+    assert lessons.main(["wrong", good, str(repo)]) == 0
+    assert lessons.main(["undo", good, str(repo)]) == 0 and \
+        {r["id"]: r for r in rows(repo)}[good]["harmful"] == 0, "wrong can be undone"
+    for _ in range(2):
+        assert lessons.main(["wrong", good, str(repo)]) == 0
+    distill.distill(repo, False)
+    assert {r["id"]: r for r in rows(repo)}[good]["status"] == "retired", "wrong twice: the distiller retires it"
+
+
 def main():
     for test in (test_ledger, test_import, test_capture, test_delivery, test_fail_then_pass, test_distill,
-                 test_model_pass, test_judge, test_promotion, test_upkeep):
+                 test_model_pass, test_judge, test_promotion, test_upkeep, test_portable, test_scores):
         test()
     print("lessons: all checks passed")
 

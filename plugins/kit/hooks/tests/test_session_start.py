@@ -33,7 +33,7 @@ def main():
         (repo / ".claude" / "lead").mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
 
-        assert run({"cwd": str(repo), "source": "startup"}) == "", "no kit.json, no board: silent"
+        assert run({"cwd": str(repo), "source": "startup"}) == "", "no kit.json, no board: silent, no coordinator"
 
         board = "SHIP: pr | PARALLEL: 3 | BUDGET: none\nA1 | ship | login | DONE WHEN e2e | working | agent A1 | feat/login | -\n"
         (repo / ".claude" / "lead" / "board.md").write_text(board)
@@ -109,11 +109,64 @@ def main():
         subprocess.run([sys.executable, str(script), "--apply"], env={**os.environ, "HOME": str(fresh)},
                        capture_output=True, check=True)
         assert "Kit setup" not in run({"cwd": str(repo), "source": "startup"}, home=fresh, **local), "applied: silent"
+        second = Path(tmp) / "second-account"  # another CLAUDE_CONFIG_DIR on the machine that said yes
+        out = run({"cwd": str(repo), "source": "startup"}, home=fresh, CLAUDE_CONFIG_DIR=str(second), **local)
+        assert "kit: applied the kit's machine settings" in out and "Kit setup" not in out, out
+        assert json.loads((second / "settings.json").read_text())["attribution"]["commit"] == "", "written"
+        assert "applied the kit" not in run({"cwd": str(repo), "source": "startup"}, home=fresh,
+                                            CLAUDE_CONFIG_DIR=str(second), **local), "said once"
 
         # a kit.json that exists is the opt-in, even `{}`: the header line always prints
         (repo / ".claude" / "kit.json").write_text("{}")
         out = run({"cwd": str(repo), "source": "startup"})
-        assert out.strip() == "kit harness active for this project (.claude/kit.json):", out
+        # this project's legacy board still has A1 working, so its state waits in .claude/; why was
+        # said at an earlier start in this repo, and is not said again while the reason is the same
+        coordinator, *waiting, header = out.strip().splitlines()
+        assert header == "kit harness active for this project (.claude/kit.json):", out
+        assert waiting == [], out
+        # the coordinator line: on every interactive start and after a compaction, routed without the mod
+        assert coordinator.startswith("kit: this session coordinates this project") and "kit:lead" in coordinator, out
+        assert "PushNotification" in coordinator and "none for progress" in coordinator, coordinator
+        assert coordinator in run({"cwd": str(repo), "source": "compact"}).splitlines(), "back after a compaction"
+        assert coordinator in run({"cwd": str(repo), "source": "resume"}).splitlines()
+        assert "coordinates" not in run({"cwd": str(repo), "source": "startup"}, KIT_HEADLESS="1"), "not headless"
+        assert "coordinates" not in run({"cwd": str(repo), "source": "startup", "agent_id": "a1"}), "not a subagent"
+        light = Path(tmp) / "light-home"
+        (light / ".claude").mkdir(parents=True)
+        (light / ".claude" / "kit.json").write_text(json.dumps({"machineSetup": "declined", "mode": "Light"}))
+        out = run({"cwd": str(repo), "source": "startup"}, home=light)
+        assert "coordinates" not in out and "kit harness active" in out, "the personal light mode is the off switch"
+        assert "coordinates" not in run({"cwd": str(repo), "source": "compact"}, home=light)
+
+        # a long-lived session with away on: after a compaction or a /clear the coordinator line is
+        # followed by one saying since when, and that the coordinator turns it off when the user writes
+        away = Path(tmp) / "away-home"
+        (away / ".claude").mkdir(parents=True)
+        (away / ".claude" / "kit.json").write_text(json.dumps({"machineSetup": "declined"}))
+        (away / ".claude" / "settings.json").write_text(json.dumps({"model": "opus"}))
+        items = SCRIPT.parent / "items.py"
+        env = {**os.environ, "HOME": str(away), "CLAUDE_CONFIG_DIR": str(away / ".claude")}
+        on = subprocess.run([sys.executable, str(items), "away", "on"], cwd=str(repo), env=env,
+                            capture_output=True, text=True)
+        assert on.returncode == 0 and on.stdout.strip().splitlines()[-1].startswith("The owner is back when he writes"), on.stdout
+        for source in ("compact", "clear"):
+            lines = run({"cwd": str(repo), "source": source}, home=away).splitlines()
+            at = [i for i, line in enumerate(lines) if line.startswith("kit: away is on since ")]
+            assert at and lines[at[0] - 1] == coordinator, (source, lines)
+            assert lines[at[0]].endswith(": turn it off with `I away off` when the user writes."), lines[at[0]]
+        assert "away is on" not in run({"cwd": str(repo), "source": "compact", "agent_id": "a1"}, home=away), \
+            "a thread is not the one to turn it off"
+        out = run({"cwd": str(repo), "source": "startup"}, home=away)
+        assert "away is off again" in out and "away is on since" not in out, out
+        assert "away is on" not in run({"cwd": str(repo), "source": "compact"}, home=away), "off: no line"
+        # an account whose settings.json is not JSON: one line, and the file is left as it is
+        (away / ".claude" / "settings.json").write_text("{bad")
+        out = run({"cwd": str(repo), "source": "startup"}, home=away, CLAUDE_CODE_REMOTE="")
+        assert "kit: declined" not in out and "not valid JSON" not in out, "declined on this machine: silent"
+        (away / ".claude" / "kit.json").write_text("{}")
+        out = run({"cwd": str(repo), "source": "startup"}, home=away, CLAUDE_CODE_REMOTE="")
+        assert out.count("not valid JSON") == 1 and "left alone" in out and "Kit setup" not in out, out
+        assert (away / ".claude" / "settings.json").read_text() == "{bad"
         # a typo is named with the closest known key, at the top level and inside a section
         (repo / ".claude" / "kit.json").write_text(json.dumps({"chek": "make lint", "verfy": "make test",
                                                                "lead": {"baord": "docs/b.md", "notes": "n"},
@@ -181,7 +234,225 @@ def main():
         (repo / ".claude" / "kit.json").write_text("{broken")
         out = run({"cwd": str(repo), "source": "startup"})
         assert "cannot read" in out, "a broken kit.json is reported, not ignored"
+
+    # an older project's state leaves .claude/ at a session start, unless a thread is at work
+    with tempfile.TemporaryDirectory() as tmp:
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.org"]
+        repo = Path(tmp) / "old"
+        (repo / ".claude" / "lead" / "items" / "A1").mkdir(parents=True)
+        (repo / ".claude" / "evidence" / "main").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / ".claude" / "kit.json").write_text("{}")
+        (repo / ".claude" / "lead" / "board.md").write_text("A1 | ship | a | DONE WHEN x | queued | - | - | -\n")
+        log = repo / ".claude" / "lead" / "items" / "A1" / "LOG.md"
+        log.write_text("- 2026-11-01 10:00 | working | feat/a\n")
+        (repo / ".claude" / "evidence" / "main" / "gate-verify.json").write_text("{}")
+        (repo / ".git" / "info" / "exclude").write_text("/.claude/lead/\n/.claude/evidence/\n")
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert "waits to move from .claude/ to .kit/ (item A1 is working" in out and "stays in" not in out, out
+        assert (repo / ".claude" / "lead" / "board.md").exists() and not (repo / ".kit").exists(), "nothing moved"
+        assert "waits to move" not in run({"cwd": str(repo), "source": "startup"}), "said once while the reason stays"
+        (repo / ".claude" / "lead" / "board.md").write_text("A1 | ship | a | DONE WHEN x | queued | - | - | -\n"
+                                                            "A2 | ship | b | DONE WHEN y | landing | - | - | -\n")
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert "waits to move" in out and "board row A2 is landing" in out, f"a new reason is said: {out}"
+        (repo / ".claude" / "lead" / "board.md").write_text("A1 | ship | a | DONE WHEN x | queued | - | - | -\n")
+        assert not (repo / ".kit").exists(), "saying it wrote nothing into the project"
+        assert "moved this project" not in run({"cwd": str(repo), "source": "compact"}), "never mid-session"
+        log.write_text(log.read_text() + "- 2026-11-01 11:00 | done | merged\n")
+        out = run({"cwd": str(repo), "source": "startup"})
+        moved = [l for l in out.splitlines() if "moved this project's kit state" in l]
+        assert len(moved) == 1 and "(evidence, lead) from .claude/ to .kit/" in moved[0] and "undo" in moved[0], out
+        assert (repo / ".kit" / "lead" / "board.md").exists() and not (repo / ".claude" / "lead").exists(), "moved"
+        assert "/.kit/lead/" in (repo / ".git" / "info" / "exclude").read_text()
+        status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"], capture_output=True, text=True).stdout
+        assert status == "?? .claude/\n", f"only kit.json, which was never excluded, shows: {status!r}"
+        assert "kit state" not in run({"cwd": str(repo), "source": "startup"}), "once moved, silent"
+        # a tracked entry is never moved for the owner: the command to run is printed instead
+        (repo / ".claude" / "overnight" / "r1").mkdir(parents=True)
+        (repo / ".claude" / "overnight" / "r1" / "end-state.json").write_text("{}")
+        subprocess.run(git + ["-C", str(repo), "add", "-f", ".claude/overnight"], check=True)
+        subprocess.run(git + ["-C", str(repo), "commit", "-qm", "runs"], check=True)
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert "run `git mv .claude/overnight .kit/overnight` and commit" in out, out
+        assert (repo / ".claude" / "overnight" / "r1").is_dir(), "the tracked entry stayed"
+        assert "git mv" not in run({"cwd": str(repo), "source": "startup"}), "said once, not at every start"
+        # undo sticks: the next session start leaves the state in .claude/ and says nothing
+        script = Path(__file__).resolve().parent.parent / "scripts" / "migrate_state.py"
+        undo = subprocess.run([sys.executable, str(script), "undo", "--root", str(repo)], capture_output=True, text=True)
+        assert undo.returncode == 0 and (repo / ".claude" / "lead" / "board.md").exists(), undo.stdout + undo.stderr
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert "kit:" not in "\n".join(l for l in out.splitlines() if "state" in l) and not (repo / ".kit" / "lead").exists(), out
+        bare = subprocess.run([sys.executable, str(script), "migrate", "--root", str(repo)], capture_output=True, text=True)
+        assert bare.returncode == 2 and "migrate --again" in bare.stderr and not (repo / ".kit" / "lead").exists(), \
+            "a bare migrate (it runs unasked) does not reverse the owner's undo: " + bare.stdout + bare.stderr
+        again = subprocess.run([sys.executable, str(script), "migrate", "--again", "--root", str(repo)],
+                               capture_output=True, text=True)
+        assert (repo / ".kit" / "lead" / "board.md").exists(), "migrate --again moves it again: " + again.stdout + again.stderr
+        # a fresh project has nothing to move and makes no .kit/ by starting a session
+        fresh = Path(tmp) / "fresh"
+        (fresh / ".claude").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(fresh)], check=True)
+        (fresh / ".claude" / "kit.json").write_text("{}")
+        out = run({"cwd": str(fresh), "source": "startup"})
+        assert "kit state" not in out and not (fresh / ".kit").exists(), out
+    overnight_checks()
+    overnight_store_checks()
     print("session_start: all checks passed")
+
+
+def overnight_checks():
+    """A detached overnight run cannot send a push: the next interactive start says how it ended, once."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / "repo"
+        git = ["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t"]
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+        subprocess.run(git + ["-C", str(repo), "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+        wt = Path(tmp) / "wt"  # a run with --worktree keeps its state in that worktree
+        subprocess.run(git + ["-C", str(repo), "worktree", "add", "-q", "-b", "overnight/x", str(wt)], check=True)
+        runs = wt / ".kit" / "overnight"
+        runs.mkdir(parents=True)
+        told = {"run": "20261114-010203", "dir": str(runs / "20261114-010203"), "stop_reason": "stop condition met",
+                "iterations": 7, "cost": 3.456, "branch": "overnight/x", "pushed": True}
+        (runs / "untold.jsonl").write_text(json.dumps(told) + "\n")
+        line = ("kit: the overnight run 20261114-010203 ended: stop condition met, 7 iterations, USD 3.46, "
+                "branch overnight/x pushed: tell the user once, with a push notification")
+        # a run that died with its container: state without stop_reason, its process gone
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        dead = repo / ".kit" / "overnight" / "20261113-220000"
+        dead.mkdir(parents=True)
+        (dead / "state.json").write_text(json.dumps({"run_id": "20261113-220000", "branch": "overnight/y",
+                                                     "iteration": 2, "cost": 1.0, "stop_reason": None,
+                                                     "pid": gone.pid}))
+        # a run still going (its process names overnight.py) is not news
+        alive = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "overnight.py"])
+        live = repo / ".kit" / "overnight" / "20261114-030000"
+        live.mkdir(parents=True)
+        (live / "state.json").write_text(json.dumps({"run_id": "20261114-030000", "branch": "overnight/z",
+                                                    "iteration": 1, "cost": 0.5, "stop_reason": None,
+                                                    "pid": alive.pid}))
+        try:
+            payload = {"cwd": str(repo), "source": "startup"}
+            assert "overnight run" not in run(payload, KIT_HEADLESS="1"), "a headless start leaves it for the owner"
+            assert "overnight run" not in run({**payload, "agent_id": "a1"}), "so does a subagent"
+            assert (runs / "untold.jsonl").exists()
+            out = run(payload).splitlines()
+            said = [l for l in out if "overnight run" in l]
+            assert line in said and len(said) == 2, out
+            assert any("20261113-220000 ended: stopped without finishing: its process is gone" in l
+                       and "branch overnight/y not pushed" in l for l in said), said
+            assert not any("20261114-030000" in l for l in said), "a live run is not news"
+            assert "overnight run" not in run(payload), "said once"
+            assert json.loads((dead / "state.json").read_text())["stop_reason"] is None, "the run's files are left alone"
+            assert json.loads((repo / ".kit" / "overnight" / "told.json").read_text()) == [str(dead)], \
+                "the kit remembers it said the dead run"
+            (runs / "untold.jsonl").write_text(json.dumps(told) + "\n")
+            assert line in run({"cwd": str(repo), "source": "compact"}).splitlines(), "after a compaction too"
+            assert "overnight run" not in run({"cwd": str(repo), "source": "compact"}), "and once"
+
+            # whatever the file holds, the start exits 0 and prints the rest of its context
+            (repo / ".claude").mkdir(exist_ok=True)
+            (repo / ".claude" / "kit.json").write_text(json.dumps({"check": "make lint"}))
+            odd = [{"run": "r-cost", "cost": "x", "iterations": "7", "pushed": "yes", "branch": ["b"]},
+                   {"run": "r-bare"}, {"run": "r-nan", "cost": float("nan"), "iterations": True},
+                   {"run": "two\nlines", "stop_reason": 5, "cost": 1e300, "branch": "b", "pushed": False}]
+            (runs / "untold.jsonl").write_text("".join(json.dumps(o) + "\n" for o in odd)
+                                               + "[1, 2]\n{not json\n\n\"text\"\n")
+            out = run(payload)
+            said = [l for l in out.splitlines() if "overnight run" in l]
+            assert "make lint" in out, out
+            assert ("kit: the overnight run r-cost ended: ?, ? iterations, USD ?, branch ? pushed ?: "
+                    "tell the user once, with a push notification") in said, said
+            assert any(l.startswith("kit: the overnight run r-bare ended: ?, ? iterations, USD ?, branch ? pushed ?")
+                       for l in said), said
+            assert any(l.startswith("kit: the overnight run r-nan ended: ?, ? iterations, USD ?") for l in said), said
+            assert any(l.startswith("kit: the overnight run two lines ended: 5, ? iterations, USD ?, branch b not pushed")
+                       for l in said), said
+            unreadable = ("kit: an overnight run ended (its record could not be read): tell the user once, "
+                          "with a push notification")
+            # seven ends: five are said, the other two summed up and left in the file for status
+            assert len(said) == 6 and said.count(unreadable) == 1, said
+            assert said[-1] == "kit: and 2 more overnight runs ended: `items.py status` lists them", said
+            assert len((runs / "untold.jsonl").read_text().splitlines()) == 2
+            said = [l for l in run(payload).splitlines() if "overnight run" in l]
+            assert said == [unreadable, unreadable], said
+            assert (runs / "untold.jsonl").read_text() == "", "cut in place, not removed"
+        finally:
+            alive.kill()
+            alive.wait()
+
+
+def overnight_store_checks():
+    """The untold file and the runs folder, whatever state an earlier kit or a crash left them in:
+    nothing is lost, nothing is said twice, and one odd run never hides another."""
+    sys.path.insert(0, str(SCRIPT.parent))
+    import kitlib
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / "repo"
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+        runs = repo / ".kit" / "overnight"
+        (runs / "launch").mkdir(parents=True)  # the detach logs: not a run
+        (runs / "launch" / "20261114-010000.log").write_text("overnight: started\n")
+        (runs / "untold.jsonl").write_bytes(b'{"run": "r-bytes\xff", "stop_reason": "done"}\n')
+        (runs / "untold.jsonl.4242.reading").write_text('{"run": "r-left", "stop_reason": "done"}\n')
+        broken = runs / "r-broken"
+        broken.mkdir()
+        (broken / "state.json").write_text('{"pid": ')
+        odd = runs / "r-odd"
+        odd.mkdir()
+        (odd / "state.json").write_text(json.dumps({"pid": "12", "stop_reason": None}))
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        dead = runs / "r-dead"
+        dead.mkdir()
+        (dead / "state.json").write_text(json.dumps({"run_id": "r-dead", "pid": gone.pid, "iteration": 1,
+                                                     "cost": 0.25, "branch": "b"}))
+        out = run({"cwd": str(repo), "source": "startup"})
+        said = [l for l in out.splitlines() if "overnight run" in l]
+        assert len(said) == 3 and any("r-bytes\ufffd ended: done" in l for l in said), said
+        assert any("r-left ended: done" in l for l in said), "a leftover .reading file is said"
+        assert any("r-dead ended: stopped without finishing" in l for l in said), "a broken state.json hides nothing"
+        assert not any("launch" in l or "r-odd" in l or "r-broken" in l for l in said), said
+        assert not list(runs.glob("untold.jsonl.*.reading")), "and then removed"
+        assert "overnight run" not in run({"cwd": str(repo), "source": "startup"}), "said once"
+        assert kitlib.overnight_news(str(repo)) == ([], 0), "status has nothing left either"
+
+        # without /proc, ps names the runner; a pid that is not one is not alive
+        nowhere = Path(tmp) / "no-proc"
+        runner = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "overnight.py"])
+        try:
+            assert kitlib.overnight_alive(runner.pid, proc=nowhere), "ps names overnight.py"
+            assert not kitlib.overnight_alive(os.getpid(), proc=nowhere), "a reused pid is not a run"
+            assert not kitlib.overnight_alive(gone.pid, proc=nowhere), "a gone pid is not alive"
+        finally:
+            runner.kill()
+            runner.wait()
+
+        # several runs ending while several starts read: every end said once, none lost
+        writer = ("import importlib.util, sys\n"
+                  "spec = importlib.util.spec_from_file_location('overnight', sys.argv[1])\n"
+                  "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+                  "for i in range(200):\n"
+                  "    m.tell_later(sys.argv[2], {'run_id': f'{sys.argv[3]}-{i}', 'stop_reason': 'done', 'iteration': i,"
+                  " 'cost': 0.1, 'branch': 'b', 'pushed': ''})\n")
+        reader = ("import json, sys, time\n"
+                  "sys.path.insert(0, sys.argv[1]); import kitlib\n"
+                  "end = time.monotonic() + 4\n"
+                  "while time.monotonic() < end:\n"
+                  "    for n in kitlib.overnight_news(sys.argv[2], consume=True)[0]:\n"
+                  "        print(n['run'], flush=True)\n")
+        overnight = SCRIPT.parents[2] / "skills" / "overnight" / "scripts" / "overnight.py"
+        (runs / "w").mkdir()
+        readers = [subprocess.Popen([sys.executable, "-c", reader, str(SCRIPT.parent), str(repo)],
+                                    stdout=subprocess.PIPE, text=True) for _ in range(3)]
+        writers = [subprocess.Popen([sys.executable, "-c", writer, str(overnight), str(runs / "w"), f"w{k}"])
+                   for k in range(4)]
+        assert all(w.wait(timeout=60) == 0 for w in writers)
+        seen = [line for r in readers for line in r.communicate(timeout=60)[0].split()]
+        seen += [n["run"] for n in kitlib.overnight_news(str(repo), consume=True)[0]]
+        want = sorted(f"w{k}-{i}" for k in range(4) for i in range(200))
+        assert sorted(seen) == want, (len(seen), len(set(seen)), len(want))
 
 
 if __name__ == "__main__":

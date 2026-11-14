@@ -1,6 +1,6 @@
 ---
 name: shape
-description: Turns a brain-dump (several ideas at once, an unclear goal, no way to tell when it is done) into a short brief through a few multiple-choice questions, then launches it. Use when a request mixes several new ideas or would mean guessing what the user wants, or when the user runs /kit:shape or says "help me think this through".
+description: Turns a brain-dump (several ideas at once, an unclear goal, no way to tell when it is done) into a short brief through a few multiple-choice questions, then launches it. Use when a request mixes several new ideas or when different readings would mean materially different work, or when the user runs /kit:shape or says "help me think this through".
 argument-hint: "[the idea; empty = the user's last message]"
 ---
 

@@ -32,11 +32,35 @@ def read_json(path):
     return (value, True) if isinstance(value, dict) else (None, False)
 
 
+def json_trouble(path):
+    """Why read_json said no to `path`, for a message: `<path> could not be read (<reason>)` when
+    the file or a folder above it cannot be opened, else `<path> does not parse`."""
+    try:
+        Path(path).read_bytes()
+    except FileNotFoundError:
+        return f"{path} does not parse"
+    except OSError as exc:
+        return f"{path} could not be read ({exc.strerror or exc})"
+    return f"{path} does not parse"
+
+
 def read_input():
     try:
         return json.load(sys.stdin)
     except Exception:
         return {}
+
+
+# Inside a git hook, git exports these to the hook's processes; a kit script started from one would
+# hand them on, and every git call would then answer for the repository that ran the hook, not for
+# the folder it was asked about (`git -C <dir>` does not override GIT_DIR).
+GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX")
+
+
+def git_env():
+    """The environment for a git subprocess: this one, without the variables that point git at a
+    particular repository, so `git -C <dir>` answers for <dir>."""
+    return {k: v for k, v in os.environ.items() if k not in GIT_LOCATION_VARS}
 
 
 def git_root(start):
@@ -49,7 +73,7 @@ def git_root(start):
     try:
         out = subprocess.run(
             ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, env=git_env(),
         )
     except Exception:
         return None
@@ -113,11 +137,15 @@ def main_checkout(cwd):
 
 # The owner's unattended git preferences for one repository, in its main checkout's gitignored
 # `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "ask", "rebase": "ask", "merge": "ask"}}}`):
-# local to this machine and this repo, never global, never committed. `ask` (the default, and
-# whatever is missing, misspelt or unreadable) means nobody answers a permission prompt during an
-# unattended run, so a thread hands that step back; `allow` means it proceeds as when attended,
-# once the permission rules let it run without a prompt (unattended_effective).
+# local to this machine and this repo, never global, never committed. `ask` means nobody answers a
+# permission prompt during an unattended run, so a thread hands that step back; `allow` means it
+# proceeds as when attended, once the permission rules let it run without a prompt
+# (unattended_effective). A step the file does not set, or sets to anything else, takes
+# UNATTENDED_DEFAULTS: until 2026-11 every unset step was `ask` and the coordinator asked the owner
+# before each first run, a question he answered the same way each time (push and rebase on the
+# thread's own branch, merge his), so now that answer is the default and nobody is asked.
 UNATTENDED_STEPS = ("push", "rebase", "merge")
+UNATTENDED_DEFAULTS = {"push": "allow", "rebase": "allow", "merge": "ask"}
 LOCAL_CONFIG = ".claude/kit.local.json"
 # What `allow` needs so the step runs without a prompt: the owner adds these to the repo's
 # .claude/settings.local.json `permissions.allow`, by hand or by approving the coordinator's Edit
@@ -127,14 +155,18 @@ UNATTENDED_RULES = {"push": ["Bash(git push:*)"], "rebase": ["Bash(git rebase:*)
 
 
 def unattended_prefs(cwd):
-    """(prefs, is_set, path): every step `ask` or `allow`; is_set when the repo's file names any step."""
+    """(prefs, is_set, path): every step `ask` or `allow`, an unset or misspelt one taking its
+    default; is_set when the repo's file names any step."""
     root = main_checkout(cwd) or Path(cwd)
     path = Path(root) / LOCAL_CONFIG
     value, _ = read_json(path)
     lead = (value or {}).get("lead")
     own = lead.get("unattended") if isinstance(lead, dict) else None
     own = own if isinstance(own, dict) else {}
-    prefs = {k: ("allow" if str(own.get(k, "")).strip().lower() == "allow" else "ask") for k in UNATTENDED_STEPS}
+    prefs = {}
+    for k in UNATTENDED_STEPS:
+        value = str(own.get(k, "")).strip().lower()
+        prefs[k] = value if value in ("ask", "allow") else UNATTENDED_DEFAULTS[k]
     return prefs, any(k in own for k in UNATTENDED_STEPS), path
 
 
@@ -159,6 +191,33 @@ def save_unattended(cwd, changes):
 # comment, a progress file, a diary, a published page): the coordinator finds them in the repo's
 # own guidance once, confirms them with the owner and saves them in the same kit.local.json
 # (`{"lead": {"records": ["...", ...]}}`); `items.py done` prints them as the item's checklist.
+def lead_local(cwd, key):
+    """kit.local.json `lead.<key>` of the repo's main checkout, or None."""
+    value, _ = read_json(Path(main_checkout(cwd) or cwd) / LOCAL_CONFIG)
+    lead = (value or {}).get("lead")
+    return lead.get(key) if isinstance(lead, dict) else None
+
+
+def save_lead_local(cwd, key, value):
+    """Set kit.local.json `lead.<key>` beside the other keys (None removes it); a file that does
+    not parse is never rewritten (ValueError)."""
+    path = Path(main_checkout(cwd) or cwd) / LOCAL_CONFIG
+    data, ok = read_json(path)
+    if not ok:
+        raise ValueError(f"{path} is not a JSON object; fix or remove it first")
+    lead = dict(data.get("lead")) if isinstance(data.get("lead"), dict) else {}
+    if value is None:
+        if key not in lead:
+            return
+        lead.pop(key)
+    else:
+        lead[key] = value
+    data["lead"] = lead
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    exclude(path.parent.parent, LOCAL_CONFIG)
+
+
 def records(cwd):
     """(places, path): the saved record places, [] when not set or unreadable."""
     path = Path(main_checkout(cwd) or cwd) / LOCAL_CONFIG
@@ -325,19 +384,21 @@ def unattended_effective(cwd):
     any scope matches its commands, and an allow rule covers every one of them; otherwise `ask`,
     with a note per allow-step saying what keeps it at ask and which file and rule to change."""
     files, unreadable, steps = _unattended_steps(cwd)
+    _, is_set, _ = unattended_prefs(cwd)
+    said = "allow saved" if is_set else "allow by default"
     effective, notes = {k: "ask" for k in UNATTENDED_STEPS}, {}
     for step, (blocked, covered, refused) in steps.items():
         if unreadable:
-            notes[step] = (f"{step}: allow saved, but it stays ask: {', '.join(map(str, unreadable))} does not parse, "
+            notes[step] = (f"{step}: {said}, but it stays ask: {'; '.join(map(json_trouble, unreadable))}, "
                            f"so its rules are unknown; fix it first.")
         elif blocked:
             which = "; ".join(f'{b} rule "{r}" in {f}' for b, r, f in blocked)
-            notes[step] = (f"{step}: allow saved, but it stays ask: {which} matches, and deny and ask answers come "
+            notes[step] = (f"{step}: {said}, but it stays ask: {which} matches, and deny and ask answers come "
                            f"before allow ones (Claude Code's rules in every scope, and the kit guard's), so an allow "
                            f"rule in settings.local.json cannot override it. The owner changes that rule, or {step} "
                            f"waits for them.")
         elif not covered:
-            notes[step] = (f"{step}: allow saved, but it stays ask until the owner adds "
+            notes[step] = (f"{step}: {said}, but it stays ask until the owner adds "
                            + ", ".join(f'"{r}"' for r in UNATTENDED_RULES[step])
                            + f" to {files[-1]} permissions.allow.")
         else:
@@ -393,7 +454,7 @@ def unattended_proposal(cwd):
         try:
             rel = f.relative_to(root)
             committed = subprocess.run(["git", "-C", str(root), "ls-files", "--error-unmatch", str(rel)],
-                                       capture_output=True, timeout=10).returncode == 0
+                                       capture_output=True, timeout=10, env=git_env()).returncode == 0
         except (ValueError, OSError, subprocess.SubprocessError):
             pass
         broad = [r for _, r in changes[f]["remove"] if any(bash_rule_matches(r, c) for c in OTHER_COMMANDS)]
@@ -402,28 +463,473 @@ def unattended_proposal(cwd):
     return out
 
 
+EXCLUDE_LOCK_WAIT = 2.0  # seconds; a session start must not stall on a stuck holder
+
+
+class Busy(OSError):
+    """Another process held the lock for longer than the wait."""
+
+
+def git_common_path(root, name):
+    """The absolute path of `name` in the repository's common git dir (shared by its worktrees),
+    else None outside git."""
+    found = git_out(root, "rev-parse", "--path-format=absolute", "--git-path", name, timeout=10)
+    return Path(found) if found else None
+
+
+def git_lock(root, name, wait=None):
+    """A lock on `<git dir>/<name>`, shared by every checkout of the repository (Busy after `wait`)."""
+    path = git_common_path(root, name)
+    if path is None:
+        raise Busy(f"{root} is not in a git repository")
+    return file_lock(path, wait)
+
+
+class file_lock:
+    """flock on `path`, tried every 50 ms until `wait` seconds have passed, then Busy."""
+
+    def __init__(self, path, wait=None):
+        self.path, self.fh = Path(path), None
+        self.wait = EXCLUDE_LOCK_WAIT if wait is None else wait
+
+    def __enter__(self):
+        import fcntl
+        import time
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.fh = open(self.path, "a")
+        deadline = time.monotonic() + self.wait
+        while True:
+            try:
+                fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    self.fh.close()
+                    raise Busy(f"{self.path} is held by another process") from None
+                time.sleep(0.05)
+
+    def __exit__(self, *exc):
+        self.fh.close()  # closing the file releases the lock
+        return False
+
+
+def write_text_atomic(path, text):
+    """Replace `path` with `text` through a temporary file in the same folder, so a reader sees the
+    old file or the new one, never part of one; the file's mode is kept."""
+    import shutil
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if path.exists():
+            shutil.copymode(path, tmp)
+        else:
+            os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def add_exclude_lines(root, lines):
+    """The one writer of .git/info/exclude: under a lock in the git dir, read the file, append the
+    lines it lacks, and replace it in one step. It never removes or rewrites a line, so the owner's
+    own and another process's survive two writers at once. Returns the lines added ([] when none,
+    outside git, or when the lock stayed busy)."""
+    wanted = list(dict.fromkeys(line for line in lines if line))
+    info = git_common_path(root, "info/exclude") if wanted else None
+    if not info:
+        return []
+    try:
+        with file_lock(info.with_name("exclude.kit-lock")):
+            text = info.read_text(encoding="utf-8") if info.exists() else ""
+            have = set(text.splitlines())
+            missing = [line for line in wanted if line not in have]
+            if missing:
+                write_text_atomic(info, text + ("" if not text or text.endswith("\n") else "\n")
+                                  + "\n".join(missing) + "\n")
+            return missing
+    except OSError:
+        return []
+
+
+LOCAL_SETTINGS = ".claude/settings.local.json"
+
+
+def exclude_local_settings(checkout):
+    """Keep the checkout's settings.local.json, once the kit writes it, out of `git status` (an
+    untracked file stops the overnight runner): one line in .git/info/exclude, unless git
+    already tracks or ignores the file. Returns the lines added."""
+    for args in (("ls-files", "--error-unmatch", "--", LOCAL_SETTINGS), ("check-ignore", "-q", "--", LOCAL_SETTINGS)):
+        if git_run(checkout, *args)[0] in (0, None):
+            return []
+    return add_exclude_lines(checkout, ["/" + LOCAL_SETTINGS])
+
+
+def exclude_lines(root, files=(), dirs=()):
+    """The exclude lines (`/<file>`, `/<dir>/`) for paths under the checkout `root` that git does not
+    ignore yet. One `git check-ignore` call for all of them; when that call fails (one path beyond a
+    symlink fails it for all), each path is checked on its own, and a path git cannot answer for
+    gets its line anyway: an extra ignore line is harmless, a missing one is not."""
+    asked = [(f.strip("/"), "/" + f.strip("/")) for f in files]
+    asked += [(f"{d.strip('/')}/probe", f"/{d.strip('/')}/") for d in dirs]
+    if not asked:
+        return []
+
+    def check(paths):
+        try:
+            done = subprocess.run(["git", "-C", str(root), "check-ignore", "-z", "--stdin"],
+                                  input="".join(p + "\0" for p in paths), capture_output=True, text=True,
+                                  timeout=10, env=git_env())
+        except Exception:
+            return None
+        return set(done.stdout.split("\0")) if done.returncode in (0, 1) else None
+
+    ignored = check([p for p, _ in asked])
+    if ignored is None:
+        if not git_root(root):
+            return []
+        ignored = set()
+        for path, _ in asked:
+            ignored |= check([path]) or set()
+    return [line for path, line in asked if path not in ignored]
+
+
 def exclude(root, rel):
     """Keep `rel` (a file under the checkout `root`) out of git through .git/info/exclude, unless
     the project ignores it already."""
-    root = Path(root)
+    add_exclude_lines(root, exclude_lines(root, files=[rel]))
+
+
+def exclude_dir(root, rel):
+    """Keep the folder `rel` (under the checkout `root`) out of git: the line `/<rel>/` in
+    .git/info/exclude, unless the project ignores the folder already."""
+    add_exclude_lines(root, exclude_lines(root, dirs=[str(rel)]))
+
+
+# Where the kit keeps a project's working state: `.kit/` at the repo root, or `.claude/` in a
+# project that has not moved yet. Claude Code asks the owner before any write inside `.claude`
+# (a protected path; only `.claude/worktrees/` is exempt) and no allow rule pre-approves it, so
+# background threads stalled on those prompts while the owner was away; writes under `.kit/`
+# pass. What Claude Code reads (settings, skills/, agents/, worktrees/, loop.md) and the kit's own
+# kit.json / kit.local.json stay in `.claude/`: the gate commands permission.py lets run unasked
+# come from kit.json, so it stays behind the protected path. migrate_state.py moves the entries.
+STATE_DIR = ".kit"
+LEGACY_STATE_DIR = ".claude"
+# What moves, an allowlist: a name missing here stays where it is (other agents' agent-memory too).
+STATE_NAMES = ("lead", "evidence", "overnight", "agent-memory/kit-verifier")
+# In the checkout they belong to, a linked worktree included: a run lives in the checkout it ran
+# in, and a thread saves its proof under its own worktree. The gate's record is the exception:
+# gate.py keeps it in the main checkout's evidence folder, so it outlives the worktree.
+PER_CHECKOUT_STATE = ("overnight", "evidence")
+LEGACY_LEAD = ".claude/lead/"  # a kit.json `lead.board` under it moves with the folder (board_file)
+
+
+def has_legacy_state(base):
+    """True when the checkout `base` still holds kit state under `.claude/`."""
+    return any((Path(base) / LEGACY_STATE_DIR / name).exists() for name in STATE_NAMES)
+
+
+def kit_dir_linked(base):
+    """True when the checkout's `.kit` is a symlink: it is not the kit's folder, nothing is written
+    through it, and the checkout stays on `.claude/` (migrate_state.py says so once)."""
+    return (Path(base) / STATE_DIR).is_symlink()
+
+
+def linked_part(base, rel):
+    """The first symlink on the way from the folder `base` to `base/rel`, `rel` itself included
+    (`.claude`, `.claude/agent-memory`, then the entry), or None. An entry reached through a link
+    is the owner's, maybe shared by other checkouts: the kit reads it there but never moves it."""
+    path = Path(base)
+    for part in Path(rel).parts:
+        path = path / part
+        if path.is_symlink():
+            return path
+    return None
+
+
+def state_dir_name(base):
+    """`.kit` when it is a folder in the checkout `base` (pass the main checkout), `.claude` when
+    that still holds kit state or `.kit` is a symlink, else `.kit`: a new project starts there."""
+    base = Path(base)
+    if kit_dir_linked(base):
+        return LEGACY_STATE_DIR
+    if (base / STATE_DIR).is_dir():
+        return STATE_DIR
+    return LEGACY_STATE_DIR if has_legacy_state(base) else STATE_DIR
+
+
+def _state_bases(root, per_checkout):
+    own = git_root(root) or Path(root)
+    main = main_checkout(root) or own
+    return own, main, (own if per_checkout else main)
+
+
+def state_dir(root, per_checkout=False):
+    """The folder new kit state goes to, decided on the main checkout; `per_checkout` puts it in
+    `root`'s own checkout (overnight runs live in the worktree they ran in)."""
+    _, main, base = _state_bases(root, per_checkout)
+    return base / state_dir_name(main)
+
+
+def state_entry(root, name, per_checkout=None):
+    """Where the entry `name` (one of STATE_NAMES) is: `.kit/<name>` when it exists, else
+    `.claude/<name>` when that exists (a `.kit` that is a symlink is never looked in), else
+    under state_dir, where it will be made. Reads and
+    writes both go through this, so an entry the move left behind (tracked in git, say) is still
+    the one in use. `lead` and the verifier's memory are the main checkout's; `evidence` and
+    `overnight` are each checkout's own (PER_CHECKOUT_STATE) unless `per_checkout` is False, as
+    for gate.py's record, which stays in the main checkout's evidence."""
+    if per_checkout is None:
+        per_checkout = name.split("/")[0] in PER_CHECKOUT_STATE
+    _, main, base = _state_bases(root, per_checkout)
+    for folder in (LEGACY_STATE_DIR,) if kit_dir_linked(base) else (STATE_DIR, LEGACY_STATE_DIR):
+        if (base / folder / name).exists():
+            return base / folder / name
+    return base / state_dir_name(main) / name
+
+
+OVERNIGHT_UNTOLD = "untold.jsonl"  # overnight.py's tell_later: detached runs that ended, not yet said
+OVERNIGHT_TOLD = "told.json"  # dead runs already said, in the main checkout's overnight folder
+OVERNIGHT_GONE = "stopped without finishing: its process is gone (its container or machine stopped)"
+OVERNIGHT_SAY = 5  # the most runs one session start says; the rest wait in the file for status
+OVERNIGHT_LOCK_WAIT = 2.0  # seconds; a session start does not stall on a stuck holder
+
+
+def overnight_alive(pid, proc=Path("/proc")):
+    """Whether `pid` is still an overnight runner, told apart from a reused pid by its command
+    line: /proc where there is one, else `ps -p <pid> -o command=`. Only without ps does a
+    process that exists count as alive."""
+    if proc.is_dir():
+        try:
+            return b"overnight.py" in (proc / str(pid) / "cmdline").read_bytes()
+        except OSError:
+            return False
     try:
-        if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", rel], capture_output=True,
-                          timeout=10).returncode == 0:
-            return
-    except Exception:
-        return
-    info = git_out(root, "rev-parse", "--git-path", "info/exclude")
-    if not info:
-        return
-    info = Path(info) if Path(info).is_absolute() else root / info
-    try:
-        info.parent.mkdir(parents=True, exist_ok=True)
-        text = info.read_text(encoding="utf-8") if info.exists() else ""
-        line = "/" + rel.lstrip("/")
-        if line not in text.splitlines():
-            info.write_text(text + ("" if not text or text.endswith("\n") else "\n") + line + "\n", encoding="utf-8")
-    except OSError:
+        got = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, timeout=5)
+        return "overnight.py" in got.stdout
+    except FileNotFoundError:
         pass
+    except (OSError, subprocess.SubprocessError):
+        return True  # cannot tell: not news yet
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _flock(fh, wait=OVERNIGHT_LOCK_WAIT):
+    """An exclusive flock on the open file `fh`, tried until `wait` seconds have passed."""
+    import fcntl
+    import time
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if time.monotonic() > deadline:
+                return False
+            time.sleep(0.02)
+
+
+def _untold_lines(data):
+    return [line for line in data.split(b"\n") if line.strip()]
+
+
+def _untold_entry(line):
+    try:
+        entry = json.loads(line.decode("utf-8", errors="replace"))
+    except ValueError:
+        return None
+    return entry if isinstance(entry, dict) else None  # None: said as unreadable
+
+
+def _dead_run(state_file):
+    """The news entry of a run whose state.json has a pid and no stop_reason while that process
+    is gone (a run that died with its container writes nothing), else None."""
+    state = json.loads(state_file.read_text(encoding="utf-8", errors="replace"))
+    if not isinstance(state, dict) or state.get("stop_reason"):
+        return None
+    pid = state.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or overnight_alive(pid):
+        return None
+    return {"run": state.get("run_id") or state_file.parent.name, "dir": str(state_file.parent),
+            "stop_reason": OVERNIGHT_GONE, "iterations": state.get("iteration"), "cost": state.get("cost"),
+            "branch": state.get("branch"), "pushed": False}
+
+
+def overnight_news(root, consume=False, limit=None):
+    """The project's overnight runs that ended unseen, as (news, left): the lines detached runs left
+    in each checkout's untold.jsonl (and in an untold.jsonl.*.reading an earlier kit left behind),
+    and the runs that died without a word. Read only, it lists them all and changes nothing.
+    `consume` says each one once, at most `limit`: the said lines are cut from untold.jsonl in place,
+    under the same flock overnight.py appends under, so a run that ends meanwhile is neither lost
+    nor said twice; the lines past `limit` stay there (`left` counts them). A dead run said is
+    remembered in the main checkout's overnight/told.json; the run's own files are left alone."""
+    rc, out, _ = git_run(root, "worktree", "list", "--porcelain")
+    checkouts = [Path(ln[9:]) for ln in out.splitlines() if ln.startswith("worktree ")] if rc == 0 else []
+    folders = [checkout / folder / "overnight" for checkout in checkouts for folder in (STATE_DIR, LEGACY_STATE_DIR)
+               if (checkout / folder / "overnight").is_dir() and not (checkout / folder).is_symlink()]
+    if not folders:
+        return [], 0
+    told_file = state_entry(root, "overnight", per_checkout=False) / OVERNIGHT_TOLD
+    try:
+        told = set(json.loads(told_file.read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        told = set()
+    if not consume:
+        news = []
+        for runs in folders:
+            for leftover in sorted(runs.glob(OVERNIGHT_UNTOLD + ".*.reading")):
+                try:
+                    news += [_untold_entry(line) for line in _untold_lines(leftover.read_bytes())]
+                except OSError:
+                    pass
+            try:
+                with open(runs / OVERNIGHT_UNTOLD, "rb") as fh:
+                    if _flock(fh):
+                        news += [_untold_entry(line) for line in _untold_lines(fh.read())]
+            except OSError:
+                pass
+            for state_file in sorted(runs.glob("*/state.json")):
+                try:
+                    entry = _dead_run(state_file)
+                except Exception:  # one odd run never hides the others
+                    continue
+                if entry and entry["dir"] not in told:
+                    news.append(entry)
+        return news, 0
+    try:
+        consumer = file_lock(folders[0] / ".told.lock", OVERNIGHT_LOCK_WAIT)  # the same folder for every start
+        consumer.__enter__()
+    except Busy:
+        return [], 0  # another start is saying them now
+    try:
+        return _overnight_consume(root, folders, told_file, told, limit)
+    finally:
+        consumer.__exit__(None, None, None)
+
+
+def _overnight_consume(root, folders, told_file, told, limit):
+    room = float("inf") if limit is None else limit
+    news, left, newly = [], 0, []
+    for runs in folders:
+        untold = runs / OVERNIGHT_UNTOLD
+        try:
+            fh = open(untold, "r+b") if untold.exists() else None
+            leftovers = sorted(runs.glob(OVERNIGHT_UNTOLD + ".*.reading"))
+            if leftovers and fh is None:
+                fh = open(untold, "a+b")
+        except OSError:
+            fh = None
+        if fh is not None:
+            with fh:
+                if _flock(fh):
+                    fh.seek(0)
+                    lines = _untold_lines(fh.read())
+                    gathered = []
+                    for leftover in leftovers:  # an earlier kit's rename-read-unlink, cut short
+                        try:
+                            gathered.append((leftover, _untold_lines(leftover.read_bytes())))
+                        except OSError:
+                            pass
+                    lines += [line for _, got in gathered for line in got]
+                    take = lines[:max(0, int(min(room, len(lines))))]
+                    keep = lines[len(take):]
+                    fh.seek(0)
+                    fh.truncate()  # in place: the writer's file stays the same inode
+                    fh.write(b"".join(line + b"\n" for line in keep))
+                    fh.flush()
+                    for leftover, _ in gathered:
+                        try:
+                            leftover.unlink()
+                        except OSError:
+                            pass
+                    news += [_untold_entry(line) for line in take]
+                    room -= len(take)
+                    left += len(keep)
+        for state_file in sorted(runs.glob("*/state.json")):
+            try:
+                entry = _dead_run(state_file)
+            except Exception:
+                continue
+            if not entry or entry["dir"] in told:
+                continue
+            if room > 0:
+                news.append(entry)
+                newly.append(entry["dir"])
+                room -= 1
+            else:
+                left += 1
+    if newly:
+        kept = sorted(d for d in told | set(newly) if Path(d).is_dir())  # a removed run is forgotten
+        try:
+            write_text_atomic(told_file, json.dumps(kept, indent=2) + "\n")
+            exclude_state(root, "overnight", per_checkout=False)
+        except OSError:
+            pass
+    return news, left
+
+
+def overnight_news_line(entry):
+    """One run from overnight_news, as the session start says it. It never raises: a field that
+    is missing or of the wrong type prints as `?`, and a record that is not a JSON object is said
+    as an end that could not be read."""
+    if not isinstance(entry, dict):
+        return "kit: an overnight run ended (its record could not be read)"
+
+    def text(key):
+        value = entry.get(key)
+        if isinstance(value, bool) or not isinstance(value, (str, int)) or value == "":
+            return "?"
+        return " ".join(str(value).split())[:200] or "?"  # one line, whatever the file holds
+
+    iterations = entry.get("iterations")
+    iterations = iterations if isinstance(iterations, int) and not isinstance(iterations, bool) else "?"
+    cost = entry.get("cost")
+    ok = isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost == cost and abs(cost) < 1e12
+    pushed = {True: "pushed", False: "not pushed"}.get(entry.get("pushed"), "pushed ?")
+    return (f"kit: the overnight run {text('run')} ended: {text('stop_reason')}, {iterations} iterations, "
+            f"USD {f'{cost:.2f}' if ok else '?'}, branch {text('branch')} {pushed}")
+
+
+def board_file(root, config=None):
+    """The board: kit.json `lead.board` (relative to `root`), else `<state>/lead/board.md`. A path
+    inside the old lead folder (`.claude/lead/board.md`, the default /kit:init wrote, or a name of
+    the owner's own such as `.claude/lead/BOARD.md`) follows the move: read only from `.claude/lead`,
+    it showed "none open" once the folder had moved. A path anywhere else is the owner's."""
+    lead = config.get("lead") if isinstance(config, dict) else None
+    board = lead.get("board").strip() if isinstance(lead, dict) and isinstance(lead.get("board"), str) else ""
+    if not board:
+        return state_entry(root, "lead", per_checkout=False) / "board.md"
+    path = Path(board) if Path(board).is_absolute() else Path(root) / board
+    for base in dict.fromkeys(_state_bases(root, False)[:2]):
+        try:
+            inside = path.relative_to(base / LEGACY_LEAD)
+        except ValueError:
+            continue
+        return state_entry(root, "lead", per_checkout=False) / inside
+    return path
+
+
+def exclude_state(root, name, per_checkout=None):
+    """Keep the state entry `name` out of git where it is now: one line per entry
+    (`/.kit/lead/`), never a blanket `/.kit/`, so a project may commit other files there."""
+    path = state_entry(root, name, per_checkout)
+    for base in dict.fromkeys(_state_bases(root, False)[:2]):
+        try:
+            exclude_dir(base, path.relative_to(base).as_posix())
+            return
+        except ValueError:
+            continue
 
 
 GATE_TIMEOUTS = {"check": 540, "verify": 1800}  # seconds; kit.json checkTimeout / verifyTimeout override
@@ -446,6 +952,324 @@ def state_key(data):
 def config_dir():
     """Claude Code's config dir: CLAUDE_CONFIG_DIR, else ~/.claude."""
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
+def personal_config():
+    """The person's own kit.json, ~/.claude/kit.json: one per machine user, shared by every Claude
+    Code account on it (a second account's CLAUDE_CONFIG_DIR does not move it). `"mode": "light"`
+    there turns the coordinator line off; machine_setup.py records its answer there."""
+    return Path.home() / ".claude" / "kit.json"
+
+
+def personal_mode():
+    """`light` when the personal kit.json says so, else `` (the coordinator, in a kit project)."""
+    value, _ = read_json(personal_config())
+    mode = (value or {}).get("mode")
+    return "light" if isinstance(mode, str) and mode.strip().lower() == "light" else ""
+
+
+def write_json_atomic(path, value, backup=None):
+    """Write `value` to `path` through a temporary file beside its target, so a reader never sees
+    half a file and a symlinked file stays a symlink; with `backup`, the old file is copied to that
+    name beside `path` first. For a settings file another writer may change, use update_settings."""
+    import shutil
+    path = Path(path)
+    target = path.resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if backup and target.exists():
+        shutil.copy2(target, path.with_name(backup))
+    fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
+        if target.exists():
+            shutil.copymode(target, tmp)
+        os.replace(tmp, target)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+# The one writer for Claude Code settings files (settings.json, settings.local.json) and the personal
+# kit.json. Every kit write takes a lock, re-reads the file under it and merges into what is on disk
+# at that moment, so two kit writers never lose each other's change. The lock files live in the
+# user's own lock folder (the system temp dir's claude-kit-<uid>/, mode 0700; one that belongs to
+# another user is refused), one per file written, named by a hash of its resolved path: nothing is written into the project or the config dir to lock, so a checkout
+# stays clean and a symlinked settings file leaves nothing in its target's folder. Within one
+# process each lock is reentrant, so a writer may call another (away_on writes the marker under the
+# settings.json lock). Claude Code does not take this lock, so the file's size and mtime are compared again
+# before the replace, and a change made meanwhile is merged once more.
+SETTINGS_LOCK = "kit-settings.lock"  # the name earlier versions left beside a settings file
+SETTINGS_LOCK_WAIT = 2.0  # seconds; a stuck holder must not stall a session start
+SETTINGS_RETRIES = 5
+_settings_held = {}  # lock file -> [depth, open file]
+
+
+class SettingsBusy(OSError):
+    """Another process held the settings lock for longer than SETTINGS_LOCK_WAIT."""
+
+    def __init__(self, path):
+        super().__init__(f"{path} is held by another process")
+        self.lock = path
+
+
+class LockFolderForeign(OSError):
+    """The settings lock folder exists and belongs to another user."""
+
+    def __init__(self, path):
+        super().__init__(f"{path} belongs to another user")
+        self.folder = path
+
+
+def settings_lock_folder():
+    """The current user's folder for the settings locks: <temp>/claude-kit-<uid>, so a second user
+    on a shared temp dir (or a run as root) never leaves a folder the others cannot write."""
+    who = os.getuid() if hasattr(os, "getuid") else __import__("getpass").getuser()
+    return Path(tempfile.gettempdir()) / f"claude-kit-{who}"
+
+
+def make_lock_folder(folder):
+    """Create `folder` with mode 0700, or check an existing one is the current user's and tighten
+    it to 0700 when it is looser. Raises LockFolderForeign for one of another user's, OSError when
+    it cannot be made."""
+    try:
+        folder.mkdir(mode=0o700)
+        os.chmod(folder, 0o700)  # mkdir's mode is narrowed by the umask; ours to read and write
+    except FileExistsError:
+        if not folder.is_dir():
+            raise
+    if hasattr(os, "getuid") and (os.lstat(folder).st_uid != os.getuid() or os.stat(folder).st_uid != os.getuid()):
+        raise LockFolderForeign(folder)
+    if os.stat(folder).st_mode & 0o077:
+        os.chmod(folder, 0o700)  # another user could otherwise swap a lock file in it
+
+
+def settings_lock_file(target=None):
+    """The lock for the file `target` (default: the account's settings.json), in the current user's
+    lock folder. The target is resolved first, so one file reached by two spellings or through a
+    symlink is one lock (a second flock on it in one process would wait)."""
+    import hashlib
+    key = str(Path(target or user_settings()).resolve())
+    name = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+    return settings_lock_folder() / f"settings-{name}.lock"
+
+
+class settings_lock:
+    """`with kitlib.settings_lock(file):` holds the lock for `file` (default: the account's
+    settings.json); nested uses of one lock in one process share it. Raises SettingsBusy after
+    SETTINGS_LOCK_WAIT, LockFolderForeign when the lock folder is another user's, or OSError when
+    it cannot be created."""
+
+    def __init__(self, target=None):
+        self.path = settings_lock_file(target)
+
+    def __enter__(self):
+        held = _settings_held.get(self.path)
+        if held is None:
+            import fcntl  # here, so a platform without it cannot break importing this module
+            import time
+            make_lock_folder(self.path.parent)
+            fh = open(self.path, "w")
+            deadline = time.monotonic() + SETTINGS_LOCK_WAIT
+            while True:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() > deadline:
+                        fh.close()
+                        raise SettingsBusy(self.path) from None
+                    time.sleep(0.05)
+            held = _settings_held[self.path] = [0, fh]
+        held[0] += 1
+        return self
+
+    def __exit__(self, *exc):
+        held = _settings_held[self.path]
+        held[0] -= 1
+        if held[0] == 0:
+            held[1].close()  # closing releases the flock
+            del _settings_held[self.path]
+        return False
+
+
+def write_failed(exc, what):
+    """One line for an owner command whose settings write failed: what was not changed and what to
+    do. `exc` is SettingsBusy (try again), LockFolderForeign (another user's lock folder) or another
+    OSError (the path that cannot be written)."""
+    if isinstance(exc, SettingsBusy):
+        return (f"{what} was not changed: another kit process held {exc.lock} for more than "
+                f"{SETTINGS_LOCK_WAIT:g} s. Try again in a moment.")
+    if isinstance(exc, LockFolderForeign):
+        return (f"{what} was not changed: the lock folder {exc.folder} belongs to another user. "
+                f"Remove it, or set TMPDIR to a folder of your own, then try again.")
+    where = exc.filename or "the settings folder"
+    return f"{what} was not changed: {where} cannot be written ({exc.strerror or exc}). Make it writable, then try again."
+
+
+def drop_old_lock(path):
+    """Remove the kit-settings.lock an earlier version left beside `path` (and beside its target)."""
+    path = Path(path)
+    for folder in {path.parent, path.resolve().parent}:
+        try:
+            (folder / SETTINGS_LOCK).unlink(missing_ok=True)
+        except OSError:
+            pass  # a folder that is not ours to tidy, or a lock that is a folder: leave it
+
+
+def _signature(path):
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return None
+    return (st.st_size, st.st_mtime_ns, st.st_ino)
+
+
+def update_settings(path, change, backup=None):
+    """Change one settings file in place: resolve a symlink to its target, take the settings lock,
+    read the file as it is now, call `change(settings)` (edit the dict in place; return False when
+    there is nothing to write), copy the old file to `backup` beside `path`, then replace the target
+    in one step, keeping its mode bits. Returns `written`, `same`, `broken` (not a JSON object; the
+    file is left alone) or `busy` (it kept changing). Raises SettingsBusy when the file's lock is
+    held, and OSError when the folder cannot be written."""
+    path = Path(path)
+    with settings_lock(path):
+        for _ in range(SETTINGS_RETRIES):
+            target = path.resolve()
+            before = _signature(target)
+            settings, ok = read_json(target)
+            if not ok:
+                return "broken"
+            if change(settings) is False:
+                return "same"
+            if _signature(path.resolve()) != before:
+                continue  # Claude Code or the owner wrote it meanwhile: merge again from theirs
+            write_json_atomic(path, settings, backup=backup)
+            drop_old_lock(path)
+            return "written"
+    return "busy"
+
+
+# Away: Claude Code's permissions.denyInsteadOfPrompting (2.1.319) in the account's own settings.json.
+# A tool call that would wait on a permission prompt is denied and the turn goes on, so a run nobody
+# watches does not stall on a prompt. `items.py away on` sets it when the owner leaves and notes that
+# it did in AWAY_MARKER beside settings.json: the time, the file and a hash of the value written.
+# The key counts as the kit's only while that marker matches it; the kit removes it on `away off`
+# (the coordinator runs it at the owner's next message) or at the next interactive session start.
+# A marker whose key is gone is dropped the first time the kit reads the state, so a value the owner
+# sets later is his, and the kit never removes it.
+AWAY_KEY = "denyInsteadOfPrompting"
+AWAY_MARKER = "kit-away.json"
+AWAY_BACKUP = "settings.json.kit-away-backup"
+
+
+def user_settings():
+    return config_dir() / "settings.json"
+
+
+def away_hash(path, value):
+    import hashlib
+    text = json.dumps({"settings": str(path), "key": AWAY_KEY, "value": value}, sort_keys=True)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def away_marker():
+    """The marker as away_on wrote it, or None."""
+    value, ok = read_json(config_dir() / AWAY_MARKER)
+    return value if ok and value else None
+
+
+def away_state():
+    """(state, path): `kit` (on, set by the kit), `own` (on, set by the owner), `off`, or `broken`
+    (settings.json is not a JSON object, or its permissions are not one). A marker left without its
+    key (the owner removed it, or restored a backup) is dropped here."""
+    path = user_settings()
+    settings, ok = read_json(path)
+    perms = (settings or {}).get("permissions", {})
+    if not ok or not isinstance(perms, dict):
+        return "broken", path
+    marker = config_dir() / AWAY_MARKER
+    if AWAY_KEY not in perms:
+        if marker.exists():
+            with settings_lock():
+                again, ok = read_json(path)
+                if ok and AWAY_KEY not in ((again or {}).get("permissions") or {}):
+                    marker.unlink(missing_ok=True)
+        return "off", path
+    if perms[AWAY_KEY] is not True:
+        return "off", path
+    mark = away_marker()
+    if mark and mark.get("settings") == str(path) and mark.get("hash") == away_hash(path, perms[AWAY_KEY]):
+        return "kit", path
+    return "own", path
+
+
+def away_since():
+    """When the kit turned away on, as local `YYYY-MM-DD HH:MM`, or None."""
+    import time
+    since = (away_marker() or {}).get("since")
+    if not isinstance(since, (int, float)):
+        return None
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(since))
+
+
+def away_on():
+    """Turn away on; returns (exit code, message)."""
+    with settings_lock():
+        state, path = away_state()
+        if state == "broken":
+            return 1, f"{path} is not a valid JSON object; nothing was changed. Fix it, then run away on again."
+        if state == "own":
+            return 0, f"Away is already on: you set permissions.{AWAY_KEY} in {path} yourself; the kit leaves it."
+        if state == "kit":
+            return 0, (f"Away is already on (since {away_since()}). The coordinator runs `I away off` at the "
+                       "user's next message.")
+
+        def turn_on(settings):
+            perms = settings.setdefault("permissions", {})
+            if not isinstance(perms, dict) or perms.get(AWAY_KEY) is True:
+                return False
+            perms[AWAY_KEY] = True
+
+        if update_settings(path, turn_on, backup=AWAY_BACKUP) != "written":
+            return 1, f"{path} changed while the kit wrote it; nothing was changed. Run away on again."
+        write_json_atomic(config_dir() / AWAY_MARKER, {"settings": str(path), "since": int(time_now()),
+                                                       "hash": away_hash(path, True)})
+    return 0, (f"Away on: permissions.{AWAY_KEY} is true in {path} (backup {AWAY_BACKUP}). A tool call that "
+               "would wait on a permission prompt is denied instead and the turn goes on. The next "
+               "interactive session start turns it off.\n"
+               "The owner is back when he writes: the coordinator runs `I away off` at the user's next "
+               "message, before anything else.")
+
+
+def away_off():
+    """Turn away off if the kit turned it on; returns (exit code, message)."""
+    marker = config_dir() / AWAY_MARKER
+    with settings_lock():
+        state, path = away_state()
+        if state == "broken":
+            return 1, f"{path} is not a valid JSON object; nothing was changed."
+        if state == "own":
+            return 0, (f"Away stays on: you set permissions.{AWAY_KEY} in {path} yourself, so the kit leaves it. "
+                       "To turn it off, remove that key from the file.")
+        if state == "kit":
+            def turn_off(settings):
+                perms = settings.get("permissions")
+                if not isinstance(perms, dict) or perms.get(AWAY_KEY) is not True:
+                    return False
+                perms.pop(AWAY_KEY)
+                if not perms:
+                    settings.pop("permissions")
+
+            if update_settings(path, turn_off, backup=AWAY_BACKUP) not in ("written", "same"):
+                return 1, f"{path} kept changing; away is still on. Run away off again."
+        marker.unlink(missing_ok=True)
+    return 0, ("Away off: permission prompts ask again." if state == "kit" else "Away is off.")
+
+
+def time_now():
+    import time
+    return time.time()
 
 
 SECRET = re.compile(
@@ -528,7 +1352,8 @@ def git_out(cwd, *args, timeout=30, strip=True):
     """stdout of a git command, stripped unless strip=False (a porcelain status starts with a
     space that matters); "" on any failure."""
     try:
-        out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=timeout)
+        out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=timeout,
+                             env=git_env())
         if out.returncode != 0:
             return ""
         return out.stdout.strip() if strip else out.stdout
@@ -635,3 +1460,65 @@ def load_state(session_id, name):
 
 def save_state(session_id, name, value):
     state_path(session_id, name).write_text(json.dumps(value))
+
+
+# Variables that point git at another repository. A hook or a script started from inside a git
+# command (a pre-push hook, a rebase's exec step) inherits them, and a `git -C <other repo>` run
+# then reads the wrong repository; the branch and worktree checks clear them first.
+
+
+hermetic_env = git_env  # one helper; the older name is kept for its callers
+
+
+def git_run(cwd, *args, timeout=30):
+    """(returncode, stdout, stderr) of a git command in a hermetic environment; (None, "", reason)
+    when git cannot be run at all or times out."""
+    try:
+        out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True,
+                             timeout=timeout, env=hermetic_env())
+        return out.returncode, out.stdout, out.stderr
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, "", str(exc)
+
+
+def git_base(root):
+    """default_branch, with git run hermetically."""
+    code, out, _ = git_run(root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+    if code == 0 and out.strip().startswith("origin/"):
+        return out.strip()
+    for name in ("origin/main", "origin/master", "main", "master"):
+        if git_run(root, "rev-parse", "--verify", "--quiet", name + "^{commit}")[0] == 0:
+            return name
+    return None
+
+
+def merge_tree_support(root):
+    """None when the installed git can test a merge without touching a checkout (`git merge-tree
+    --write-tree`, git 2.38+), else the reason it cannot."""
+    code, out, err = git_run(root, "version")
+    m = re.search(r"(\d+)\.(\d+)", out or "")
+    if code != 0 or not m:
+        return f"git version unknown ({(err or out).strip() or 'no output'})"
+    if (int(m.group(1)), int(m.group(2))) < (2, 38):
+        return f"git {m.group(1)}.{m.group(2)} has no `merge-tree --write-tree` (2.38+)"
+    return None
+
+
+def merge_tree(root, a, b, timeout=60):
+    """("clean" | "conflict" | "unknown", [files in conflict], reason) for merging b into a, from
+    `git merge-tree --write-tree --name-only`, which writes objects only, never a checkout or a
+    ref. Exit 0 is clean and 1 a conflict; anything else (an unknown branch, an old git) is
+    unknown with git's own words, never a guess."""
+    reason = merge_tree_support(root)
+    if reason:
+        return "unknown", [], reason
+    for ref in (a, b):  # merge-tree exits 1 for a name it cannot resolve too, as for a conflict
+        if git_run(root, "rev-parse", "--verify", "--quiet", ref + "^{commit}")[0] != 0:
+            return "unknown", [], f"no commit named {ref}"
+    code, out, err = git_run(root, "merge-tree", "--write-tree", "--name-only", "--no-messages", a, b, timeout=timeout)
+    if code == 0:
+        return "clean", [], ""
+    lines = out.splitlines()
+    if code == 1 and lines and re.fullmatch(r"[0-9a-f]{40,64}", lines[0].strip()):  # the tree written, then the files
+        return "conflict", [ln for ln in lines[1:] if ln.strip()], ""
+    return "unknown", [], (err or out).strip().splitlines()[0] if (err or out).strip() else f"git exited {code}"
