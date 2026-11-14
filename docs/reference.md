@@ -22,7 +22,13 @@ and compaction prints one line saying the file is missing, the gates are off, an
 coordinator to tell the owner once and restore only with his approval. With neither file, state nor record
 the kit stays off. The owner turns the record off with `"guard": "off"` in kit.json (the record is
 removed, and the kit is off while that file says so), or with `items.py forget`, which removes it and
-which a thread is refused, like `away on`. The owner's personal choices that are never shared
+which a thread is refused, like `away on`. A record is one small file holding only its key.
+A repository under the system temp dir (`/tmp`, `/var/folders`, `$TMPDIR`) is never recorded: its
+hooks still work by its file or its state, but nothing is kept once they are gone. A record keyed by
+a path that no longer exists is dropped the next time a hook reads or writes the records; one keyed
+by an origin stays, since the repository may be cloned again. Deleting the whole `kit-projects/`
+folder is safe: a project with a kit.json or kit state is recorded again by its next hook, and only
+one whose file and state are both already gone loses its line. The owner's personal choices that are never shared
 (the unattended git steps) live in `.claude/kit.local.json` beside it.
 
 ```json

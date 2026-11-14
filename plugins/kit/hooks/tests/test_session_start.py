@@ -4,12 +4,20 @@
 Run: python3 plugins/kit/hooks/tests/test_session_start.py   (exit 0 = all good)
 """
 
+import atexit
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+# run alone or through tests/run_all.py, the hooks' opt-in records (kitlib.latch_opt_in) go to a
+# temp folder, never the user's config dir: running the test files alone once left 84 records there
+if not os.environ.get("KIT_OPT_IN_DIR"):
+    os.environ["KIT_OPT_IN_DIR"] = tempfile.mkdtemp(prefix="kit-opt-in-")
+    atexit.register(shutil.rmtree, os.environ["KIT_OPT_IN_DIR"], True)
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "session_start.py"
 
@@ -28,7 +36,7 @@ def run(payload, home=HOME, **env):
 
 
 def main():
-    os.environ.setdefault("KIT_OPT_IN_DIR", tempfile.mkdtemp(prefix="kit-opt-in-"))  # not the user's config dir
+    os.environ["KIT_TEMP_ROOTS"] = ""  # the repositories here live in the temp dir; record them anyway
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp) / "repo"
         (repo / ".claude" / "lead").mkdir(parents=True)

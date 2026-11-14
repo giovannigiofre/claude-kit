@@ -138,9 +138,49 @@ def has_kit_state(base):
 # records that under the user's config dir, keyed the way auto_mode_sync.py keys a repository (the
 # normalized origin, else the main checkout's path); from then on the project counts as a kit
 # project. The owner turns it off with `"guard": "off"` in kit.json (no record is kept, and one
-# kept before is removed) or with `items.py forget`, which a subagent may not run.
+# kept before is removed) or with `items.py forget`, which a subagent may not run. A repository
+# under the system temp dir is never recorded (a test run left 84 records of repositories that no
+# longer existed), and a record keyed by a path that is gone is dropped the next time the records
+# are read; one keyed by an origin stays, since the repository may be cloned again.
 OPT_IN_DIR = "kit-projects"
 _LATCHED = set()
+_PRUNED = set()
+
+
+def temp_roots():
+    """The system temp folders (as lessons.temp_roots reads them: KIT_TEMP_ROOTS, tests only)."""
+    raw = os.environ.get("KIT_TEMP_ROOTS")
+    roots = raw.split(os.pathsep) if raw is not None else \
+        ["/tmp", "/private/tmp", "/var/folders", "/private/var/folders", tempfile.gettempdir()]
+    return {os.path.realpath(r) for r in roots if r}
+
+
+def under_temp(root):
+    """True when the repository at `root` (its main checkout) lies under a system temp folder."""
+    here = os.path.realpath(str(main_checkout(root) or root))
+    return any(here == t or here.startswith(t.rstrip(os.sep) + os.sep) for t in temp_roots())
+
+
+def opt_in_folder():
+    return Path(os.environ.get("KIT_OPT_IN_DIR") or config_dir() / OPT_IN_DIR)  # the env: tests only
+
+
+def prune_opt_ins(folder=None):
+    """Drop the records keyed by a path that no longer exists, once per process; never raises."""
+    folder = Path(folder or opt_in_folder())
+    if str(folder) in _PRUNED:
+        return
+    _PRUNED.add(str(folder))
+    try:
+        for record in folder.glob("*.json"):
+            try:
+                key = json.loads(record.read_text(encoding="utf-8")).get("key")
+            except (OSError, ValueError, AttributeError):
+                continue
+            if isinstance(key, str) and os.path.isabs(key) and not os.path.exists(key):
+                record.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def opt_in_key(root):
@@ -162,13 +202,13 @@ def opt_in_record(root):
     import hashlib
     key = opt_in_key(root)
     slug = re.sub(r"[^a-z0-9]+", "-", key.lower()).strip("-")[-60:]
-    folder = Path(os.environ.get("KIT_OPT_IN_DIR") or config_dir() / OPT_IN_DIR)  # the env: tests only
-    return folder / f"{slug}-{hashlib.sha1(key.encode()).hexdigest()[:8]}.json"
+    return opt_in_folder() / f"{slug}-{hashlib.sha1(key.encode()).hexdigest()[:8]}.json"
 
 
 def opted_in_before(root):
     """True when a hook once saw this repository as a kit project and nobody has forgotten it."""
     try:
+        prune_opt_ins()
         return opt_in_record(root).is_file()
     except Exception:
         return False
@@ -181,10 +221,13 @@ def latch_opt_in(root):
         here = str(Path(root).resolve())
         if here in _LATCHED:
             return
+        _LATCHED.add(here)
+        if under_temp(root):  # a throwaway repository: the hooks work there, nothing is recorded
+            return
+        prune_opt_ins()
         record = opt_in_record(root)
         if not record.is_file():
-            write_json_atomic(record, {"key": opt_in_key(root), "checkout": str(main_checkout(root) or here)})
-        _LATCHED.add(here)
+            write_json_atomic(record, {"key": opt_in_key(root)})
     except Exception:
         pass
 
