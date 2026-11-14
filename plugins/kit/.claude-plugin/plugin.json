@@ -1,7 +1,7 @@
 {
   "name": "kit",
   "description": "A coordinator you talk to: say what you want and it runs each piece of work in a background thread (worktree, gate, evidence, PR) with its item on disk, pushes you when something is ready or needs you, and leaves the merge to you. Deterministic gates (check before stop, formatters, protected paths, guard), an overnight runner, debugging, learning, proposal cards and a status line",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "author": {
     "name": "giovannigiofre"
   },
