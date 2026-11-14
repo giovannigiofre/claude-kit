@@ -1029,8 +1029,9 @@ def settings_lock_folder():
 
 
 def make_lock_folder(folder):
-    """Create `folder` with mode 0700, or check an existing one is the current user's. Raises
-    LockFolderForeign for one of another user's, OSError when it cannot be made."""
+    """Create `folder` with mode 0700, or check an existing one is the current user's and tighten
+    it to 0700 when it is looser. Raises LockFolderForeign for one of another user's, OSError when
+    it cannot be made."""
     try:
         folder.mkdir(mode=0o700)
         os.chmod(folder, 0o700)  # mkdir's mode is narrowed by the umask; ours to read and write
@@ -1039,6 +1040,8 @@ def make_lock_folder(folder):
             raise
     if hasattr(os, "getuid") and (os.lstat(folder).st_uid != os.getuid() or os.stat(folder).st_uid != os.getuid()):
         raise LockFolderForeign(folder)
+    if os.stat(folder).st_mode & 0o077:
+        os.chmod(folder, 0o700)  # another user could otherwise swap a lock file in it
 
 
 def settings_lock_file(target=None):

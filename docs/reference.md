@@ -251,7 +251,7 @@ trusted, whatever it commits.
   `environment` is left alone with a one-line warning.
 - Writes go through the kit's one settings writer, `kitlib.update_settings`. It holds
   a lock per file written, in the user's own lock folder (the system temp dir's `claude-kit-<uid>/`,
-  made with mode 0700, so a second user on a shared temp dir or a run as root does not block the
+  made with mode 0700, and tightened to 0700 when the user's own is looser, so a second user on a shared temp dir or a run as root does not block the
   others; a folder of that name that belongs to another user ends the write in one line naming it,
   with exit 1), named by a hash of the file's resolved path, which every kit write to that file
   shares (writers with different `TMPDIR` values do not exclude each other, and the re-read under

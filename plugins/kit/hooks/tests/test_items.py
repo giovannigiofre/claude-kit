@@ -485,6 +485,12 @@ def lock_checks(tmp, check):
     check(code == 0 and folder.is_dir() and folder.stat().st_mode & 0o777 == 0o700,
           f"lock folder {folder}: {oct(folder.stat().st_mode) if folder.exists() else 'missing'} {out} {err}")
     local.unlink()
+    # one of the user's own that is looser (made by hand, or by an older kit under a wide umask) is tightened
+    folder.chmod(0o777)
+    code, out, err = run(repo, "sandbox", "on", env=dict(env, TMPDIR=str(fresh)))
+    check(code == 0 and folder.stat().st_mode & 0o777 == 0o700,
+          f"a loose lock folder is tightened: {oct(folder.stat().st_mode)} {out} {err}")
+    local.unlink()
     # a lock folder that cannot be made (a file in its place): the same one line
     odd = tmp / "oddtmp"
     odd.mkdir()
