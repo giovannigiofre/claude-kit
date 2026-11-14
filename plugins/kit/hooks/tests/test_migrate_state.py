@@ -532,6 +532,27 @@ def main():
         check(any("did not move" in l and "could not take its line" in l for l in told), f"said: {told}")
         check(again == [], f"said once: {again}")
 
+    # a shared .gitignore that listed the old places: the note names the .kit/ line for each of
+    # those, and says the exclude covers only this machine; it never edits .gitignore
+    for name, ignore, want in (
+            ("gi-some", "# kit\n.claude/lead/\n/.claude/evidence\n.claude/settings.local.json\n",
+             ".kit/lead/ .kit/evidence/."),
+            ("gi-whole", ".claude/\n", ".kit/lead/ .kit/evidence/ .kit/overnight/ .kit/agent-memory/kit-verifier/."),
+            ("gi-none", "node_modules/\n", None)):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = project(tmp, name)
+            (repo / ".gitignore").write_text(ignore)
+            said = []
+            code, _, _, _ = migrate_state.migrate(repo, out=said.append)
+            notes = [l for l in said if l.startswith("note: .gitignore")]
+            if want is None:
+                check(code == 0 and notes == [], f"{name}: no note: {said}")
+            else:
+                check(code == 0 and len(notes) == 1 and f"add these lines there for the team (the kit does not "
+                      f"edit .gitignore): {want}" in notes[0]
+                      and "only on this machine, through .git/info/exclude" in notes[0], f"{name}: {said}")
+            check((repo / ".gitignore").read_text() == ignore, f"{name}: .gitignore untouched")
+
     # two session starts at once, many times: the owner's lines stay, no line is cut, no false
     # conflict, and the runs log keeps the winner's entry
     session_start = SCRIPTS / "session_start.py"

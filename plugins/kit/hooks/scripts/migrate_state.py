@@ -344,6 +344,28 @@ def nothing_to_move(main, skipped):
     return "nothing to move" + (f": the state is in {STATE}/" if (main / STATE).is_dir() else "")
 
 
+def gitignore_lines(main, names):
+    """The `.kit/<name>/` lines the shared .gitignore needs, one for each moved entry whose
+    `.claude/<name>` it ignores (or all, when it ignores `.claude/` whole). Before the move the
+    team's .gitignore kept these out of git everywhere; after it, only this machine's exclude does."""
+    try:
+        text = (Path(main) / ".gitignore").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    listed = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", "!")):
+            continue
+        for tail in ("/**", "/*", "/"):
+            if line.endswith(tail):
+                line = line[:-len(tail)]
+                break
+        listed.add(line.lstrip("/"))
+    return [f"{STATE}/{name}/" for name in dict.fromkeys(names)
+            if LEGACY in listed or f"{LEGACY}/{name}" in listed]
+
+
 def migrate(main, dry=False, force=False, out=print, again=False):
     """Move what can move; returns (exit code, the entries moved, the conflicts left, the entries
     that failed with their error)."""
@@ -417,12 +439,11 @@ def migrate(main, dry=False, force=False, out=print, again=False):
     if done or not (conflicts or failed):
         out(f"moved {len(done)} entr{'y' if len(done) == 1 else 'ies'} to {STATE}/" if done
             else nothing_to_move(main, skipped))
-    try:
-        text = (main / ".gitignore").read_text(encoding="utf-8")
-        if done and (f"{LEGACY}/lead" in text or f"{LEGACY}/evidence" in text):
-            out(f"note: .gitignore names {LEGACY}/ state paths; add the {STATE}/ ones there if the team shares it")
-    except OSError:
-        pass
+    lines = gitignore_lines(main, [d["name"] for d in done])
+    if lines:
+        out(f"note: .gitignore ignores the old {LEGACY}/ places; add these lines there for the team "
+            f"(the kit does not edit .gitignore): {' '.join(lines)}. Until then {STATE}/ is ignored "
+            f"only on this machine, through .git/info/exclude.")
     return (1 if failed else 3 if conflicts else 0), done, conflicts, failed
 
 

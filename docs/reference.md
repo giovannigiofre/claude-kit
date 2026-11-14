@@ -211,6 +211,9 @@ back and sets kit.local.json `lead.state` to `".claude"`; from then on the sessi
 `migrate --again`. A move leaves `.kit/migration.json` (a log of each run, merged under a lock,
 which `undo` does not read) and, only where `.claude/` still exists, `.claude/kit-state-moved.txt`. A `.kit.migrating/` left by the first version of the
 script is emptied into `.kit/` the same way.
+When the shared `.gitignore` listed a moved entry's `.claude/` place, `migrate` ends with a note
+naming the `.kit/<entry>/` line to add for each, since until then `.kit/` is ignored only on this
+machine, through `.git/info/exclude`; the kit does not edit `.gitignore`.
 
 
 ### Auto mode environment, per repo
