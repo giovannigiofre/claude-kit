@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
@@ -821,6 +822,22 @@ def main():
         check(not (folder.parent / "login-page-2").exists(), "nothing made on a refusal")
         code, out, _ = run(repo, "new", "Login page", "--again")
         check(code == 0 and out.startswith("login-page-2\t"), f"--again makes the numbered item on purpose: {out}")
+        # two `new` calls with one name at the same moment: one makes it, the other is refused
+        # (review of 2.0.1: both passed an is_dir() check and both succeeded). Each process loads
+        # items.py first and then waits for the same start time, so both reach new() together.
+        racer = ("import sys, time\nsys.path.insert(0, sys.argv[1])\nimport items\n"
+                 "while time.time() < float(sys.argv[4]): pass\n"
+                 "try:\n    print(items.new(sys.argv[2], sys.argv[3]))\nexcept items.ItemExists:\n    print('refused')\n")
+        rounds, wrong = 20, []
+        for n in range(rounds):
+            start = str(time.time() + 0.4)
+            procs = [subprocess.Popen([sys.executable, "-c", racer, str(SCRIPTS), str(repo), f"Race {n}", start],
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(2)]
+            said = sorted(p.communicate(timeout=60)[0].strip() for p in procs)
+            made = sorted(d.name for d in (repo / ".claude/lead/items").iterdir() if d.name.startswith(f"race-{n}"))
+            if said != sorted([f"race-{n}", "refused"]) or made != [f"race-{n}"]:
+                wrong.append((n, said, made))
+        check(not wrong, f"one of two simultaneous `new` calls is refused, in {rounds} rounds: {wrong}")
         check(items.find_id("hello\nITEM: Login-Page\nmore") == "login-page", "find_id is case-insensitive")
         check(items.find_id("no item here") is None, "no id when absent")
 

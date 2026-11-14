@@ -291,17 +291,30 @@ def new(root, name, brief="", source="lead", kind="ship", again=False):
     root = Path(root)
     base = items_dir(root)
     item_id = slug(name)
-    if not again and item_path(root, item_id).is_dir():
-        path = item_path(root, item_id)
-        raise ItemExists(item_id, status_of(path)[0] or "?", created_at(path) or "?")
     base.mkdir(parents=True, exist_ok=True)
     ensure_excluded(root)
+    # The folder is made with an exclusive mkdir, so it is the lock: two `new` calls at the same
+    # moment both passed an is_dir() check and both went on (review of 2.0.1). The loser of the
+    # mkdir is refused like any existing item; only `again` looks for a free suffix.
+    folder = None
+    if not again and not item_path(root, item_id, done=True).is_dir():
+        try:
+            (base / item_id).mkdir()
+            folder = base / item_id
+        except FileExistsError:
+            path = item_path(root, item_id)
+            raise ItemExists(item_id, status_of(path)[0] or "?", created_at(path) or "?") from None
     n = 2
-    while find(root, item_id):
+    while folder is None:
+        if not find(root, item_id):
+            try:
+                (base / item_id).mkdir()
+                folder = base / item_id
+                break
+            except FileExistsError:
+                pass
         item_id = f"{slug(name, 36)}-{n}"
         n += 1
-    folder = base / item_id
-    folder.mkdir()
     body = (brief or "").strip()
     if find_id(body) != item_id:
         body = f"ITEM: {item_id}\nKIND: {kind}\n\n" + ITEM_LINE.sub("", body).strip()
