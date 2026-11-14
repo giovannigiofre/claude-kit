@@ -98,7 +98,8 @@ def snapshot_checks(tmp, check):
     hook(repo, {"cwd": str(repo), "agent_type": "kit:implementer", "agent_id": "a1",
                 "agent_transcript_path": str(t1), "last_assistant_message": ""}, env)
     log = (lead / "items" / "login" / "LOG.md").read_text()
-    check("| cost | in=5 out=150 cache_read=3000 cache_write=510 tools=3 minutes=12.5 agent=a1\n" in log, log)
+    # minutes are active time: the 12.5-minute wait before m2 counts as five
+    check("| cost | in=5 out=150 cache_read=3000 cache_write=510 tools=3 minutes=5.1 agent=a1\n" in log, log)
     check(log.rstrip().splitlines()[-1].split(" | ")[1] == "reported", f"the report stays the last event: {log}")
     # a transcript without usage records: no cost line, the hook still files the report
     t2 = tmp / "agent-a2.jsonl"
@@ -113,7 +114,7 @@ def snapshot_checks(tmp, check):
                 "agent_transcript_path": str(t1), "last_assistant_message": ""}, env)
     snap = items.snapshot(repo)
     login = next(r for r in snap["items"] if r["id"] == "login")
-    check(login["cost"] == {"in": 6, "out": 160, "cache_read": 3000, "cache_write": 510, "tools": 3, "minutes": 20.0,
+    check(login["cost"] == {"in": 6, "out": 160, "cache_read": 3000, "cache_write": 510, "tools": 3, "minutes": 10.1,
                             "threads": 1}, f"status counts a thread's latest cost line only: {login['cost']}")
     check(login["agent"] == "a1" and login["branch"] == "feat/login" and login["pr"] == "#12",
           f"agent, branch and PR from the LOG and REPORT.md: {login}")

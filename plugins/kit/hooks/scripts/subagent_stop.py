@@ -293,15 +293,21 @@ def usage_of(path):
     def total(key):
         return sum(u.get(key) for u in replies.values() if isinstance(u.get(key), int))
 
+    # active time, not the span: a thread resumed for a second round showed 28.7 minutes for about
+    # 15 of work, the hour between its rounds included. Each gap between entries counts up to IDLE_CAP.
     minutes = 0.0
     try:
         from datetime import datetime
         times = sorted(datetime.fromisoformat(t.replace("Z", "+00:00")) for t in stamps)
-        minutes = round((times[-1] - times[0]).total_seconds() / 60, 1) if times else 0.0
+        gaps = ((b - a).total_seconds() for a, b in zip(times, times[1:]))
+        minutes = round(sum(min(g, IDLE_CAP) for g in gaps) / 60, 1)
     except (ValueError, TypeError):
         pass
     return {"in": total("input_tokens"), "out": total("output_tokens"), "cache_read": total("cache_read_input_tokens"),
             "cache_write": total("cache_creation_input_tokens"), "tools": len(tools), "minutes": minutes}
+
+
+IDLE_CAP = 300  # seconds: a longer gap between two transcript entries counts as five minutes
 
 
 def file_cost(root, transcript, agent_id=""):

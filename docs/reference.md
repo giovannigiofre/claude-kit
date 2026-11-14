@@ -384,8 +384,9 @@ does not ignore it.
 
 The same hook writes a token ledger line before the report line: `cost | in=… out=… cache_read=…
 cache_write=… tools=… minutes=… agent=<id>`, read from the thread's transcript (each reply counted
-once by its message id, tools as distinct tool calls, minutes from the first to the last
-timestamp). Tokens only, no dollar figure, since prices change and differ by plan. A resumed
+once by its message id, tools as distinct tool calls, minutes as active time: the gaps between
+consecutive transcript entries added up, each gap counted up to 5 minutes, so a thread left
+waiting an hour between two rounds does not show that hour). Tokens only, no dollar figure, since prices change and differ by plan. A resumed
 thread writes a new line with its whole total, so `status` sums only the latest line per agent. A
 transcript without usage writes nothing and never fails the hook.
 
