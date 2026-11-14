@@ -383,6 +383,15 @@ def main():
     if bash(h4, r4, "rm -rf /")[0] != 0:
         failed += 1
         print("FAIL a project without kit.json must not be guarded by default")
+    if bash(h4, r4, "git push origin main")[0] != 0:
+        failed += 1
+        print("FAIL a project with neither kit.json nor kit state stays silent")
+    # kit.json went missing in a project that uses the kit (its items are here): the guard stays on
+    (r4 / ".kit" / "lead" / "items").mkdir(parents=True)
+    code, err = bash(h4, r4, "git push origin main")
+    if code != 2:
+        failed += 1
+        print(f"FAIL kit state without kit.json keeps the guard: git push origin main got {code} {err}")
     h5, r5 = setup(project_kit=False, user_kit={"guard": "on"})
     if bash(h5, r5, "rm -rf /")[0] != 2:
         failed += 1

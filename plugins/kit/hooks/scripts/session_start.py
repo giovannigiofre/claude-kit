@@ -14,8 +14,10 @@ session is the project's coordinator (kit:lead), routed by this hook rather than
 which a cloud session or Remote Control may not load. `"mode": "light"` in the personal kit.json
 (~/.claude/kit.json) is the one off switch; a headless run (KIT_HEADLESS) and a subagent get none.
 
-A kit.json that exists is the opt-in, even `{}`: the "kit harness active" line is always printed
-then, with one line per key the kit does not know (and the closest known key), one per key of
+A kit.json that exists is the opt-in, even `{}`, and so is the kit's state in the main checkout
+when kit.json went missing (kitlib.load_config): then MISSING takes the header's place, every
+start and compaction, saying the gates are off and how to restore the file. The "kit harness
+active" line is always printed otherwise, with one line per key the kit does not know (and the closest known key), one per key of
 the wrong type, and one when items on disk are still `queued`."""
 
 import difflib
@@ -55,6 +57,28 @@ COORDINATOR = (
     "of a handful of tool calls yourself, start background threads for the rest. Send one "
     "PushNotification when an item becomes ready for review or needs the user, and when an unattended "
     "run ends; none for progress.")
+
+
+# The one line while kit.json is missing in a project that uses the kit (kitlib.config_missing):
+# the kit runs on its defaults, but with no `check` or `verify` nothing gates a stop. In the
+# owner's project (2026-11) a commit removed kit.json and nothing said so for days. Printed in
+# place of the "kit harness active" header, at every start and compaction until the file is back.
+MISSING = ("kit: .claude/kit.json is missing in this project although it uses the kit (its board and items "
+           "are here), so the gates are off: no `check` before a stop, no `verify`. Tell the owner once, now, "
+           "and restore it only with his approval (the write goes through Claude Code's own prompt, .claude "
+           "being protected): {how}.")
+
+
+def missing_line(root):
+    """MISSING with the way back: the last version git has of the file, else /kit:init."""
+    main = kitlib.main_checkout(root) or root
+    last = kitlib.git_out(main, "log", "-1", "--format=%h", "--", kitlib.CONFIG, timeout=10)
+    if not last:
+        return MISSING.format(how="run /kit:init (git has no copy of it)")
+    # the last commit that touched it either deleted it (its parent has it) or still holds it
+    ref = last if kitlib.git_out(main, "cat-file", "-t", f"{last}:{kitlib.CONFIG}", timeout=10) else f"{last}^"
+    return MISSING.format(how=f"in {main}, `git show {ref}:{kitlib.CONFIG} > {kitlib.CONFIG}` "
+                              f"(its last version in git), else /kit:init")
 
 
 def config_notes(config):
@@ -103,8 +127,8 @@ def asking_line(root):
             if rule not in seen[str(where)]:
                 seen[str(where)].append(rule)
     which = "; ".join(", ".join(f"`{r}`" for r in rules[:4]) + f" in {where}" for where, rules in seen.items())
-    return [f"- permission rules ask before every {', '.join(asking)} here ({which}): each one stops on a prompt "
-            "for the owner, in auto mode and from a thread too, and an allow rule cannot override it. So run each "
+    return [f"- permission rules ask before every {', '.join(asking)} here ({which}), so such a step may "
+            "stop on a prompt for the owner. So run each "
             "such step once, in one command with its clean-up; never repeat one that is waiting on a prompt or was "
             "not answered (hand it back as `needs push`). The first time one of these prompts comes up in this "
             "session, tell the owner in one line that these rules are why, and ask once whether to change them "
@@ -326,6 +350,7 @@ def main():
     if config is None:
         return 0  # project has not opted in: stay silent
     coordinator = coordinator_line(data)
+    missing = missing_line(root) if kitlib.config_missing(root) else ""
     if coordinator:
         print(coordinator)
         still = away_line()
@@ -351,7 +376,7 @@ def main():
             print(line)
     except Exception as exc:
         print(f"kit: auto mode sync skipped: {exc}")
-    lines = ["kit harness active for this project (.claude/kit.json):"]
+    lines = [missing or "kit harness active for this project (.claude/kit.json):"]
     author_line = ensure_author(root, config)
     if author_line:
         lines.append(author_line)
@@ -375,7 +400,7 @@ def main():
         lines.append(queued)
     print("\n".join(lines))  # the header always: a kit.json of only unknown keys must not look like silence
     sys.stdout.flush()  # the gate lines stand even if the lessons run out of time
-    for line in learned(root, len(coordinator)):
+    for line in learned(root, len(coordinator) + len(missing)):
         print(line)
     return 0
 

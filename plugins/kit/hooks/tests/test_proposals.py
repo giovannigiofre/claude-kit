@@ -82,6 +82,12 @@ def main():
         check("added 0" in out and ("duplicate" in out or "already an item" in out), out)
         code, out, err = run(repo, "take", setup_id)
         check(code == 1 and "no open card" in err, "taking twice fails")
+        # a card whose item another session already made: refused, the card stays open
+        api_id = files[0][:-3]
+        made = proposals.items.new(repo, api_id)
+        code, out, err = run(repo, "take", api_id)
+        check(code == 1 and f"{made} is already an open item (queued, created " in err and "LOG.md" in err, f"{code} {err}")
+        check((pdir / files[0]).exists(), "the card is not retired on a refusal")
 
         # retire: by age or when the origin is gone
         code, out, _ = run(repo, "retire", "--days", "30")

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SessionEnd: once distill.EVENTS_TO_RUN lessons events are pending for this repo, run the
 distiller (distill.py) in a detached process, so the session ends without waiting. Silent. A
-project without .claude/kit.json does nothing. Standard library only.
+project that has not opted in (kitlib.load_config) does nothing. Standard library only.
 """
 
 import sys

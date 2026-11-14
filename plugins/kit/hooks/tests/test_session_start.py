@@ -37,9 +37,16 @@ def main():
 
         board = "SHIP: pr | PARALLEL: 3 | BUDGET: none\nA1 | ship | login | DONE WHEN e2e | working | agent A1 | feat/login | -\n"
         (repo / ".claude" / "lead" / "board.md").write_text(board)
-        assert run({"cwd": str(repo), "source": "startup"}) == "", "the board comes back only after a compaction"
+        # kit state without kit.json (a commit removed it): the kit still runs, and says the gates are off
+        out = run({"cwd": str(repo), "source": "startup"})
+        assert "A1 | ship | login" not in out, "the board comes back only after a compaction"
+        assert "coordinates this project" in out and "kit harness active" not in out, out
+        missing = [l for l in out.splitlines() if "kit.json is missing" in l]
+        assert len(missing) == 1 and "gates are off" in missing[0] and "his approval" in missing[0], out
+        assert "/kit:init (git has no copy of it)" in missing[0] and "git show" not in missing[0], missing
         out = run({"cwd": str(repo), "source": "compact"})
         assert "just compacted" in out and "A1 | ship | login" in out, out
+        assert out.count("kit.json is missing") == 1, "the line comes back after a compaction too"
         rows = "".join(f"B{i} | ship | goal {i} | DONE WHEN ok | done | - | - | -\n" for i in range(70))
         (repo / ".claude" / "lead" / "board.md").write_text("SHIP: pr\nRULES: " + "x; " * 3000 + "\n" + board + rows)
         out = run({"cwd": str(repo), "source": "compact"})
@@ -54,6 +61,27 @@ def main():
         }))
         out = run({"cwd": str(repo), "source": "startup"})
         assert "make lint" in out and "make test" in out and "data/raw/**" in out and "one group per worker" in out, out
+        assert "kit.json is missing" not in out and "kit harness active" in out, "a project with kit.json: unchanged"
+
+        # git history has the file: the line names the commit to restore it from
+        hist = Path(tmp) / "hist"
+        (hist / ".kit" / "lead" / "items").mkdir(parents=True)
+        g = lambda *a: subprocess.run(["git", "-C", str(hist), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                                      check=True, capture_output=True, text=True).stdout.strip()
+        g("init", "-q")
+        (hist / ".claude").mkdir()
+        (hist / ".claude" / "kit.json").write_text('{"verify": "make test"}')
+        g("add", ".claude/kit.json"); g("commit", "-qm", "kit")
+        g("rm", "-q", ".claude/kit.json"); g("commit", "-qm", "tidy")
+        gone = g("log", "-1", "--format=%h", "--", ".claude/kit.json")
+        out = run({"cwd": str(hist), "source": "startup"})
+        assert f"`git show {gone}^:.claude/kit.json > .claude/kit.json`" in out, out
+        (hist / ".claude").mkdir(exist_ok=True)
+        (hist / ".claude" / "kit.json").write_text('{"verify": "make test"}')
+        g("add", ".claude/kit.json"); g("commit", "-qm", "back")
+        (hist / ".claude" / "kit.json").unlink()  # deleted on disk only: the last commit still holds it
+        last = g("log", "-1", "--format=%h", "--", ".claude/kit.json")
+        assert f"`git show {last}:.claude/kit.json" in run({"cwd": str(hist), "source": "startup"})
         out = run({"cwd": str(repo), "source": "compact"})
         assert "A1 | ship" not in out, "lead.board moves the board; the default path is not read"
         (repo / "docs").mkdir()
@@ -70,6 +98,9 @@ def main():
         line = next(l for l in out.splitlines() if "permission rules ask" in l)
         assert "push, rebase, merge here" in line and "`Bash(git push*)`" in line and "`Bash(gh pr merge*)`" in line, line
         assert "in .claude/settings.json" in line and "reset" not in line and "force" not in line, line
+        # what the kit knows: the rules ask, so a step may stop; not a claim about every mode
+        assert "so such a step may stop on a prompt for the owner" in line and "auto mode" not in line, line
+        assert "run each such step once" in line and "never repeat one" in line and "tell the owner" in line, line
         settings.write_text(json.dumps({"permissions": {"ask": ["Bash(git reset --hard*)"], "allow": ["Bash(git push*)"]}}))
         assert "permission rules ask" not in run({"cwd": str(repo), "source": "startup"}), "an ask on another command is not named"
         settings.write_text("{ not json")

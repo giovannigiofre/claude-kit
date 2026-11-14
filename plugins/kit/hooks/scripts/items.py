@@ -20,9 +20,11 @@ The board stays the index; these files are what survives a compaction, a restart
 another session (`cat` them). BRIEF.md starts with `ITEM: <id>`: a thread briefed with its text
 carries the id, and the hooks file its report under it. `new` also appends a `queued` row to the
 board when it exists (`<id> | <kind> | <name> | DONE WHEN <first DONE WHEN line of the brief> |
-queued | agent - | - | from <source>`), so a handed-off or taken item is seen. Standard library only.
+queued | agent - | - | from <source>`), so a handed-off or taken item is seen. `new` refuses the
+name of an item that is still open (exit 1, naming its status and when it was made: another
+session has it); `--again` makes `<id>-2` on purpose, and an archived name gets its suffix as is. Standard library only.
 
-    python3 items.py new <slug> [--brief FILE|-] [--from lead|handoff|scout] [--kind ship|scout]
+    python3 items.py new <slug> [--brief FILE|-] [--from lead|handoff|scout] [--kind ship|scout] [--again]
     python3 items.py list [--status queued|working|review|needs-you|done]
     python3 items.py log <id> <status> [note]
     python3 items.py put <id> <file>...      copy files into the item's out/ folder (their names kept)
@@ -263,14 +265,37 @@ def status_of(path):
     return (parts[1] if len(parts) > 1 else ""), (parts[2] if len(parts) > 2 else "")
 
 
-def new(root, name, brief="", source="lead", kind="ship"):
+class ItemExists(Exception):
+    """`new` with the name of an item that is still open: (id, status, created)."""
+
+
+def created_at(path):
+    """When the item was made: the time on the first line of its LOG.md, else ""."""
+    try:
+        for line in (path / "LOG.md").read_text(encoding="utf-8").splitlines():
+            if line.startswith("- "):
+                return line[2:].split("|", 1)[0].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def new(root, name, brief="", source="lead", kind="ship", again=False):
     """Make an item: the folder, BRIEF.md headed by `ITEM: <id>`, the first LOG line, and, when
-    the board exists, a `queued` row on it (so the lead and the status line see it). Returns the id."""
+    the board exists, a `queued` row on it (so the lead and the status line see it). Returns the id.
+
+    An open item of the same id raises ItemExists unless `again`: two coordinator sessions on one
+    project (2026-11) each made the item 40 seconds apart, the second silently as `<id>-2`, and
+    worked the same issue twice. A name found only among the archived (done/) items, or `again`,
+    gets the next free suffix."""
     root = Path(root)
     base = items_dir(root)
+    item_id = slug(name)
+    if not again and item_path(root, item_id).is_dir():
+        path = item_path(root, item_id)
+        raise ItemExists(item_id, status_of(path)[0] or "?", created_at(path) or "?")
     base.mkdir(parents=True, exist_ok=True)
     ensure_excluded(root)
-    item_id = slug(name)
     n = 2
     while find(root, item_id):
         item_id = f"{slug(name, 36)}-{n}"
@@ -479,6 +504,86 @@ def refs(path, lines):
     return agent, branch, pr
 
 
+AT_WORK = ("working", "landing")
+TIP = re.compile(r"(?:\breviewed\s+|^\W*REVIEWED:\s*(?:[\w./-]+,\s*)?)`?([0-9a-fA-F]{7,40})\b", re.M | re.I)
+
+
+def merged(root, path, lines=None):
+    """True when the branch an item names is already in the default branch, from git alone (no
+    network): the local branch is an ancestor of it, or, the branch deleted, the last commit the
+    item names (a verifier's `REVIEWED:` sha) is. A branch with no commit of its own since it was
+    made (one reflog entry) is a thread that has not committed yet, not a merged one. None when
+    the kit cannot tell, which the callers read as still at work."""
+    lines = log_lines(path) if lines is None else lines
+    branch = refs(path, lines)[1]
+    base = kitlib.git_base(root)
+    if not branch or not base:
+        return None
+    bases = [base] + ([base.split("/", 1)[1]] if base.startswith("origin/") else [])
+
+    def contains(commit):
+        found = None
+        for b in bases:
+            code = kitlib.git_run(root, "merge-base", "--is-ancestor", commit, b)[0]
+            if code == 0:
+                return True
+            found = False if code == 1 else found
+        return found
+
+    code, tip, _ = kitlib.git_run(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}")
+    if code == 0:
+        entries = kitlib.git_run(root, "reflog", "show", "--format=%H", f"refs/heads/{branch}")[1].split()
+        if len(entries) <= 1:
+            return None
+        return contains(tip.strip())
+    texts = [note for _, st, note in reversed(lines) if st != "cost"]
+    for name in ("VERDICT.md", "REPORT.md"):
+        try:
+            texts.append((path / name).read_text(encoding="utf-8"))
+        except OSError:
+            pass
+    shas = [m.group(1) for m in map(TIP.search, texts) if m]
+    if not shas or kitlib.git_run(root, "rev-parse", "--verify", "--quiet", shas[0] + "^{commit}")[0] != 0:
+        return None
+    # a squash merge leaves the reviewed commit outside the default branch: not in it proves nothing
+    return contains(shas[0]) or None
+
+
+GH_TIMEOUT = 10  # seconds for one `gh pr view` asked by `status` or a hand-run migrate
+GH_MAX = 10      # items asked about in one run, so a long board cannot stall the command
+
+
+def gh_budget():
+    """What a caller that may use the network passes as `ask`: GH_MAX `gh pr view` calls."""
+    return {"left": GH_MAX}
+
+
+def stale_merged(root, path, status=None, lines=None, ask=None):
+    """An item logged `working` or `landing` whose branch is already merged: nothing runs for it,
+    and `items.py done <id>` closes it. Never closed here. With `ask` (gh_budget()), an item git
+    cannot place and whose LOG or REPORT names a PR is asked of `gh pr view`, as `done` does: the
+    owner's projects squash-merge and delete the branch, which git alone never reads as merged.
+    Unknown stays unknown. The session start's automatic migration passes no `ask`: no network."""
+    status = status_of(path)[0] if status is None else status
+    if status not in AT_WORK:
+        return False
+    lines = log_lines(path) if lines is None else lines
+    found = merged(root, path, lines)
+    if found is None and ask is not None and ask["left"] > 0:
+        pr = refs(path, lines)[2]
+        if pr:
+            ask["left"] -= 1
+            found = merge_state(root, pr, timeout=GH_TIMEOUT)[0] == "merged"
+    return found is True
+
+
+def at_work(root, path):
+    """Is a thread or a landing still at work on this item: `working` or `landing`, and its branch
+    not merged (or the kit cannot tell)."""
+    status = status_of(path)[0]
+    return status in AT_WORK and not stale_merged(root, path, status)
+
+
 def needs_you(root, known=()):
     """[{"id", "question"}] from the board's NEEDS YOU line, or None without a board. An entry starts
     where `<id>:` follows a `;`, for an id the items or the board rows know (any id-like word
@@ -506,8 +611,9 @@ def needs_you(root, known=()):
     return out
 
 
-def snapshot(root, at=None):
-    """One snapshot of the open items, built from their folders (not from board.md)."""
+def snapshot(root, at=None, ask=None):
+    """One snapshot of the open items, built from their folders (not from board.md). `ask`: see
+    stale_merged."""
     rows = []
     for item in list_items(root):
         p = Path(item["path"])
@@ -524,6 +630,7 @@ def snapshot(root, at=None):
         rows.append({"id": item["id"], "kind": kind, "status": item["status"], "last_event": last[1],
                      "last_at": last[0], "age_minutes": age_minutes(last[0], at), "note": item["note"],
                      "agent": agent, "branch": branch, "pr": pr, "cost": costs(lines),
+                     "stale_merged": stale_merged(root, p, item["status"], lines, ask),
                      "blocked_by": item["blocked_by"], "brief": item["brief"]})
     counts = {}
     for r in rows:
@@ -550,8 +657,13 @@ def print_status(snap):
                  if cost else "-")
         age = f"{r['age_minutes']}m ago" if r["age_minutes"] is not None else "?"
         where = " ".join(x for x in (r["branch"], r["pr"]) if x) or "-"
-        state = (r["status"] or "?") + (f" blocked-by {', '.join(r['blocked_by'])}" if r["blocked_by"] else "")
+        state = ((r["status"] or "?") + (" stale (merged)" if r.get("stale_merged") else "")
+                 + (f" blocked-by {', '.join(r['blocked_by'])}" if r["blocked_by"] else ""))
         print(f"{r['id']} | {r['kind'] or '-'} | {state} | {age} | {where} | agent {r['agent'] or '-'} | {spent} | {r['note']}")
+    stale = [r["id"] for r in rows if r.get("stale_merged")]
+    if stale:
+        print(f"stale (merged): {', '.join(stale)}: the branch is in the default branch and nothing runs for it; "
+              f"`items.py done <id>` closes each")
     print("counts: " + (", ".join(f"{k} {v}" for k, v in sorted(snap["counts"].items())) or "none"))
     for run in snap.get("overnight") or ():
         print(kitlib.overnight_news_line(run).replace("kit: ", "", 1) + ": tell the user")
@@ -624,7 +736,7 @@ def conflicts(root, ids=None):
     return (1 if found else 2 if unknown else 0), lines
 
 
-def merge_state(root, pr):
+def merge_state(root, pr, timeout=30):
     """("merged" | "open" | "closed" | "unknown", detail) for the item's PR from `gh pr view`; unknown
     when gh is missing, not logged in or the call fails, never a guess."""
     gh = shutil.which("gh")
@@ -634,7 +746,7 @@ def merge_state(root, pr):
     target = pr.lstrip("#")
     try:
         out = subprocess.run([gh, "pr", "view", target, "--json", "state,mergedAt"], cwd=str(root),
-                             capture_output=True, text=True, timeout=30, env=kitlib.hermetic_env())
+                             capture_output=True, text=True, timeout=timeout, env=kitlib.hermetic_env())
     except (OSError, subprocess.TimeoutExpired) as exc:
         return "unknown", f"gh failed: {exc}"
     if out.returncode != 0:
@@ -649,6 +761,13 @@ def merge_state(root, pr):
     if state in ("OPEN", "CLOSED"):
         return state.lower(), ""
     return "unknown", f"gh said state {state or 'nothing'}"
+
+
+def records_header(path):
+    """The one line above every printed list of record places: whose list it is, and that only
+    the places an item touches are updated (in the trial three of six did not apply)."""
+    return (f"RECORDS: this project's record places (from {path} lead.records). Update the ones this "
+            "item touches, then tell the owner it is done:")
 
 
 def main(argv=None):
@@ -681,7 +800,19 @@ def main(argv=None):
         if not rest:
             print("items: new needs a name", file=sys.stderr)
             return 2
-        item_id = new(root, " ".join(rest), brief, source, kind)
+        again = "--again" in rest
+        rest = [a for a in rest if a != "--again"]
+        if not rest:
+            print("items: new needs a name", file=sys.stderr)
+            return 2
+        try:
+            item_id = new(root, " ".join(rest), brief, source, kind, again)
+        except ItemExists as exc:
+            item_id, status, created = exc.args
+            print(f"items: {item_id} is already an open item ({status}, created {created}): another session may "
+                  f"be working on it. Read its LOG.md ({item_path(root, item_id)}) first; `new --again` makes "
+                  f"a second, numbered item on purpose.", file=sys.stderr)
+            return 1
         print(f"{item_id}\t{item_path(root, item_id)}")
         return 0
     if cmd == "list":
@@ -694,7 +825,7 @@ def main(argv=None):
             print("items: none" + (f" with status {status}" if status else ""))
         return 0
     if cmd == "status":
-        snap = snapshot(root)
+        snap = snapshot(root, ask=gh_budget())
         if "--json" in rest:
             print(json.dumps(snap, indent=2))
         else:
@@ -786,7 +917,7 @@ def main(argv=None):
             return 2
         places, path = kitlib.records(root)
         if places:
-            print(f"RECORDS (from {path}):")
+            print(records_header(path))
             print("\n".join(f"- {p}" for p in places))
         else:
             print("RECORDS: not set for this repo. Read its guidance (AGENTS.md, CLAUDE.md, CONTRIBUTING, docs/) for "
@@ -836,9 +967,9 @@ def main(argv=None):
                                             f"is {state}, archived with --force." if state in ("open", "closed") else
                                             f"merge state unknown ({detail})."))
             ok = done(root, item_id)
-            places, _ = kitlib.records(root)
+            places, path = kitlib.records(root)
             if ok and places:
-                print(f"items: {item_id} done. Its records, each updated before you tell the user it is done:")
+                print(f"items: {item_id} done (archived). " + records_header(path))
                 print("\n".join(f"- [ ] {p}" for p in places))
             elif ok:
                 print(f"items: {item_id} done. This repo's record places are not set: `items.py records`.")

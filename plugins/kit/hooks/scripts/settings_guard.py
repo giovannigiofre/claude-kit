@@ -11,7 +11,7 @@ plain read, gets permissionDecision "ask" in every permission mode. The reason s
 built-in such as statusline-setup, which gets "ask". The hook never answers "allow": deny rules,
 the guard and Claude Code's own protection of these files still apply, and permission.py never
 allows a command this hook flags. Any error, kitlib missing included, means "ask". It acts only in
-a project with .claude/kit.json, like every kit hook. Standard library only.
+a project that opted in (kit.json, or the kit's state: kitlib.load_config), like every kit hook. Standard library only.
 
 Settings files: settings*.json, in any case, in any `.claude` directory (the user's, a repo's, a
 worktree's) or in CLAUDE_CONFIG_DIR, and the managed settings (managed-settings.json, or anything
@@ -313,10 +313,11 @@ def summary(tool, inp, path):
 
 
 def opted_in(cwd):
-    """Like every kit hook, this one acts only in a project with .claude/kit.json, the worktree's or
-    its main checkout's (a broken one counts)."""
+    """Like every kit hook, this one acts only in a project that opted in (kitlib.load_config:
+    kit.json, the worktree's or its main checkout's, a broken one included, or the kit's state)."""
     root = kitlib.git_root(cwd) or Path(cwd)  # the session's own checkout, never this process's cwd
-    return kitlib.config_file(root).is_file()
+    config, err = kitlib.load_config(root)
+    return config is not None or err is not None
 
 
 def decide(data):

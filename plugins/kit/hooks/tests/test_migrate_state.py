@@ -18,6 +18,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 SCRIPT = SCRIPTS / "migrate_state.py"
 sys.path.insert(0, str(SCRIPTS))
+import items  # noqa: E402
 import kitlib  # noqa: E402
 import migrate_state  # noqa: E402
 
@@ -63,6 +64,120 @@ def project(tmp, name="p"):
 
 def exclude_lines(repo):
     return (repo / ".git" / "info" / "exclude").read_text().splitlines()
+
+
+def squash_project(tmp, ids=("B1",)):
+    """The owner's way of merging: `gh pr merge --squash --delete-branch`. The branch is gone and
+    the reviewed commit is not in main, so git alone cannot tell the item is merged."""
+    Path(tmp).mkdir(parents=True, exist_ok=True)
+    repo = project(tmp)
+    sh(repo, "checkout", "-qb", "feat/s")
+    (repo / "s.txt").write_text("s\n")
+    sh(repo, "add", "s.txt")
+    sh(repo, "commit", "-qm", "s")
+    tip = sh(repo, "rev-parse", "HEAD").strip()
+    sh(repo, "checkout", "-q", "main")
+    sh(repo, "merge", "-q", "--squash", "feat/s")
+    sh(repo, "commit", "-qm", "s (#7)")
+    sh(repo, "branch", "-q", "-D", "feat/s")
+    rows = ""
+    for item in ids:
+        (repo / f".claude/lead/items/{item}").mkdir(parents=True, exist_ok=True)
+        with open(repo / f".claude/lead/items/{item}/LOG.md", "a") as f:
+            f.write(f"- 2026-11-01T10:05:00Z | working | branch feat/s\n"
+                    f"- 2026-11-01T10:06:00Z | verdict | PASS, reviewed {tip[:12]}, PR #7\n"
+                    "- 2026-11-01T10:07:00Z | working | landing it\n")
+        rows += f"| {item} | ship | a | DONE WHEN x | working | agent x | - | from lead |\n"
+    (repo / ".claude/lead/board.md").write_text(rows)
+    return repo
+
+
+def squash_checks(check):
+    """A PR git cannot place is asked of gh where a person runs the command (items.py status, a
+    hand-run migrate or status), never by the session start's automatic migration; capped, timed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        fake, bare = tmp / "fakebin", tmp / "bare"
+        fake.mkdir()
+        bare.mkdir()
+        (fake / "gh").write_text('#!/bin/sh\necho call >> "$GH_CALLS"\n'
+                                 'if [ -n "$GH_SLEEP" ]; then sleep "$GH_SLEEP"; fi\ncat "$FAKE_GH"\n')
+        (fake / "gh").chmod(0o755)
+        git_bin = subprocess.run(["which", "git"], capture_output=True, text=True).stdout.strip()
+        (bare / "git").symlink_to(git_bin)
+        answer, calls = tmp / "gh.json", tmp / "calls"
+        saved = {k: os.environ.get(k) for k in ("PATH", "FAKE_GH", "GH_CALLS", "GH_SLEEP")}
+        saved_timeout, saved_max = items.GH_TIMEOUT, items.GH_MAX
+        os.environ.update(PATH=f"{fake}:{saved['PATH']}", FAKE_GH=str(answer), GH_CALLS=str(calls))
+
+        def asked():
+            n = len(calls.read_text().splitlines()) if calls.exists() else 0
+            calls.unlink(missing_ok=True)
+            return n
+
+        def hand_migrate(repo):
+            try:
+                return migrate_state.migrate(repo, out=lambda _l: None, ask_gh=True)[0], ""
+            except migrate_state.Refused as exc:
+                return exc.code, " ".join(exc.lines)
+
+        merged = '{"state": "MERGED", "mergedAt": "2026-11-13T10:00:00Z"}'
+        try:
+            for name, text, want in (("MERGED", merged, 0), ("OPEN", '{"state": "OPEN", "mergedAt": null}', 2),
+                                     ("CLOSED", '{"state": "CLOSED", "mergedAt": null}', 2)):
+                answer.write_text(text)
+                repo = squash_project(tmp / name)
+                said = []
+                migrate_state.status(repo, out=said.append, ask_gh=True)
+                check(any("at work: item B1" in l for l in said) == (want == 2) and asked() == 1, f"status, {name}: {said}")
+                code, why = hand_migrate(repo)
+                check(code == want and asked() == 1 and (want == 0) == (repo / ".kit/lead").is_dir(),
+                      f"migrate by hand, {name}: {code} {why}")
+                if want == 2:
+                    check("item B1 is working" in why, why)
+
+            # the session start's automatic migration asks nothing, and says how to find the stale items
+            answer.write_text(merged)
+            repo = squash_project(tmp / "auto")
+            said = migrate_state.auto(repo)
+            check(asked() == 0, "the automatic migration made no gh call")
+            check(len(said) == 1 and "waits to move" in said[0] and "items.py status shows which are stale" in said[0]
+                  and "`items.py done <id>` closes each" in said[0], f"auto: {said}")
+            check(not (repo / ".kit/lead").exists(), "auto: nothing moved")
+
+            # items.py status: stale (merged) through gh; without `ask`, as the hooks call it, unknown
+            path = items.find(repo, "B1")
+            check(items.stale_merged(repo, path) is False and asked() == 0, "no ask: no gh call, not stale")
+            snap = items.snapshot(repo, ask=items.gh_budget())
+            check(next(r for r in snap["items"] if r["id"].lower() == "b1")["stale_merged"] and asked() == 1, snap["items"])
+
+            # the cap: GH_MAX items asked in one run, the rest stay unknown
+            items.GH_MAX = 1
+            repo = squash_project(tmp / "cap", ids=("B1", "B2"))
+            snap = items.snapshot(repo, ask=items.gh_budget())
+            check(sorted(r["stale_merged"] for r in snap["items"]) == [False, True] and asked() == 1, snap["items"])
+            items.GH_MAX = saved_max
+
+            # no gh: unknown stays unknown, the move waits
+            os.environ["PATH"] = str(bare)
+            repo = squash_project(tmp / "nogh")
+            code, why = hand_migrate(repo)
+            check(code == 2 and "item B1 is working" in why and asked() == 0, f"no gh: {code} {why}")
+
+            # a gh that hangs: cut off at GH_TIMEOUT, and the item stays at work
+            os.environ.update(PATH=f"{fake}:{saved['PATH']}", GH_SLEEP="5")
+            items.GH_TIMEOUT = 1
+            repo = squash_project(tmp / "slow")
+            started = __import__("time").monotonic()
+            code, why = hand_migrate(repo)
+            check(code == 2 and __import__("time").monotonic() - started < 4 and asked() == 1, f"timeout: {code} {why}")
+        finally:
+            items.GH_TIMEOUT, items.GH_MAX = saved_timeout, saved_max
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
 
 def main():
@@ -164,6 +279,35 @@ def main():
             check(len(said) == 1 and "waits to move" in said[0] and "stays in" not in said[0], f"{case}: the session start says why: {said}")
             code, out = run(repo, "migrate", "--force")
             check(code == 0 and (repo / ".kit/lead/board.md").exists(), f"{case}: --force moves it: {out}")
+
+    # an item left `working` after its branch was merged is stale, not at work: the move goes on.
+    # One whose branch is not merged, has no commit of its own yet, or cannot be found stays at work
+    for case in ("merged", "deleted", "unmerged", "fresh", "gone"):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = project(tmp)
+            sh(repo, "checkout", "-qb", "feat/m")
+            if case != "fresh":
+                (repo / "m.txt").write_text("m\n")
+                sh(repo, "add", "m.txt")
+                sh(repo, "commit", "-qm", "m")
+            tip = sh(repo, "rev-parse", "HEAD").strip()
+            sh(repo, "checkout", "-q", "main")
+            if case in ("merged", "deleted"):
+                sh(repo, "merge", "-q", "--no-ff", "-m", "merge feat/m", "feat/m")
+            if case in ("deleted", "gone"):
+                sh(repo, "branch", "-q", "-D", "feat/m")
+            note = f"PASS, reviewed {tip[:12]}, agent v1" if case in ("deleted", "gone") else "branch feat/m"
+            with open(repo / ".claude/lead/items/B1/LOG.md", "a") as f:
+                f.write(f"- 2026-11-01T10:05:00Z | working | branch feat/m\n- 2026-11-01T10:06:00Z | verdict | {note}\n"
+                        "- 2026-11-01T10:07:00Z | working | fixing\n")
+            (repo / ".claude/lead/board.md").write_text("| B1 | ship | a | DONE WHEN x | working | agent x | - | from lead |\n")
+            code, out = run(repo, "migrate")
+            if case in ("merged", "deleted"):
+                check(code == 0 and (repo / ".kit/lead/board.md").exists(), f"{case}: a merged item does not hold the move: {code} {out}")
+            else:
+                check(code == 2 and "item B1 is working" in out and "board row" not in out, f"{case}: still at work: {code} {out}")
+
+    squash_checks(check)
 
     # a tracked entry stays, with the git mv to run; the rest moves
     with tempfile.TemporaryDirectory() as tmp:
@@ -504,6 +648,27 @@ def main():
         check("to move:" in listed, f"status lists them: {listed}")
         check(any("did not move" in l and "could not take its line" in l for l in told), f"said: {told}")
         check(again == [], f"said once: {again}")
+
+    # a shared .gitignore that listed the old places: the note names the .kit/ line for each of
+    # those, and says the exclude covers only this machine; it never edits .gitignore
+    for name, ignore, want in (
+            ("gi-some", "# kit\n.claude/lead/\n/.claude/evidence\n.claude/settings.local.json\n",
+             ".kit/lead/ .kit/evidence/."),
+            ("gi-whole", ".claude/\n", ".kit/lead/ .kit/evidence/ .kit/overnight/ .kit/agent-memory/kit-verifier/."),
+            ("gi-none", "node_modules/\n", None)):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = project(tmp, name)
+            (repo / ".gitignore").write_text(ignore)
+            said = []
+            code, _, _, _ = migrate_state.migrate(repo, out=said.append)
+            notes = [l for l in said if l.startswith("note: .gitignore")]
+            if want is None:
+                check(code == 0 and notes == [], f"{name}: no note: {said}")
+            else:
+                check(code == 0 and len(notes) == 1 and f"add these lines there for the team (the kit does not "
+                      f"edit .gitignore): {want}" in notes[0]
+                      and "only on this machine, through .git/info/exclude" in notes[0], f"{name}: {said}")
+            check((repo / ".gitignore").read_text() == ignore, f"{name}: .gitignore untouched")
 
     # two session starts at once, many times: the owner's lines stay, no line is cut, no false
     # conflict, and the runs log keeps the winner's entry

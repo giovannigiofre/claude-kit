@@ -7,7 +7,15 @@
 user may choose to commit it instead, so every clone gets the same gates. Every reader (the hooks,
 the mod, `gate.py`, the overnight runner, kit-llm) takes a checkout's own kit.json, else its main
 checkout's, so a linked worktree, which has no copy of an excluded file, runs with the main
-checkout's; with neither the kit stays off. The owner's personal choices that are never shared
+checkout's. A project also counts as using the kit when its main checkout holds the kit's state
+(`.kit/lead/`, or `.claude/lead/` before the move, with a board or an `items/` folder): when
+kit.json goes missing there (a commit removed it in the owner's project and nothing said so for
+days), the kit runs on its defaults (guard on, reports, verdicts and cost lines filed, the
+coordinator line), nothing gates a stop, `gate.py` says there is no gate, and every session start
+and compaction prints one line saying the file is missing, the gates are off, and how to restore it
+(`git show <commit>:.claude/kit.json` from its last version in git, else `/kit:init`), for the
+coordinator to tell the owner once and restore only with his approval. With neither file nor state
+the kit stays off. The owner's personal choices that are never shared
 (the unattended git steps) live in `.claude/kit.local.json` beside it.
 
 ```json
@@ -173,7 +181,16 @@ from `kit.json`, so it stays behind the protected path. A kit.json `lead.board` 
 
 An older project moves at a session start when nothing is at work, and the session says so in one
 line (or, when an item is `working` or `landing` or an overnight run is live, why it waits, said
-once and again only when the reason changes). By
+once and again only when the reason changes). An item counts as at work only while its branch is
+not merged into the default branch, decided from git alone: the branch its LOG or REPORT.md names
+is an ancestor of it (and has a commit of its own), or, the branch deleted, the last commit the
+item names (a verifier's `REVIEWED:` sha) is. A squash merge leaves that sha outside the default
+branch, so a deleted branch reads as "cannot tell". Then, only where a person runs the command
+(`items.py status`, a hand-run `migrate_state.py migrate` or `status`), an item whose LOG or
+REPORT.md names a PR is asked of `gh pr view` as `done` does: MERGED makes it stale, anything else,
+no `gh` or a failing call leaves it unknown. Each call has 10 seconds and at most ten items are
+asked per run. The session start's automatic move never calls the network, and its "waits to
+move" line names `items.py status` for finding the stale items. When the kit cannot tell, the item stays at work. By
 hand: `python3 <kit>/hooks/scripts/migrate_state.py status|migrate|undo [--dry-run] [--force] [--again]`
 (`--force` moves anyway, for a thread that died and left `working`). Each entry moves on its own,
 one rename from `.claude/<entry>` to `.kit/<entry>` (across filesystems: copy, compare, delete),
@@ -200,6 +217,9 @@ back and sets kit.local.json `lead.state` to `".claude"`; from then on the sessi
 `migrate --again`. A move leaves `.kit/migration.json` (a log of each run, merged under a lock,
 which `undo` does not read) and, only where `.claude/` still exists, `.claude/kit-state-moved.txt`. A `.kit.migrating/` left by the first version of the
 script is emptied into `.kit/` the same way.
+When the shared `.gitignore` listed a moved entry's `.claude/` place, `migrate` ends with a note
+naming the `.kit/<entry>/` line to add for each, since until then `.kit/` is ignored only on this
+machine, through `.git/info/exclude`; the kit does not edit `.gitignore`.
 
 
 ### Auto mode environment, per repo
@@ -292,7 +312,7 @@ resume from; the source of the idea is in CATALOG.md).
 ```
 
 ```bash
-python3 <kit>/hooks/scripts/items.py new "<name>" --brief - --from lead|handoff [--kind scout]  # id and folder printed
+python3 <kit>/hooks/scripts/items.py new "<name>" --brief - --from lead|handoff [--kind scout] [--again]  # id and folder printed
 python3 <kit>/hooks/scripts/items.py list [--status queued]
 python3 <kit>/hooks/scripts/items.py log <id> <status> [note]
 python3 <kit>/hooks/scripts/items.py put <id> <file>...   # copy files into the item's out/ folder
@@ -303,6 +323,11 @@ python3 <kit>/hooks/scripts/items.py conflicts [<id> ...]   # exit 0 clean, 1 co
 python3 <kit>/hooks/scripts/worktrees.py [--json]           # classify linked worktrees, print a plan
 python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask] [--proposal]
 ```
+
+`new` refuses the name of an open item, naming it, its status and when it was created: two
+coordinator sessions on one project once made the same item 40 seconds apart, the second silently
+as `<id>-2`, and worked one issue twice. Read that item's LOG.md first; `--again` makes the
+numbered item on purpose. A name found only among the archived items gets its suffix as before.
 
 `unattended`: the owner's git preferences for unattended runs in this repo, in the main
 checkout's `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "allow", "rebase": "allow",
@@ -342,8 +367,10 @@ preview, through an ordinary Edit that `settings_guard.py` turns into Claude Cod
 status label and closing comment, a progress or status file, a changelog or diary, a published
 page. Not set, it prints how to find them; the coordinator reads the repo's guidance on its first
 run, confirms the list with the user once and saves it (`records set "…" "…"`, which replaces
-the list). `done` then prints the list as the item's checklist, so a merged item is not called
-done while its issue, progress file or diary still say otherwise.
+the list). `done` then prints the list as the item's checklist, under a header that names
+`lead.records` as its source; the coordinator updates the places the item touches and only then
+tells the owner, so a merged item is not called done while its issue, progress file or diary
+still say otherwise.
 
 A command the user would type (a login, a script, a setup step) the coordinator runs itself with
 Bash: the Allow/Deny prompt reaches the user on the phone too over Remote Control, where a line
@@ -371,14 +398,17 @@ does not ignore it.
 
 The same hook writes a token ledger line before the report line: `cost | in=… out=… cache_read=…
 cache_write=… tools=… minutes=… agent=<id>`, read from the thread's transcript (each reply counted
-once by its message id, tools as distinct tool calls, minutes from the first to the last
-timestamp). Tokens only, no dollar figure, since prices change and differ by plan. A resumed
+once by its message id, tools as distinct tool calls, minutes as active time: the gaps between
+consecutive transcript entries added up, each gap counted up to 5 minutes, so a thread left
+waiting an hour between two rounds does not show that hour). Tokens only, no dollar figure, since prices change and differ by plan. A resumed
 thread writes a new line with its whole total, so `status` sums only the latest line per agent. A
 transcript without usage writes nothing and never fails the hook.
 
 `status` reads the item folders, not board.md, so it is right even when the board has drifted:
 per open item the id, kind, status, last event and its age, note, agent, branch and PR (from the
-LOG or the `BRANCH / PR:` line of REPORT.md) and summed cost; then counts per status and the
+LOG or the `BRANCH / PR:` line of REPORT.md) and summed cost, with `stale (merged)` after the
+status of a `working` or `landing` item whose branch is already merged (the same test as the
+move's, said once with `items.py done <id>` to close it; nothing is closed for you); then counts per status and the
 board's NEEDS YOU line split into questions (only where a known item id starts the next
 `<id>:`, so a question with a colon in it stays whole). `--json` gives the same for a script.
 
@@ -525,7 +555,11 @@ gets a "continue" nudge after 15, 30 and 60 s when the error clears on its own (
 server error, a short rate limit, `max_output_tokens`) and a notification plus a NEEDS YOU wake when it does not (a
 login, a usage limit). A thread that ends without its report reaching the coordinator (a refused
 or missing `SubagentHandback`) is told once by `subagent_stop.py` to send it; if it stops again
-without one, the coordinator is woken to SendMessage it. The coordinator addresses a thread by
+without one, the coordinator is woken to SendMessage it. Before telling it, the hook takes a
+report in the stop's own `last_assistant_message` (a `VERDICT:` line from a verifier, a
+`STATUS: done|blocked|partial` line otherwise) as delivered, and reads the transcript again for
+up to about 1.5 s, since a hand-back can reach the file after the hook starts; it files the cost
+line before it blocks. The same report seen on a later stop is filed once. The coordinator addresses a thread by
 the agent ID the Agent call returned (a name needs agent teams, which the kit does not enable;
 the ID also survives a restart, and the hooks write it into the item's LOG); a message reaches
 a thread even while its command runs (2.1.317: the command moves to the background). The facts
@@ -569,7 +603,8 @@ whether to change the rules, through `items.py unattended --proposal`. The kit n
 `settings_guard.py` (PreToolUse: Write, Edit, MultiEdit, NotebookEdit, Bash, Monitor) answers
 `ask` in every permission mode for a change to a Claude Code settings file: `settings*.json` in
 any `.claude` folder or in `CLAUDE_CONFIG_DIR`, and the managed settings, in any case. Like
-every kit hook it acts only in a project with kit.json (a worktree's, else its main checkout's).
+every kit hook it acts only in a project that uses the kit (kit.json, a worktree's else its main
+checkout's, or the kit's state when kit.json went missing: see `.claude/kit.json` above).
 A shell command counts when it names one, quotes and backslashes inside the name included, and is
 not a plain read (`cat`, `grep`, `jq`, `git diff`, …, alone or piped into one another, with no
 redirection or chain). A bare `settings.json` counts only in a Claude folder: the cwd is one, the
@@ -739,7 +774,8 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
 
 ## Routing and the status line
 
-- **One mode**: in a project with `.claude/kit.json`, session start (and the start after a
+- **One mode**: in a project that uses the kit (`.claude/kit.json`, or its state when the file went
+  missing), session start (and the start after a
   compaction) prints one line that makes the session the coordinator: every message is handled with
   `kit:lead`, which answers a question in place, makes a small change itself and starts background
   threads for the rest. It is a hook, not the mod, so it works in a cloud session and over Remote

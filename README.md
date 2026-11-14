@@ -21,7 +21,7 @@ whole interface: the coordinator picks the skill, starts the work and tells you 
 | When | You say | What happens |
 |---|---|---|
 | Once per project | `/kit:init` (the one command to type) | writes `.claude/kit.json` (check, verify, formatters, protected paths), a `verify` skill that says how to exercise the app, a `loop.md` that tells the native `/loop` how to tend a PR (never merging), and proposes permissions and, if you want it, the sandbox |
-| All day | just talk | in a project with `kit.json`, every message goes to the coordinator (`kit:lead`), which answers, starts a thread or steers one, in at most four lines; it works the same in a cloud session and over Remote Control |
+| All day | just talk | in a project with `kit.json` (or the kit's board and items, when that file went missing), every message goes to the coordinator (`kit:lead`), which answers, starts a thread or steers one, in at most four lines; it works the same in a cloud session and over Remote Control |
 | A messy idea | just write it | the coordinator (or `kit:shape`) asks 2-3 multiple-choice rounds and writes a brief with a checkable DONE WHEN |
 | Thinking it through first | "let's think about X first" | the coordinator reads and reasons and changes nothing until you say go, then the conclusion becomes an item; `/kit:handoff` sends it to another open session or a new background session instead |
 | Finding work | "what should we work on?" | `kit:scout`: read-only explorers write deduplicated proposal cards (A mechanical, B needs judgment, C human-only) into `.kit/lead/proposals/`; `next` takes the A cards |
@@ -74,7 +74,7 @@ PushNotification (desktop, or phone with Remote Control). Safety in plain words:
                      ▼
                    board.md: NEEDS YOU · ready for review · working   (+ notification)
 
- Hooks in every project with .claude/kit.json (silent when all is well):
+ Hooks in every project with .claude/kit.json or the kit's state (silent when all is well):
    PreToolUse   protect  blocks edits to protected paths
                 guard    blocks irreversible or credential-leaking commands, in any permission
                          mode, plus the project's own guard.denyCommands / askCommands

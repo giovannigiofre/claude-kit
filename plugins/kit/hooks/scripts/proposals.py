@@ -243,7 +243,12 @@ def main(argv=None):
         if not rest:
             print("proposals: take needs a card id", file=sys.stderr)
             return 2
-        item_id = take(root, rest[0])
+        try:
+            item_id = take(root, rest[0])
+        except items.ItemExists as exc:  # another session took this card already
+            print(f"proposals: {exc.args[0]} is already an open item ({exc.args[1]}, created {exc.args[2]}): "
+                  "read its LOG.md before doing anything", file=sys.stderr)
+            return 1
         if not item_id:
             print(f"proposals: no open card {rest[0]}", file=sys.stderr)
             return 1

@@ -8,6 +8,7 @@ Run: python3 plugins/kit/hooks/tests/test_kitlib.py   (exit 0 = all good)
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -118,6 +119,27 @@ def main():
         (repo / ".claude" / "kit.json").unlink()
         check(kitlib.load_config(tree) == (None, None), "no kit.json in the worktree or the main checkout: off")
         check(kitlib.config_file(Path(tmp)) == Path(tmp) / ".claude" / "kit.json", "outside git: its own path")
+
+        # the kit's state in the main checkout opts in too when kit.json went missing: ({}, None)
+        check(not kitlib.config_missing(tree), "neither file nor state: not missing, just off")
+        (repo / ".kit" / "lead").mkdir(parents=True)
+        check(kitlib.load_config(tree) == (None, None), "an empty lead folder is not state")
+        (repo / ".kit" / "lead" / "Board.md").write_text("SHIP: pr\n")
+        check(kitlib.load_config(tree) == ({}, None) and kitlib.config_missing(tree), "a board in .kit/: on, missing")
+        check(kitlib.load_config(repo) == ({}, None) and kitlib.config_missing(repo), "in the main checkout too")
+        (repo / ".kit" / "lead" / "Board.md").unlink()
+        (repo / ".claude" / "lead" / "items").mkdir(parents=True)
+        check(kitlib.has_kit_state(repo) and kitlib.load_config(tree) == ({}, None), "legacy .claude/lead/items/: on")
+        (repo / ".claude" / "kit.json").write_text("{}")
+        check(not kitlib.config_missing(tree), "the file is back: not missing")
+        (repo / ".claude" / "kit.json").unlink()
+        shutil.rmtree(repo / ".claude" / "lead")
+        shutil.rmtree(repo / ".kit")
+        elsewhere = Path(tmp) / "elsewhere"
+        (elsewhere / "lead" / "items").mkdir(parents=True)
+        (repo / ".kit").symlink_to(elsewhere)
+        check(not kitlib.has_kit_state(repo) and kitlib.load_config(repo) == (None, None), "a symlinked .kit is not state")
+        (repo / ".kit").unlink()
 
     # hermetic git: inside a git hook GIT_DIR and friends point at the hook's repository; the helpers
     # still answer for the folder they were asked about
@@ -266,6 +288,33 @@ def main():
                   "a linked parent is found")
             check(kitlib.linked_part(t2, ".claude/lead") is None, "no link on the way: None")
             check(kitlib.linked_part(t2, ".claude/agent-memory") == t2 / ".claude/agent-memory", "the entry itself")
+
+    # a project with neither kit.json nor the kit's state (an empty lead folder is not state):
+    # every hook stays silent and changes nothing
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(os.path.realpath(tmp))
+        home, repo = tmp / "home", tmp / "repo"
+        (home / ".claude").mkdir(parents=True)
+        repo.mkdir()
+        sh(repo, "init", "-q", "-b", "main")
+        sh(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init")
+        (repo / ".kit" / "lead").mkdir(parents=True)
+        t = tmp / "agent.jsonl"
+        t.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "ITEM: alpha\ngo"}}) + "\n")
+        bash = {"tool_name": "Bash", "tool_input": {"command": "git push origin main"}}
+        write = {"tool_name": "Write", "tool_input": {"file_path": str(repo / ".claude" / "settings.json"), "content": "{}"}}
+        hooks = {"session_start.py": {"source": "startup"}, "subagent_start.py": {"agent_type": "kit:implementer", "agent_id": "a"},
+                 "subagent_stop.py": {"agent_type": "kit:implementer", "agent_id": "a", "agent_transcript_path": str(t)},
+                 "stop_check.py": {"transcript_path": str(t)}, "protect.py": write, "settings_guard.py": write,
+                 "guard.py": bash, "permission.py": bash, "on_edit.py": write, "bash_edits.py": bash, "session_end.py": {}}
+        env = dict(os.environ, HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), TMPDIR=str(tmp))
+        for name, payload in hooks.items():
+            out = subprocess.run([sys.executable, str(SCRIPTS / name)], capture_output=True, text=True, timeout=60, env=env,
+                                 input=json.dumps({"cwd": str(repo), "session_id": "s1", **payload}))
+            check(out.returncode == 0 and out.stdout == "" and out.stderr == "",
+                  f"{name} is silent with neither kit.json nor state: {out.returncode} {out.stdout!r} {out.stderr!r}")
+        left = sorted(str(p.relative_to(repo)) for p in repo.rglob("*") if ".git" not in p.parts)
+        check(left == [".kit", ".kit/lead"], f"nothing written: {left}")
 
     print("kitlib: all checks passed" if not failed else f"kitlib: {failed} failures")
     return 1 if failed else 0

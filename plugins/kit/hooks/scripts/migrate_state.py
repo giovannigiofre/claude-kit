@@ -18,8 +18,10 @@ from rewriting them; so do settings, skills, agents, worktrees, loop.md and othe
 
 How, one entry at a time, so a run that dies half-way leaves nothing unreadable:
   - refuses (exit 2) while a thread or run is at work: an item whose LOG.md ends in `working`
-    or `landing`, a board row in one of those statuses, an overnight run with no stop_reason
-    and no end-state.json. `--force` overrides (a thread that died leaves `working` behind);
+    or `landing` and whose branch is not merged into the default branch (items.stale_merged; run
+    by hand, a PR git cannot place is asked of gh, the automatic run never does), a
+    board row in one of those statuses, an overnight run with no stop_reason and no
+    end-state.json. `--force` overrides (a thread that died leaves `working` behind);
   - the exclude lines are computed once and added in one call (kitlib.add_exclude_lines, which
     locks, appends and never removes a line) before anything moves: `/.kit/<entry>/` and the
     old `/.claude/<entry>/`, so a leftover or later-made `.claude/evidence/` stays out of
@@ -108,16 +110,19 @@ def board_status(row):
     return (cells[0], cells[4].lower()) if len(cells) >= 5 else None
 
 
-def busy(main):
-    """Why the state must not move now: one line per thread or run still at work."""
-    why, boards = [], set()
+def busy(main, ask=None):
+    """Why the state must not move now: one line per thread or run still at work. `ask`: whether a
+    PR may be asked of gh (items.stale_merged); only a command a person runs passes it."""
+    why, boards, stale = [], set(), set()
     for folder in (LEGACY, STATE):
         lead = Path(main) / folder / "lead"
         boards.add(lead / "board.md")
         found = lead / "items"
         for item in sorted(found.iterdir()) if found.is_dir() else []:
             status = items.status_of(item)[0] if item.is_dir() and item.name != "done" else None
-            if status in BUSY:
+            if status in BUSY and items.stale_merged(main, item, status, ask=ask):
+                stale.add(item.name)  # its branch is merged: nothing runs for it (`items.py done` closes it)
+            elif status in BUSY:
                 why.append(f"item {item.name} is {status} ({item / 'LOG.md'})")
     config, _ = kitlib.load_config(main)
     if config:  # a board kept elsewhere (kit.json lead.board)
@@ -129,7 +134,7 @@ def busy(main):
             continue
         for row in rows:
             got = board_status(row)
-            if got and got[1] in BUSY and not any(f"item {got[0]} " in w for w in why):
+            if got and got[1] in BUSY and got[0] not in stale and not any(f"item {got[0]} " in w for w in why):
                 why.append(f"board row {got[0]} is {got[1]} ({board})")
     for checkout in checkouts(main):
         for folder in (LEGACY, STATE):
@@ -341,15 +346,37 @@ def nothing_to_move(main, skipped):
     return "nothing to move" + (f": the state is in {STATE}/" if (main / STATE).is_dir() else "")
 
 
-def migrate(main, dry=False, force=False, out=print, again=False):
+def gitignore_lines(main, names):
+    """The `.kit/<name>/` lines the shared .gitignore needs, one for each moved entry whose
+    `.claude/<name>` it ignores (or all, when it ignores `.claude/` whole). Before the move the
+    team's .gitignore kept these out of git everywhere; after it, only this machine's exclude does."""
+    try:
+        text = (Path(main) / ".gitignore").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    listed = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", "!")):
+            continue
+        for tail in ("/**", "/*", "/"):
+            if line.endswith(tail):
+                line = line[:-len(tail)]
+                break
+        listed.add(line.lstrip("/"))
+    return [f"{STATE}/{name}/" for name in dict.fromkeys(names)
+            if LEGACY in listed or f"{LEGACY}/{name}" in listed]
+
+
+def migrate(main, dry=False, force=False, out=print, again=False, ask_gh=False):
     """Move what can move; returns (exit code, the entries moved, the conflicts left, the entries
-    that failed with their error)."""
+    that failed with their error). ask_gh: run by hand, so an item's PR may be asked of gh."""
     main = Path(main)
     if kitlib.lead_local(main, "state") == LEGACY and not again:
         raise Refused(2, [f"not moving: the owner moved the state back to {LEGACY}/ with `undo` "
                           f"(kit.local.json lead.state); the owner moves it again with: "
                           f"python3 {SCRIPT} migrate --again"])
-    why = busy(main)
+    why = busy(main, items.gh_budget() if ask_gh else None)
     if why and not force:
         raise Refused(2, ["not moving: work is in progress. Wait for it, or --force if it is gone:"]
                       + [f"  - {w}" for w in why])
@@ -414,12 +441,11 @@ def migrate(main, dry=False, force=False, out=print, again=False):
     if done or not (conflicts or failed):
         out(f"moved {len(done)} entr{'y' if len(done) == 1 else 'ies'} to {STATE}/" if done
             else nothing_to_move(main, skipped))
-    try:
-        text = (main / ".gitignore").read_text(encoding="utf-8")
-        if done and (f"{LEGACY}/lead" in text or f"{LEGACY}/evidence" in text):
-            out(f"note: .gitignore names {LEGACY}/ state paths; add the {STATE}/ ones there if the team shares it")
-    except OSError:
-        pass
+    lines = gitignore_lines(main, [d["name"] for d in done])
+    if lines:
+        out(f"note: .gitignore ignores the old {LEGACY}/ places; add these lines there for the team "
+            f"(the kit does not edit .gitignore): {' '.join(lines)}. Until then {STATE}/ is ignored "
+            f"only on this machine, through .git/info/exclude.")
     return (1 if failed else 3 if conflicts else 0), done, conflicts, failed
 
 
@@ -480,7 +506,10 @@ def auto(root):
         except Refused as exc:
             why = "; ".join(line.strip().lstrip("- ") for line in exc.lines[1:]) or exc.lines[0]
             told.append(f"kit: the kit's state waits to move from {LEGACY}/ to {STATE}/ ({why}); it moves at a "
-                        f"session start when nothing is at work, or: python3 {SCRIPT} migrate")
+                        f"session start when nothing is at work, or: python3 {SCRIPT} migrate. An item whose PR "
+                        f"was merged can still read as at work here, where no PR is asked about: "
+                        f"python3 {SCRIPT.parent / 'items.py'} status shows which are stale, and "
+                        f"`items.py done <id>` closes each")
         except OSError as exc:
             failed = [(main / LEGACY, exc)]
     if done:  # nothing here when another session moved them first
@@ -495,7 +524,7 @@ def auto(root):
     return lines + tell_once(main, told)
 
 
-def status(main, out=print):
+def status(main, out=print, ask_gh=False):
     main = Path(main)
     out(f"main checkout: {main}")
     out(f"state folder:  {kitlib.state_dir(main)}")
@@ -515,7 +544,7 @@ def status(main, out=print):
         out("  in both places, nothing moved or overwritten:")
         for line in conflict_lines(conflicts):
             out("  " + line)
-    for w in busy(main):
+    for w in busy(main, items.gh_budget() if ask_gh else None):
         out(f"  at work: {w}")
     return 0
 
@@ -534,10 +563,10 @@ def main(argv=None):
         return 1
     try:
         if args.command == "status":
-            return status(root)
+            return status(root, ask_gh=True)
         if args.command == "undo":
             return undo(root, args.dry_run, args.force)
-        return migrate(root, args.dry_run, args.force, again=args.again)[0]
+        return migrate(root, args.dry_run, args.force, again=args.again, ask_gh=True)[0]
     except Refused as exc:
         print("kit migrate: " + "\n".join(exc.lines), file=sys.stderr)
         return exc.code
