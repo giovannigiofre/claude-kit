@@ -348,7 +348,7 @@ def under(path, root):
 
 def settings(root):
     """(active, options): project kit.json wins, else the user's ~/.claude/kit.json."""
-    project, _ = kitlib.load_config(root)
+    project, _ = kitlib.load_config(root, safety=True)
     user = {}
     try:
         user = json.loads((home() / ".claude" / "kit.json").read_text(encoding="utf-8"))

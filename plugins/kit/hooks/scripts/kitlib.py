@@ -135,13 +135,16 @@ def has_kit_state(base):
 # The opt-in, latched outside the project. In a project that is a kit project only through its
 # state, `mv .kit/lead/items /tmp/x` or `rmdir .kit/lead/items` switched every hook off (review of
 # 2.0.1). So the first time a hook sees a project as a kit project, by kit.json or by its state, it
-# records that under the user's config dir, keyed the way auto_mode_sync.py keys a repository (the
-# normalized origin, else the main checkout's path); from then on the project counts as a kit
-# project. The owner turns it off with `"guard": "off"` in kit.json (no record is kept, and one
-# kept before is removed) or with `items.py forget`, which a subagent may not run. A repository
-# under the system temp dir is never recorded (a test run left 84 records of repositories that no
-# longer existed), and a record keyed by a path that is gone is dropped the next time the records
-# are read; one keyed by an origin stays, since the repository may be cloned again.
+# records that under the user's config dir, keyed by the main checkout's path (its worktrees
+# follow it). Keyed by the origin, a second clone or a fork that never opted in became
+# coordinated, and `forget` there was undone by the other clone's next hook (review round 2).
+# A project kept on by its record alone, with neither kit.json nor state, gets the guards only
+# (load_config(root, safety=True)): no coordinator line, no auto-allows, no memory folder. The
+# owner turns it off with `"guard": "off"` in kit.json (no record is kept, and one kept before is
+# removed) or with `items.py forget`, which a subagent may not run. A repository under the system
+# temp dir is never recorded (a test run left 84 records of repositories that no longer existed),
+# a record whose path is gone is dropped the next time the records are read, and a `kit-projects`
+# that is a symlink is never written through.
 OPT_IN_DIR = "kit-projects"
 _LATCHED = set()
 _PRUNED = set()
@@ -165,10 +168,18 @@ def opt_in_folder():
     return Path(os.environ.get("KIT_OPT_IN_DIR") or config_dir() / OPT_IN_DIR)  # the env: tests only
 
 
+def _folder_linked(folder):
+    try:
+        return Path(folder).is_symlink()
+    except OSError:
+        return True
+
+
 def prune_opt_ins(folder=None):
-    """Drop the records keyed by a path that no longer exists, once per process; never raises."""
+    """Drop the records whose key is not a path that exists (one that is gone, or an origin key
+    of 2.0.1 that no longer matches anything), once per process; never raises."""
     folder = Path(folder or opt_in_folder())
-    if str(folder) in _PRUNED:
+    if str(folder) in _PRUNED or _folder_linked(folder):
         return
     _PRUNED.add(str(folder))
     try:
@@ -177,24 +188,15 @@ def prune_opt_ins(folder=None):
                 key = json.loads(record.read_text(encoding="utf-8")).get("key")
             except (OSError, ValueError, AttributeError):
                 continue
-            if isinstance(key, str) and os.path.isabs(key) and not os.path.exists(key):
+            if not (isinstance(key, str) and os.path.isabs(key) and os.path.exists(key)):
                 record.unlink(missing_ok=True)
     except OSError:
         pass
 
 
 def opt_in_key(root):
-    """The repository's key: its normalized origin (auto_mode_sync.clean_origin), else its main
-    checkout's path, else `root` outside git."""
-    main = main_checkout(root) or Path(root)
-    origin = ""
-    try:
-        import auto_mode_sync
-        raw = git_out(main, "remote", "get-url", "origin", timeout=10)
-        origin = (auto_mode_sync.clean_origin(raw) or "") if raw else ""
-    except Exception:
-        origin = ""
-    return origin or str(Path(main).resolve())
+    """The repository's key: its main checkout's path, else `root` outside git."""
+    return str(Path(main_checkout(root) or root).resolve())
 
 
 def opt_in_record(root):
@@ -225,6 +227,8 @@ def latch_opt_in(root):
         if under_temp(root):  # a throwaway repository: the hooks work there, nothing is recorded
             return
         prune_opt_ins()
+        if _folder_linked(opt_in_folder()):  # a symlinked folder: no record, no error
+            return
         record = opt_in_record(root)
         if not record.is_file():
             write_json_atomic(record, {"key": opt_in_key(root)})
@@ -264,7 +268,14 @@ def config_missing(root):
     return not path.exists() and (has_kit_state(main or Path(root)) or opted_in_before(main or Path(root)))
 
 
-def load_config(root):
+def record_only(root):
+    """True when only the record keeps `root` a kit project: no kit.json, no kit state."""
+    path, main = _config_and_main(root)
+    base = main or Path(root)
+    return not path.exists() and not has_kit_state(base) and opted_in_before(base)
+
+
+def load_config(root, safety=False):
     """Return (config, error). config is None when the project has not opted in; a kit.json that
     is present means it did, even an empty `{}` (callers test `config is None`). A worktree
     without one uses its main checkout's (config_file).
@@ -273,7 +284,8 @@ def load_config(root):
     missing kit.json gives `{}`, the defaults, and config_missing(root) is True. In the owner's
     project (2026-11) a commit removed kit.json from git and disk, and every hook went silent for
     days while the coordinator kept its board and items: no guard, no REPORT.md, no cost lines.
-    A project with neither stays untouched, as before."""
+    A project with neither stays untouched, as before. One with only the record left gives `{}`
+    to the guards (`safety=True`: guard.py, settings_guard.py) and None to every other hook."""
     path, main = _config_and_main(root)
     base = main or Path(root)
     if not path.is_file():
@@ -282,7 +294,7 @@ def load_config(root):
         if has_kit_state(base):
             latch_opt_in(base)
             return {}, None
-        return ({} if opted_in_before(base) else None), None
+        return ({} if safety and opted_in_before(base) else None), None
     try:
         config = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # a broken config must be visible, not silently ignored

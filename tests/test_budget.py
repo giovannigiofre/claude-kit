@@ -221,10 +221,13 @@ def main():
     if len(session_start.COORDINATOR) > COORDINATOR_MAX:
         problems.append(f"plugins/kit/hooks/scripts/session_start.py: COORDINATOR is {len(session_start.COORDINATOR)} "
                         f"chars (max {COORDINATOR_MAX})")
-    missing = session_start.MISSING.format(how="in /home/someone/code/a-project-with-a-long-name, `git show "
-                                           "abcdef12^:.claude/kit.json > .claude/kit.json` (its last version in git), else /kit:init")
-    if len(missing) > MISSING_MAX:
-        problems.append(f"plugins/kit/hooks/scripts/session_start.py: MISSING is {len(missing)} chars (max {MISSING_MAX})")
+    how = ("in /home/someone/code/a-project-with-a-long-name, `git show abcdef12^:.claude/kit.json > "
+           ".claude/kit.json` (its last version in git), else /kit:init")
+    forget = "python3 /home/someone/.claude/plugins/cache/claude-kit/kit/2.0.1/hooks/scripts/items.py forget"
+    for name in ("MISSING", "RECORD_ONLY"):  # the record-only line takes the same place
+        missing = getattr(session_start, name).format(how=how, forget=forget)
+        if len(missing) > MISSING_MAX:
+            problems.append(f"plugins/kit/hooks/scripts/session_start.py: {name} is {len(missing)} chars (max {MISSING_MAX})")
 
     docs = [p for p in PLUGINS.rglob("*.md") if "evals" not in p.parts]
     docs += [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md"))

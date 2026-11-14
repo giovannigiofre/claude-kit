@@ -9,8 +9,11 @@ Run: python3 tests/test_isolation.py   (exit 0 = all good)
 import atexit
 import os
 import shutil
+import signal
+import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 if not os.environ.get("KIT_OPT_IN_DIR"):
@@ -65,6 +68,32 @@ def main():
         check(not (tmp / "set-by-the-caller").exists(), "the caller's KIT_OPT_IN_DIR is not passed down")
         check(run_all.real_records_dir({"CLAUDE_CONFIG_DIR": "/c"}) == Path("/c/kit-projects")
               and run_all.real_records_dir({"HOME": "/h"}) == Path("/h/.claude/kit-projects"), "the real folder")
+
+    # a terminated run removes its fake home: one stopped by SIGTERM left ~/.kit-test-home-* behind
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        home = tmp / "home"
+        home.mkdir()
+        (tmp / "test_slow.py").write_text("import time\ntime.sleep(60)\n")
+        runner = ("import os, sys; sys.path.insert(0, sys.argv[1]); import run_all; run_all.exit_on_signal(); "
+                  "run_all.run_isolated(sys.argv[2], dict(os.environ, HOME=sys.argv[3]), sys.argv[4])")
+        for sig in [s for s in ("SIGTERM", "SIGHUP") if hasattr(signal, s)]:
+            proc = subprocess.Popen([sys.executable, "-c", runner, str(Path(__file__).resolve().parent),
+                                     str(tmp / "test_slow.py"), str(home), str(tmp / "records")])
+            deadline = time.time() + 20
+            while not list(home.glob(".kit-test-home-*")) and time.time() < deadline:
+                time.sleep(0.05)
+            started = bool(list(home.glob(".kit-test-home-*")))
+            proc.send_signal(getattr(signal, sig))
+            try:
+                proc.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            left = list(home.glob(".kit-test-home-*"))
+            check(started and not left, f"a run stopped by {sig} removes its fake home: started={started}, left={left}")
+            for path in left:
+                shutil.rmtree(path, ignore_errors=True)
 
     print("isolation: all checks passed" if not failed else f"isolation: {failed} failed")
     return 1 if failed else 0

@@ -115,6 +115,25 @@ def main():
         if ask(repo, "make lint") != "prompt":
             failed += 1
             print("FAIL without kit.json nothing is allowed")
+        # a project the kit recorded, whose kit.json and state are gone, keeps the guards only: no
+        # auto-allows (review round 2 of kit 2.0.1)
+        (repo / ".claude" / "kit.json").write_text(json.dumps({"check": "make lint"}))
+        os.environ["KIT_TEMP_ROOTS"] = ""  # the repository lives in the temp dir; record it anyway
+        try:
+            ask(repo, "make lint")
+            (repo / ".claude" / "kit.json").unlink()
+            sys.path.insert(0, str(SCRIPTS))
+            import kitlib
+            if not kitlib.record_only(repo):
+                failed += 1
+                print("FAIL the record was not written, so the record-only case was not reached")
+            for command, agent in (("make lint", False), (f"python3 {gate} verify", False),
+                                   (f"python3 {items} list", True)):
+                if ask(repo, command, agent) != "prompt":
+                    failed += 1
+                    print(f"FAIL a record-only project gets no auto-allow: {command!r}")
+        finally:
+            del os.environ["KIT_TEMP_ROOTS"]
     print("permission: all checks passed" if not failed else f"permission: {failed} failures")
     return 1 if failed else 0
 

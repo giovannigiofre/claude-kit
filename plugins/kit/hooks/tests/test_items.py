@@ -398,19 +398,19 @@ def stale_checks(tmp, check):
         run(repo, "new", name, env=env)
         run(repo, "log", name.lower(), "working", f"branch feat/{name.lower()}", env=env)
         run(repo, "log", name.lower(), "reported", "done, agent a1", env=env)
-        run(repo, "log", name.lower(), "working", "fixing", env=env)
+        run(repo, "log", name.lower(), "landing", "merging", env=env)
     commit_file(repo, "feat/alpha", "a.txt", "a\n")
     commit_file(repo, "feat/beta", "b.txt", "b\n")
     git(repo, "merge", "-q", "--no-ff", "-m", "merge alpha", "feat/alpha")
     git(repo, "branch", "-q", "feat/gamma")  # made, nothing committed yet: not merged, just started
     code, out, _ = run(repo, "status", env=env)
     rows = {line.split(" | ")[0]: line for line in out.splitlines() if " | " in line}
-    check(code == 0 and "| working stale (merged) |" in rows.get("alpha", ""), out)
+    check(code == 0 and "| landing stale (merged) |" in rows.get("alpha", ""), out)
     check("stale" not in rows.get("beta", "x") and "stale" not in rows.get("gamma", "x"), f"unmerged and fresh stay working: {out}")
     check(out.count("`items.py done <id>` closes") == 1 and "stale (merged): alpha:" in out, out)
     data = json.loads(run(repo, "status", "--json", env=env)[1])
     check({r["id"]: r["stale_merged"] for r in data["items"]} == {"alpha": True, "beta": False, "gamma": False}, data["items"])
-    check(items.find(repo, "alpha") and items.status_of(items.find(repo, "alpha"))[0] == "working", "nothing closed")
+    check(items.find(repo, "alpha") and items.status_of(items.find(repo, "alpha"))[0] == "landing", "nothing closed")
 
     # a live thread (review of 2.0.1): a fresh worktree-agent-* branch that ran `merge --ff-only
     # main` has two reflog entries and a tip in main. Never reported: at work. Reported but with
@@ -424,13 +424,20 @@ def stale_checks(tmp, check):
     check(items.merged(repo, path) is True, "the fresh branch reads as merged in git alone")
     check(items.stale_merged(repo, path) is False, "never reported: at work, whatever git says")
     run(repo, "log", "live", "reported", "partial, agent a2", env=env)
-    run(repo, "log", "live", "working", "round 2", env=env)
+    run(repo, "log", "live", "landing", "approved", env=env)
     check(items.stale_merged(repo, path) is False, "reported, but its worktree has untracked edits: at work")
     (tmp / "wt-x" / "new.txt").unlink()
     (tmp / "wt-x" / "a.txt").write_text("changed\n")
     check(items.stale_merged(repo, path) is False, "an uncommitted change in its worktree: at work")
     git(tmp / "wt-x", "checkout", "-q", "--", "a.txt")
     check(items.stale_merged(repo, path) is True, "reported, merged, clean worktree: stale")
+    # sent back after its report (review round 2, item e): the thread restarts on the merged branch
+    # and has edited nothing yet, so the worktree is clean; it is at work all the same
+    run(repo, "log", "live", "reported", "STATUS: done", env=env)
+    run(repo, "log", "live", "working", "sent back: also do y", env=env)
+    check(items.stale_merged(repo, path) is False, "sent back after its last report, clean worktree: at work")
+    run(repo, "log", "live", "landing", "approved again", env=env)
+    check(items.stale_merged(repo, path) is True, "reported again and landing: stale once merged")
 
 
 def fresh_project_checks(tmp, check):

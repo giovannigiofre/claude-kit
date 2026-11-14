@@ -140,13 +140,23 @@ NO_REPORT = ("kit: no report reached your caller from this run. Call SubagentHan
              "\"main\" instead. Then stop.")
 
 
-def missing_report(path):
+def missing_report(path, tail=False):
     """True when the transcript is a background thread's and its last run delivered no report:
     no SubagentHandback that succeeded and no SendMessage to main that went through. A
     transcript that cannot be read, a foreground subagent (its final text is the report), a run
-    the person interrupted and one paused on its own background work are never missing one."""
+    the person interrupted and one paused on its own background work are never missing one.
+
+    `tail` reads only the last TAIL_BYTES, for the re-reads after a first whole read found no
+    report: what can change is at the end, and a cut file is read as inside that last run."""
     try:
-        return scan_runs(Path(path).read_text(errors="replace").splitlines())
+        if not tail:
+            return scan_runs(Path(path).read_text(errors="replace").splitlines())
+        with open(path, "rb") as f:
+            size = f.seek(0, 2)
+            f.seek(max(0, size - TAIL_BYTES))
+            lines = f.read().decode("utf-8", errors="replace").splitlines()
+        cut = size > TAIL_BYTES
+        return scan_runs(lines[1:] if cut else lines, in_run=cut)  # a cut first line is half a line
     except Exception:  # an unreadable or odd transcript: never a false "no report"
         return False
 
@@ -159,6 +169,8 @@ def missing_report(path):
 # version left early on a file that had not grown for two reads and still lost a hand-back that
 # landed 1.0 s after the hook started (review of 2.0.1): a quiet file proves nothing.
 REREAD_TRIES, REREAD_PAUSE = 6, 0.3  # about 1.8 s at most; the slowest hook measured 1.52 s of its 10 s
+# each re-read takes the last 2 MB only: a 25 MB transcript read whole seven times cost 3 s (review round 2)
+TAIL_BYTES = 2 * 1024 * 1024
 STATUS_REPORT = re.compile(r"^\W*STATUS:\s*(done|blocked|partial)\b", re.M | re.I)
 
 
@@ -175,13 +187,15 @@ def still_missing(path, tries=REREAD_TRIES, pause=REREAD_PAUSE):
         return False
     for _ in range(tries):
         time.sleep(pause)
-        if not missing_report(path):
+        if not missing_report(path, tail=True):
             return False
     return True
 
 
-def scan_runs(lines):
-    is_thread, delivered, calls, pending, tried, stopped = False, False, {}, set(), False, False
+def scan_runs(lines, in_run=False):
+    """`in_run`: the lines start inside a thread's run (the tail of a transcript whose whole read
+    already found the run and no report in it)."""
+    is_thread, delivered, calls, pending, tried, stopped = in_run, False, {}, set(), False, False
     for line in lines:
         try:
             entry = json.loads(line)

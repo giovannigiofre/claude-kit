@@ -128,8 +128,10 @@ def main():
         (repo / ".claude" / "kit.json").unlink()
         # latched (review of 2.0.1): a project a hook once saw as a kit project stays one, and the
         # missing file is said; items.py forget is the owner's way out
-        check(kitlib.load_config(tree) == ({}, None) and kitlib.config_missing(tree),
-              "kit.json gone after a hook saw it: still a kit project, the file said missing")
+        # with the record alone, only the guards (safety=True) see a kit project (review round 2)
+        check(kitlib.load_config(tree, safety=True) == ({}, None) and kitlib.config_missing(tree)
+              and kitlib.record_only(tree), "kit.json gone after a hook saw it: the guards stay, the file said missing")
+        check(kitlib.load_config(tree) == (None, None), "record only: every other hook is off")
         check(kitlib.forget_opt_in(tree) and not kitlib.forget_opt_in(tree), "forget removes the latch once")
         check(kitlib.load_config(tree) == (None, None), "no kit.json in the worktree or the main checkout: off")
         check(kitlib.config_file(Path(tmp)) == Path(tmp) / ".claude" / "kit.json", "outside git: its own path")
@@ -143,8 +145,10 @@ def main():
         check(kitlib.load_config(repo) == ({}, None) and kitlib.config_missing(repo), "in the main checkout too")
         (repo / ".kit" / "lead" / "Board.md").unlink()
         # the state alone opted in, then was moved away: the latch keeps the project in
-        check(not kitlib.has_kit_state(repo) and kitlib.load_config(tree) == ({}, None) and kitlib.config_missing(tree),
-              "state moved away: still a kit project through the latch")
+        check(not kitlib.has_kit_state(repo) and kitlib.load_config(tree, safety=True) == ({}, None)
+              and kitlib.config_missing(tree) and kitlib.record_only(tree),
+              "state moved away: still a kit project for the guards through the latch")
+        check(kitlib.load_config(tree) == (None, None), "state moved away: the rest of the kit is off")
         kitlib.forget_opt_in(repo)
         (repo / ".claude" / "lead" / "items").mkdir(parents=True)
         check(not kitlib.has_kit_state(repo) and kitlib.load_config(tree) == (None, None), "an empty items/ is not state")
@@ -173,17 +177,21 @@ def main():
         (repo / ".kit" / "lead").unlink()
         (repo / ".kit").rmdir()
 
-        # the latch is keyed by the normalized origin: another clone of the same repository shares it
+        # the latch is keyed by the main checkout's path: another clone of the same origin is not a
+        # kit project because this one is, and forget there leaves this one alone (review round 2)
         sh(repo, "remote", "add", "origin", "git@github.com:Owner/Repo.git")
         clone = Path(tmp) / "clone"
         clone.mkdir()
         sh(clone, "init", "-q", "-b", "main")
         sh(clone, "remote", "add", "origin", "https://github.com/owner/repo")
-        check(kitlib.opt_in_key(repo) == kitlib.opt_in_key(clone) == "github.com/owner/repo", kitlib.opt_in_key(repo))
+        check(kitlib.opt_in_key(repo) == str(repo.resolve()) and kitlib.opt_in_key(tree) == str(repo.resolve())
+              and kitlib.opt_in_key(clone) == str(clone.resolve()), kitlib.opt_in_key(repo))
         kitlib.latch_opt_in(repo)
-        check(kitlib.opted_in_before(clone) and kitlib.load_config(clone) == ({}, None), "same origin: same latch")
-        kitlib.forget_opt_in(clone)
-        check(kitlib.load_config(repo) == (None, None), "forgotten from either clone")
+        check(not kitlib.opted_in_before(clone) and kitlib.load_config(clone, safety=True) == (None, None),
+              "same origin, other clone: not opted in")
+        check(not kitlib.forget_opt_in(clone) and kitlib.opted_in_before(repo), "forget in the clone: this one kept")
+        check(kitlib.opted_in_before(tree), "a worktree follows its main checkout's record")
+        kitlib.forget_opt_in(repo)
         # a config dir that cannot be written never fails a hook
         saved = os.environ.get("KIT_OPT_IN_DIR")
         (Path(tmp) / "blocked").write_text("a file, not a folder")
@@ -194,26 +202,43 @@ def main():
         (repo / ".claude" / "kit.json").unlink()
         os.environ["KIT_OPT_IN_DIR"] = saved
 
-        # the record is the key alone; one keyed by a path that is gone is dropped the next time the
-        # records are read, one keyed by an origin stays (a test run once left 84 of the first kind)
+        # the record is the key alone; one whose path is gone, or an origin key of 2.0.1, is dropped
+        # the next time the records are read (a test run once left 84 of the first kind)
         folder = Path(saved)
         kitlib._LATCHED.clear()
         kitlib.latch_opt_in(repo)
         record = kitlib.opt_in_record(repo)
-        check(json.loads(record.read_text()) == {"key": "github.com/owner/repo"}, record.read_text())
+        check(json.loads(record.read_text()) == {"key": str(repo.resolve())}, record.read_text())
         gone = Path(tmp) / "gone"
         gone.mkdir()
         sh(gone, "init", "-q", "-b", "main")
         kitlib.latch_opt_in(gone)
         gone_record = kitlib.opt_in_record(gone)
         check(gone_record.is_file() and json.loads(gone_record.read_text()) == {"key": str(gone.resolve())},
-              "a repository without an origin is keyed by its path")
+              "keyed by its path")
+        old = folder / "github-com-owner-repo-0123abcd.json"
+        old.write_text(json.dumps({"key": "github.com/owner/repo"}))
         shutil.rmtree(gone)
         kitlib._PRUNED.clear()
         kitlib.opted_in_before(repo)  # a read prunes
-        check(not gone_record.exists() and record.is_file(), f"the path record is dropped, the origin's kept: "
+        check(not gone_record.exists() and not old.exists() and record.is_file(),
+              f"the gone path and the origin key are dropped, the live one kept: "
               f"{sorted(x.name for x in folder.glob('*.json'))}")
         kitlib.forget_opt_in(repo)
+
+        # a kit-projects folder that is a symlink is never written through: no record, no error
+        target = Path(tmp) / "elsewhere-records"
+        target.mkdir()
+        linked = Path(tmp) / "linked-config" / "kit-projects"
+        linked.parent.mkdir()
+        linked.symlink_to(target)
+        os.environ["KIT_OPT_IN_DIR"] = str(linked)
+        kitlib._LATCHED.clear()
+        (repo / ".claude" / "kit.json").write_text("{}")
+        check(kitlib.load_config(repo) == ({}, None) and not list(target.iterdir()),
+              f"a symlinked record folder: on by its file, nothing written: {list(target.iterdir())}")
+        (repo / ".claude" / "kit.json").unlink()
+        os.environ["KIT_OPT_IN_DIR"] = saved
 
         # a repository under the system temp dir is never recorded; its file and state still count
         os.environ["KIT_TEMP_ROOTS"] = str(Path(tmp).resolve())

@@ -63,22 +63,33 @@ COORDINATOR = (
 # the kit runs on its defaults, but with no `check` or `verify` nothing gates a stop. In the
 # owner's project (2026-11) a commit removed kit.json and nothing said so for days. Printed in
 # place of the "kit harness active" header, at every start and compaction until the file is back.
-MISSING = ("kit: .claude/kit.json is missing in this project although it uses the kit (its board and items "
-           "are here), so the gates are off: no `check` before a stop, no `verify`. Tell the owner once, now, "
-           "and restore it only with his approval (the write goes through Claude Code's own prompt, .claude "
-           "being protected): {how}.")
+MISSING = ("kit: .claude/kit.json is missing, but the kit's board and items are here, so the gates are off "
+           "(no `check`, no `verify`). Tell the owner now; restore it only with his approval: "
+           "{how}. To stop the kit, he moves the board and items out of .kit/lead, then runs `{forget}`.")
+# Only the record keeps the project on (kitlib.record_only): no board or items to point at, the
+# guards alone run, and the owner either restores the file or stops the kit here (review round 2:
+# the line said "its board and items are here" in a project that had none, and named no way out).
+RECORD_ONLY = ("kit: this project used the kit on this machine, but .claude/kit.json and the kit's state are "
+               "both gone. The guard stays on; the rest of the kit is off. Tell the owner once, now: he restores "
+               ".claude/kit.json: {how}; or, to stop the kit here, runs `{forget}`.")
+FORGET = f"python3 {Path(__file__).resolve().parent / 'items.py'} forget"
 
 
-def missing_line(root):
-    """MISSING with the way back: the last version git has of the file, else /kit:init."""
+def restore_how(root):
+    """The way back to the file: the last version git has of it, else /kit:init."""
     main = kitlib.main_checkout(root) or root
     last = kitlib.git_out(main, "log", "-1", "--format=%h", "--", kitlib.CONFIG, timeout=10)
     if not last:
-        return MISSING.format(how="run /kit:init (git has no copy of it)")
+        return "run /kit:init (git has no copy of it)"
     # the last commit that touched it either deleted it (its parent has it) or still holds it
     ref = last if kitlib.git_out(main, "cat-file", "-t", f"{last}:{kitlib.CONFIG}", timeout=10) else f"{last}^"
-    return MISSING.format(how=f"in {main}, `git show {ref}:{kitlib.CONFIG} > {kitlib.CONFIG}` "
-                              f"(its last version in git), else /kit:init")
+    return f"in {main}, `git show {ref}:{kitlib.CONFIG} > {kitlib.CONFIG}` (its last version in git), else /kit:init"
+
+
+def missing_line(root):
+    """The line while kit.json is missing: MISSING with the kit's state here, else RECORD_ONLY."""
+    text = RECORD_ONLY if kitlib.record_only(root) else MISSING
+    return text.format(how=restore_how(root), forget=FORGET)
 
 
 def config_notes(config):
@@ -348,6 +359,8 @@ def main():
         print(err)
         return 0
     if config is None:
+        if kitlib.record_only(root):  # the guards alone run here: say so, and nothing else
+            print(missing_line(root))
         return 0  # project has not opted in: stay silent
     coordinator = coordinator_line(data)
     missing = missing_line(root) if kitlib.config_missing(root) else ""

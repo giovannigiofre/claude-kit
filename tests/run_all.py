@@ -18,6 +18,7 @@ To make it this repo's gate for the kit itself, put it in your own .claude/kit.j
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -61,6 +62,17 @@ def run_isolated(path, env, real):
     return out, leaked
 
 
+def exit_on_signal():
+    """A SIGTERM or SIGHUP (a closed terminal, a killed session) ends the run through SystemExit, so
+    run_isolated's `finally` still removes its fake home: the reviewer's terminated run left a
+    ~/.kit-test-home-* folder behind (review round 2 of kit 2.0.1). Ctrl-C does this already."""
+    def stop(signum, _frame):
+        raise SystemExit(128 + signum)
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), stop)
+
+
 def main(argv):
     verbose = "-v" in argv
     files = sorted(p for pattern in PATTERNS for p in ROOT.glob(pattern))
@@ -95,4 +107,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    exit_on_signal()
     sys.exit(main(sys.argv[1:]))

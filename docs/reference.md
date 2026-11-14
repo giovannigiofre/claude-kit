@@ -12,23 +12,30 @@ checkout's. A project also counts as using the kit when its main checkout holds 
 BRIEF.md; a symlinked `.kit`, `.claude` or lead folder does not count), or when a hook has seen it as a
 kit project before: the first time a hook reads its kit.json or its state, it writes a record under
 the account's config dir (`~/.claude/kit-projects/`, or `$CLAUDE_CONFIG_DIR/kit-projects/`), keyed by
-the repository's origin, else its main checkout's path, so every clone and worktree shares it, and a
-config dir that cannot be written fails no hook. When
-kit.json goes missing there (a commit removed it in the owner's project and nothing said so for
+the main checkout's path, so its linked worktrees follow it; another clone or a fork of the same
+repository is a project of its own. A config dir that cannot be written fails no hook, and a
+`kit-projects` folder that is a symlink is never written through. When
+kit.json goes missing in a project that still has its state (a commit removed it in the owner's project and nothing said so for
 days), the kit runs on its defaults (guard on, reports, verdicts and cost lines filed, the
 coordinator line), nothing gates a stop, `gate.py` says there is no gate, and every session start
 and compaction prints one line saying the file is missing, the gates are off, and how to restore it
-(`git show <commit>:.claude/kit.json` from its last version in git, else `/kit:init`), for the
-coordinator to tell the owner once and restore only with his approval. With neither file, state nor record
+(`git show <commit>:.claude/kit.json` from its last version in git, else `/kit:init`), or, to stop
+using the kit there, to move the board and items out and run `items.py forget`, for the
+coordinator to tell the owner once; he restores the file only with his approval. When only the record is left (no kit.json, no
+state), the project keeps the guards alone (`guard.py`, the settings guard): no coordinator line, no
+unasked permissions, no thread memory folder; the session start says the project used the kit and
+both are gone, and that the owner either restores kit.json or runs `items.py forget`, and `gate.py`
+says the same. With neither file, state nor record
 the kit stays off. The owner turns the record off with `"guard": "off"` in kit.json (the record is
 removed, and the kit is off while that file says so), or with `items.py forget`, which removes it and
-which a thread is refused, like `away on`. A record is one small file holding only its key.
+which a thread is refused, like `away on`. Deleting kit.json alone leaves the guard on, on purpose.
+A record is one small file holding only its key.
 A repository under the system temp dir (`/tmp`, `/var/folders`, `$TMPDIR`) is never recorded: its
-hooks still work by its file or its state, but nothing is kept once they are gone. A record keyed by
-a path that no longer exists is dropped the next time a hook reads or writes the records; one keyed
-by an origin stays, since the repository may be cloned again. Deleting the whole `kit-projects/`
+hooks still work by its file or its state, but nothing is kept once they are gone. A record whose
+path no longer exists (or an older one keyed by an origin) is dropped the next time a hook reads or
+writes the records. Deleting the whole `kit-projects/`
 folder is safe: a project with a kit.json or kit state is recorded again by its next hook, and only
-one whose file and state are both already gone loses its line. The owner's personal choices that are never shared
+one whose file and state are both already gone loses its guard. The owner's personal choices that are never shared
 (the unattended git steps) live in `.claude/kit.local.json` beside it.
 
 ```json
@@ -194,8 +201,9 @@ from `kit.json`, so it stays behind the protected path. A kit.json `lead.board` 
 
 An older project moves at a session start when nothing is at work, and the session says so in one
 line (or, when an item is `working` or `landing` or an overnight run is live, why it waits, said
-once and again only when the reason changes). An item counts as at work only while its branch is
-not merged into the default branch, decided from git alone: the branch its LOG or REPORT.md names
+once and again only when the reason changes). An item counts as at work while it was sent back
+after its last report or never reported (the `stale (merged)` test of `items.py status`), and
+otherwise only while its branch is not merged into the default branch, decided from git alone: the branch its LOG or REPORT.md names
 is an ancestor of it (and has a commit of its own), or, the branch deleted, the last commit the
 item names (a verifier's `REVIEWED:` sha) is. A squash merge leaves that sha outside the default
 branch, so a deleted branch reads as "cannot tell". Then, only where a person runs the command
@@ -422,7 +430,8 @@ transcript without usage writes nothing and never fails the hook.
 per open item the id, kind, status, last event and its age, note, agent, branch and PR (from the
 LOG or the `BRANCH / PR:` line of REPORT.md) and summed cost, with `stale (merged)` after the
 status of a `working` or `landing` item that reported at least once (a `reported`, `review`,
-`landing` or `verdict` line), whose branch is already merged, and whose branch no worktree has
+`landing` or `verdict` line) and was not sent back since (no `working` line after its last
+report: a thread restarted on a merged branch has a clean worktree until it edits), whose branch is already merged, and whose branch no worktree has
 checked out with uncommitted or untracked changes; an item that never reported is at work
 whatever git says (the same test as the move's, said once with `items.py done <id>` to close it; nothing is closed for you); then counts per status and the
 board's NEEDS YOU line split into questions (only where a known item id starts the next
@@ -579,7 +588,7 @@ or missing `SubagentHandback`) is told once by `subagent_stop.py` to send it; if
 without one, the coordinator is woken to SendMessage it. Before telling it, the hook takes a
 report in the stop's own `last_assistant_message` (a `VERDICT:` line from a verifier, a
 `STATUS: done|blocked|partial` line otherwise) as delivered, and reads the transcript again for
-for about 1.8 s (six reads 0.3 s apart, leaving early only when a report appears), since a
+for about 1.8 s (six reads 0.3 s apart of its last 2 MB only, leaving early only when a report appears), since a
 hand-back can reach the file after the hook starts; it files the cost
 line before it blocks. The same report seen on a later stop is filed once. The coordinator addresses a thread by
 the agent ID the Agent call returned (a name needs agent teams, which the kit does not enable;

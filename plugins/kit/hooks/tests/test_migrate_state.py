@@ -94,7 +94,7 @@ def squash_project(tmp, ids=("B1",)):
         with open(repo / f".claude/lead/items/{item}/LOG.md", "a") as f:
             f.write(f"- 2026-11-01T10:05:00Z | working | branch feat/s\n"
                     f"- 2026-11-01T10:06:00Z | verdict | PASS, reviewed {tip[:12]}, PR #7\n"
-                    "- 2026-11-01T10:07:00Z | working | landing it\n")
+                    "- 2026-11-01T10:07:00Z | landing | landing it\n")
         rows += f"| {item} | ship | a | DONE WHEN x | working | agent x | - | from lead |\n"
     (repo / ".claude/lead/board.md").write_text(rows)
     return repo
@@ -142,7 +142,7 @@ def squash_checks(check):
                 check(code == want and asked() == 1 and (want == 0) == (repo / ".kit/lead").is_dir(),
                       f"migrate by hand, {name}: {code} {why}")
                 if want == 2:
-                    check("item B1 is working" in why, why)
+                    check("item B1 is landing" in why, why)
 
             # the session start's automatic migration asks nothing, and says how to find the stale items
             answer.write_text(merged)
@@ -178,7 +178,7 @@ def squash_checks(check):
             os.environ["PATH"] = str(bare)
             repo = squash_project(tmp / "nogh")
             code, why = hand_migrate(repo)
-            check(code == 2 and "item B1 is working" in why and asked() == 0, f"no gh: {code} {why}")
+            check(code == 2 and "item B1 is landing" in why and asked() == 0, f"no gh: {code} {why}")
 
             # a gh that hangs: cut off at GH_TIMEOUT, and the item stays at work
             os.environ.update(PATH=f"{fake}:{saved['PATH']}", GH_SLEEP="5")
@@ -310,7 +310,7 @@ def main():
             code, out = run(repo, "migrate", "--force")
             check(code == 0 and (repo / ".kit/lead/board.md").exists(), f"{case}: --force moves it: {out}")
 
-    # an item left `working` after its branch was merged is stale, not at work: the move goes on.
+    # an item left `landing` after its branch was merged is stale, not at work: the move goes on.
     # One whose branch is not merged, has no commit of its own yet, or cannot be found stays at work
     for case in ("merged", "deleted", "unmerged", "fresh", "gone"):
         with tempfile.TemporaryDirectory() as tmp:
@@ -329,13 +329,13 @@ def main():
             note = f"PASS, reviewed {tip[:12]}, agent v1" if case in ("deleted", "gone") else "branch feat/m"
             with open(repo / ".claude/lead/items/B1/LOG.md", "a") as f:
                 f.write(f"- 2026-11-01T10:05:00Z | working | branch feat/m\n- 2026-11-01T10:06:00Z | verdict | {note}\n"
-                        "- 2026-11-01T10:07:00Z | working | fixing\n")
+                        "- 2026-11-01T10:07:00Z | landing | merging\n")
             (repo / ".claude/lead/board.md").write_text("| B1 | ship | a | DONE WHEN x | working | agent x | - | from lead |\n")
             code, out = run(repo, "migrate")
             if case in ("merged", "deleted"):
                 check(code == 0 and (repo / ".kit/lead/board.md").exists(), f"{case}: a merged item does not hold the move: {code} {out}")
             else:
-                check(code == 2 and "item B1 is working" in out and "board row" not in out, f"{case}: still at work: {code} {out}")
+                check(code == 2 and "item B1 is landing" in out and "board row" not in out, f"{case}: still at work: {code} {out}")
 
     # a live thread on a fresh worktree-agent-* branch fast-forwarded to main (review of 2.0.1):
     # git alone reads it as merged, but it never reported and its worktree has edits: the move waits

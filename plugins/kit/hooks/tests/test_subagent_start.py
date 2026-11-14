@@ -23,6 +23,7 @@ if not os.environ.get("KIT_OPT_IN_DIR"):
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "subagent_start.py"
 sys.path.insert(0, str(SCRIPT.parent))
 import subagent_start  # noqa: E402
+import kitlib  # noqa: E402
 
 
 def run(cwd, config_dir, agent="kit:implementer"):
@@ -112,6 +113,25 @@ def main():
         assert run(otree, config) == "", "an implementer in a repo without kit.json still gets nothing"
         assert "kit: your memory folder is" not in run(tree, config), "nor in a repo with one"
         assert run(tmp, config, "kit:verifier") == "", "outside git: nothing"
+
+        # a project the kit recorded, whose kit.json and state are gone: the guards only, so no memory
+        # folder, no exclude line and no gate line (review round 2 of kit 2.0.1)
+        gone = tmp / "gone"
+        gone.mkdir()
+        subprocess.run(["git", "-C", str(gone), "init", "-q"], check=True)
+        (gone / ".claude").mkdir()
+        (gone / ".claude" / "kit.json").write_text('{"check": "true"}')
+        os.environ["KIT_TEMP_ROOTS"] = ""  # the repository lives in the temp dir; record it anyway
+        try:
+            assert "gate.py" in run(gone, config), "kit.json present: the gate line, and the record"
+            (gone / ".claude" / "kit.json").unlink()
+            assert kitlib.record_only(gone), "the record was written"
+            exclude = (gone / ".git" / "info" / "exclude").read_text()
+            assert run(gone, config, "kit:verifier") == "" and run(gone, config) == "", "record only: nothing"
+            assert not (gone / ".kit").exists(), "no memory folder"
+            assert (gone / ".git" / "info" / "exclude").read_text() == exclude, "no exclude line"
+        finally:
+            del os.environ["KIT_TEMP_ROOTS"]
         assert "memory:" not in (SCRIPT.parents[2] / "agents" / "verifier.md").read_text().split("---")[1], \
             "the verifier no longer asks Claude Code for a cwd-relative memory folder"
     print("subagent_start: all checks passed")

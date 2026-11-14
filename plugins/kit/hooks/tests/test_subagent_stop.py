@@ -185,7 +185,48 @@ def main():
     got = _ss.parse("VERDICT: CANNOT_VERIFY: ci-red\nREVIEWED: main, abc\nEVIDENCE: gh pr view: 2 failing\n"
                     "PROBLEMS:\nQUESTIONS:\nNOT CHECKED: everything\n")
     assert got == ("CANNOT_VERIFY", []), got
+    tail_checks(_ss)
     print("subagent_stop: all checks passed")
+
+
+def tail_checks(ss):
+    """The re-reads take the transcript's last TAIL_BYTES only (a 25 MB transcript read whole seven
+    times cost 3 s, review round 2), and still see a hand-back that lands at the end of a run whose
+    start is far before the cut."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "big.jsonl"
+        pad = json.dumps(user("x" * 1000)) + "\n"
+        head = "".join(json.dumps(e) + "\n" for e in [user("ITEM: B2. brief"), user(REMINDER)])
+        path.write_text(head + pad * (3 * ss.TAIL_BYTES // len(pad)))
+        assert ss.missing_report(path) and ss.missing_report(path, tail=True), "no report, read whole and from the tail"
+        calls = []
+        whole = ss.missing_report
+        ss.missing_report = lambda p, tail=False: calls.append(tail) or whole(p, tail)
+        try:
+            assert ss.still_missing(path, tries=2, pause=0), "still missing over the re-reads"
+        finally:
+            ss.missing_report = whole
+        assert calls == [False, True, True], f"one whole read, then the tail: {calls}"
+        reads = []
+        real_open = open
+
+        def counting_open(file, mode="r", *args, **kwargs):
+            handle = real_open(file, mode, *args, **kwargs)
+            if str(file) == str(path) and "b" in mode:
+                read = handle.read
+                handle.read = lambda *a: reads.append(len(chunk := read(*a))) or chunk
+            return handle
+        ss.open = counting_open  # the module's own open, used by the tail read
+        try:
+            ss.missing_report(path, tail=True)
+        finally:
+            del ss.open
+        assert reads and max(reads) <= ss.TAIL_BYTES, f"the tail read takes {reads} bytes"
+        with open(path, "a") as f:
+            f.write("".join(json.dumps(e) + "\n" for e in [call("h1", "SubagentHandback", {"message": "r"}),
+                                                           result("h1", DELIVERED)]))
+        assert not ss.missing_report(path, tail=True) and not ss.still_missing(path, tries=1, pause=0), \
+            "a hand-back at the end is found in the tail"
 
 
 if __name__ == "__main__":

@@ -194,8 +194,12 @@ container starts empty, and the board lives in the checkout's `.kit/lead/`, kept
 cloud session and your machine never see each other's items. The recipe and the consequences:
 [docs/reference.md](docs/reference.md#cloud-sessions).
 
-**Pause:** `claude plugin disable kit@claude-kit` everywhere, or delete `.claude/kit.json` in one
-project.
+**Pause:** `claude plugin disable kit@claude-kit` everywhere, or `{"mode": "light"}` in
+`~/.claude/kit.json` for normal sessions without the coordinator (see above). In one project, set
+`"guard": "off"` in its `.claude/kit.json`. To stop the kit there, remove that file (and the board
+and items in `.kit/lead/`, if any), then the owner runs `python3 <kit>/hooks/scripts/items.py forget`
+(a thread is refused it). Deleting `.claude/kit.json` alone does not pause: the kit remembers the
+project on this machine and keeps its guard on, on purpose.
 
 ## Safety
 

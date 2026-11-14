@@ -35,6 +35,15 @@ def run(payload, home=HOME, **env):
     return out.stdout
 
 
+def guard(repo):
+    """guard.py's exit code for a force push to main from `repo` (2 = blocked)."""
+    payload = {"tool_name": "Bash", "tool_input": {"command": "git push --force origin main"}, "cwd": str(repo),
+               "session_id": "s"}
+    return subprocess.run([sys.executable, str(SCRIPT.parent / "guard.py")], input=json.dumps(payload),
+                          capture_output=True, text=True, timeout=30,
+                          env={**os.environ, "HOME": str(HOME), "CLAUDE_CONFIG_DIR": str(HOME / ".claude")}).returncode
+
+
 def main():
     os.environ["KIT_TEMP_ROOTS"] = ""  # the repositories here live in the temp dir; record them anyway
     with tempfile.TemporaryDirectory() as tmp:
@@ -53,6 +62,8 @@ def main():
         missing = [l for l in out.splitlines() if "kit.json is missing" in l]
         assert len(missing) == 1 and "gates are off" in missing[0] and "his approval" in missing[0], out
         assert "/kit:init (git has no copy of it)" in missing[0] and "git show" not in missing[0], missing
+        # what the line claims holds: the board is here, and it names the way to stop the kit instead
+        assert "board and items" in missing[0] and "items.py forget`" in missing[0], missing
         out = run({"cwd": str(repo), "source": "compact"})
         assert "just compacted" in out and "A1 | ship | login" in out, out
         assert out.count("kit.json is missing") == 1, "the line comes back after a compaction too"
@@ -101,7 +112,19 @@ def main():
         assert "kit harness active" in run({"cwd": str(latched), "source": "startup"})
         (latched / ".claude" / "kit.json").unlink()
         out = run({"cwd": str(latched), "source": "startup"})
-        assert "kit.json is missing" in out, f"latched only: {out}"
+        # the record alone (review round 2): one line, true for a project with no board or items,
+        # naming both ways out; no coordinator line, and the guard stays on
+        assert "used the kit on this machine" in out and "both gone" in out and "guard stays on" in out, out
+        assert "board and items" not in out and "items.py forget`" in out and "restores .claude/kit.json" in out, out
+        assert "coordinates this project" not in out and len(out.strip().splitlines()) == 1, out
+        assert guard(latched) == 2, "record only: the guard still blocks a force push"
+        # the pause the README names: the owner forgets the project, and every hook goes quiet
+        forgot = subprocess.run([sys.executable, str(SCRIPT.parent / "items.py"), "forget"], cwd=str(latched),
+                                capture_output=True, text=True, timeout=30, env={**os.environ, "HOME": str(HOME),
+                                "CLAUDE_CONFIG_DIR": str(HOME / ".claude")})
+        assert forgot.returncode == 0 and "Forgot this project" in forgot.stdout, forgot
+        assert run({"cwd": str(latched), "source": "startup"}) == "", "forgotten: session start silent"
+        assert guard(latched) == 0, "forgotten: the guard silent"
         out = run({"cwd": str(repo), "source": "compact"})
         assert "A1 | ship" not in out, "lead.board moves the board; the default path is not read"
         (repo / "docs").mkdir()

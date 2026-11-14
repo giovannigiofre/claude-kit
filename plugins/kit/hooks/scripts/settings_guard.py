@@ -316,7 +316,7 @@ def opted_in(cwd):
     """Like every kit hook, this one acts only in a project that opted in (kitlib.load_config:
     kit.json, the worktree's or its main checkout's, a broken one included, or the kit's state)."""
     root = kitlib.git_root(cwd) or Path(cwd)  # the session's own checkout, never this process's cwd
-    config, err = kitlib.load_config(root)
+    config, err = kitlib.load_config(root, safety=True)
     return config is not None or err is not None
 
 

@@ -190,7 +190,9 @@ def verifier_memory(cwd):
     the move), the same from every worktree and subfolder, made and kept out of git here (its own
     line: other agents' memory beside it is not the kit's); None outside git."""
     main = main_checkout(cwd)
-    if not main:
+    # a project the kit recorded whose kit.json and state are gone keeps only the guards: no folder
+    # or exclude line written there (review round 2 of kit 2.0.1)
+    if not main or kitlib.record_only(main):
         return None
     folder = kitlib.state_entry(main, MEMORY_NAME)
     try:
