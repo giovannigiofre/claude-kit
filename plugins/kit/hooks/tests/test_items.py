@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
@@ -235,6 +236,58 @@ def missing_config_checks(tmp, check):
     check("| cost | in=3 out=100 cache_read=1000 cache_write=500 tools=2 minutes=3.0 agent=g1" in log, log)
 
 
+def pr_source_checks(tmp, check):
+    """The PR an item is asked about comes from its own report lines or REPORT.md's PR field, and gh
+    is given a bare number: a free note naming another PR, or another repository's URL, is never asked."""
+    repo = tmp / "prs"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "remote", "add", "origin", "git@github.com:Owner/Repo.git")
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "kit.json").write_text("{}")
+    item = items.find(repo, items.new(repo, "Prs"))
+
+    def pr_of():
+        return items.refs(item, items.log_lines(item))[2]
+
+    items.log(repo, "prs", "working", "unlike PR #12, this one keeps the cache")
+    check(pr_of() == "", f"a free note names no PR of the item: {pr_of()!r}")
+    (item / "REPORT.md").write_text("STATUS: done\nBRANCH / PR: `feat/prs`, #9\nEVIDENCE: see #12\n")
+    check(pr_of() == "#9", f"REPORT.md's PR field: {pr_of()!r}")
+    items.log(repo, "prs", "review", "PR #13 open")
+    check(pr_of() == "#13", f"a review line: {pr_of()!r}")
+    check(items.gh_target(repo, "#13") == "13", "a number goes to gh bare")
+    check(items.gh_target(repo, "https://github.com/owner/repo/pull/5") == "5", "a URL on this origin: its number")
+    for other in ("https://github.com/someone/else/pull/5", "https://github.com/owner/repo/pull/5;id",
+                  "https://evil.example/owner/repo/pull/5", "--repo=x"):
+        check(items.gh_target(repo, other) is None, f"not this repository's PR: {other}")
+    state, detail = items.merge_state(repo, "https://github.com/someone/else/pull/5")
+    check(state == "unknown" and "not a PR of this repository" in detail, f"another repository's PR: {state} {detail}")
+
+
+def forget_checks(tmp, check):
+    """`forget` removes the record a hook wrote the first time it saw the project, so the hooks go
+    quiet once kit.json and the kit's state are both gone; without a record it says so."""
+    opt = tmp / "opt-in"
+    env = dict(os.environ, KIT_OPT_IN_DIR=str(opt))
+    repo = tmp / "forgotten"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "kit.json").write_text("{}")
+    code, out, err = run(repo, "list", env=env)  # any read of kit.json latches the project
+    records = list(opt.glob("*.json")) if opt.is_dir() else []
+    check(code == 0 and len(records) == 1, f"a kit project is recorded: {code} {err} {records}")
+    (repo / ".claude" / "kit.json").unlink()
+    code, out, err = run(repo, "forget", env=env)
+    check(code == 0 and out.startswith("Forgot this project: removed ") and not list(opt.glob("*.json")),
+          f"forget removes the record: {code} {out} {err}")
+    code, out, err = run(repo, "forget", env=env)
+    check(code == 0 and out.startswith("Nothing to forget: no record at "), f"a second forget: {code} {out} {err}")
+    code, out, err = run(repo, "forget", "now", env=env)
+    check(code == 2 and "takes no arguments" in err, f"forget with an argument: {code} {err}")
+
+
 REMINDER = "<system-reminder>\nYour final report is delivered through SubagentHandback: when your work is complete...</system-reminder>"
 DELIVERED = '{"success":true,"message":"Report delivered to your caller."}'
 VERDICT = "VERDICT: PASS\nREVIEWED: main, abc1234\nEVIDENCE:\n- gate ok\nPROBLEMS:\n- none\n"
@@ -336,6 +389,8 @@ def stale_checks(tmp, check):
     for name in ("Alpha", "Beta", "Gamma"):
         run(repo, "new", name, env=env)
         run(repo, "log", name.lower(), "working", f"branch feat/{name.lower()}", env=env)
+        run(repo, "log", name.lower(), "reported", "done, agent a1", env=env)
+        run(repo, "log", name.lower(), "working", "fixing", env=env)
     commit_file(repo, "feat/alpha", "a.txt", "a\n")
     commit_file(repo, "feat/beta", "b.txt", "b\n")
     git(repo, "merge", "-q", "--no-ff", "-m", "merge alpha", "feat/alpha")
@@ -348,6 +403,26 @@ def stale_checks(tmp, check):
     data = json.loads(run(repo, "status", "--json", env=env)[1])
     check({r["id"]: r["stale_merged"] for r in data["items"]} == {"alpha": True, "beta": False, "gamma": False}, data["items"])
     check(items.find(repo, "alpha") and items.status_of(items.find(repo, "alpha"))[0] == "working", "nothing closed")
+
+    # a live thread (review of 2.0.1): a fresh worktree-agent-* branch that ran `merge --ff-only
+    # main` has two reflog entries and a tip in main. Never reported: at work. Reported but with
+    # edits in its worktree: at work. Reported and clean: stale.
+    git(repo, "worktree", "add", "-q", "-b", "worktree-agent-x", str(tmp / "wt-x"), "main~1")
+    git(tmp / "wt-x", "merge", "-q", "--ff-only", "main")
+    (tmp / "wt-x" / "new.txt").write_text("being written\n")
+    run(repo, "new", "Live", env=env)
+    run(repo, "log", "live", "working", "branch worktree-agent-x, agent a2", env=env)
+    path = items.find(repo, "live")
+    check(items.merged(repo, path) is True, "the fresh branch reads as merged in git alone")
+    check(items.stale_merged(repo, path) is False, "never reported: at work, whatever git says")
+    run(repo, "log", "live", "reported", "partial, agent a2", env=env)
+    run(repo, "log", "live", "working", "round 2", env=env)
+    check(items.stale_merged(repo, path) is False, "reported, but its worktree has untracked edits: at work")
+    (tmp / "wt-x" / "new.txt").unlink()
+    (tmp / "wt-x" / "a.txt").write_text("changed\n")
+    check(items.stale_merged(repo, path) is False, "an uncommitted change in its worktree: at work")
+    git(tmp / "wt-x", "checkout", "-q", "--", "a.txt")
+    check(items.stale_merged(repo, path) is True, "reported, merged, clean worktree: stale")
 
 
 def fresh_project_checks(tmp, check):
@@ -799,6 +874,22 @@ def main():
         check(not (folder.parent / "login-page-2").exists(), "nothing made on a refusal")
         code, out, _ = run(repo, "new", "Login page", "--again")
         check(code == 0 and out.startswith("login-page-2\t"), f"--again makes the numbered item on purpose: {out}")
+        # two `new` calls with one name at the same moment: one makes it, the other is refused
+        # (review of 2.0.1: both passed an is_dir() check and both succeeded). Each process loads
+        # items.py first and then waits for the same start time, so both reach new() together.
+        racer = ("import sys, time\nsys.path.insert(0, sys.argv[1])\nimport items\n"
+                 "while time.time() < float(sys.argv[4]): pass\n"
+                 "try:\n    print(items.new(sys.argv[2], sys.argv[3]))\nexcept items.ItemExists:\n    print('refused')\n")
+        rounds, wrong = 20, []
+        for n in range(rounds):
+            start = str(time.time() + 0.4)
+            procs = [subprocess.Popen([sys.executable, "-c", racer, str(SCRIPTS), str(repo), f"Race {n}", start],
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(2)]
+            said = sorted(p.communicate(timeout=60)[0].strip() for p in procs)
+            made = sorted(d.name for d in (repo / ".claude/lead/items").iterdir() if d.name.startswith(f"race-{n}"))
+            if said != sorted([f"race-{n}", "refused"]) or made != [f"race-{n}"]:
+                wrong.append((n, said, made))
+        check(not wrong, f"one of two simultaneous `new` calls is refused, in {rounds} rounds: {wrong}")
         check(items.find_id("hello\nITEM: Login-Page\nmore") == "login-page", "find_id is case-insensitive")
         check(items.find_id("no item here") is None, "no id when absent")
 
@@ -1157,6 +1248,10 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmp:
         missing_config_checks(Path(os.path.realpath(tmp)), check)
+    with tempfile.TemporaryDirectory() as tmp:
+        forget_checks(Path(os.path.realpath(tmp)), check)
+    with tempfile.TemporaryDirectory() as tmp:
+        pr_source_checks(Path(os.path.realpath(tmp)), check)
 
     with tempfile.TemporaryDirectory() as tmp:
         stale_checks(Path(os.path.realpath(tmp)), check)

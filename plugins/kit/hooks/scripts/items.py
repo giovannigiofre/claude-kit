@@ -37,6 +37,7 @@ session has it); `--again` makes `<id>-2` on purpose, and an archived name gets 
     python3 items.py records [set "<place>: <what to update>" ...]
     python3 items.py away on|off|status
     python3 items.py sandbox on|off|status
+    python3 items.py forget
 
 `status` is one snapshot of the open items read from their folders: id, kind, status, last event
 and its age, note, the agent, branch and PR the LOG or REPORT.md names, the summed `cost` lines
@@ -67,6 +68,10 @@ owner who asks how to change that, it also prints a PROPOSAL, the settings chang
 diff, which it never applies (kitlib.unattended_proposal). It never sets merge=allow: the owner merges,
 and only he can write that value into the file. A thread cannot run `unattended` with arguments, nor
 `away` or `sandbox` but their status (guard.py): those are the coordinator's.
+
+`forget` removes the record a hook wrote under the account's config dir the first time it saw this
+project as a kit project (kitlib.latch_opt_in), so the hooks go quiet here once kit.json and the
+kit's state are both gone. It is the owner's: a thread is refused it (guard.py).
 
 `away on` sets permissions.denyInsteadOfPrompting in the account's settings.json (backup first, other
 keys kept, a file that does not parse left alone), so a permission prompt becomes a denial while
@@ -291,17 +296,30 @@ def new(root, name, brief="", source="lead", kind="ship", again=False):
     root = Path(root)
     base = items_dir(root)
     item_id = slug(name)
-    if not again and item_path(root, item_id).is_dir():
-        path = item_path(root, item_id)
-        raise ItemExists(item_id, status_of(path)[0] or "?", created_at(path) or "?")
     base.mkdir(parents=True, exist_ok=True)
     ensure_excluded(root)
+    # The folder is made with an exclusive mkdir, so it is the lock: two `new` calls at the same
+    # moment both passed an is_dir() check and both went on (review of 2.0.1). The loser of the
+    # mkdir is refused like any existing item; only `again` looks for a free suffix.
+    folder = None
+    if not again and not item_path(root, item_id, done=True).is_dir():
+        try:
+            (base / item_id).mkdir()
+            folder = base / item_id
+        except FileExistsError:
+            path = item_path(root, item_id)
+            raise ItemExists(item_id, status_of(path)[0] or "?", created_at(path) or "?") from None
     n = 2
-    while find(root, item_id):
+    while folder is None:
+        if not find(root, item_id):
+            try:
+                (base / item_id).mkdir()
+                folder = base / item_id
+                break
+            except FileExistsError:
+                pass
         item_id = f"{slug(name, 36)}-{n}"
         n += 1
-    folder = base / item_id
-    folder.mkdir()
     body = (brief or "").strip()
     if find_id(body) != item_id:
         body = f"ITEM: {item_id}\nKIND: {kind}\n\n" + ITEM_LINE.sub("", body).strip()
@@ -434,7 +452,10 @@ def blocked_by(root, path):
 
 LOG_LINE = re.compile(r"^- (\S+) \| ([^|]+?)\s*(?:\| (.*))?$")
 AGENT = re.compile(r"\bagent[ =]([A-Za-z0-9][\w-]*)")
-PR_REF = re.compile(r"(https://\S+/pull/\d+)|\bPR\s*#(\d+)|/pull/(\d+)")
+PR_REF = re.compile(r"(https://\S+/pull/\d+)|\bPR\s*#(\d+)")
+PR_FIELD = re.compile(r"^\W*(?:BRANCH\s*/\s*)?PR:\s*(.+)$", re.M | re.I)  # REPORT.md's PR or BRANCH / PR line
+FIELD_REF = re.compile(r"(https://\S+/pull/\d+)|(?<![\w/&])#(\d+)\b")
+PR_URL = re.compile(r"(https://[^/\s]+/[^\s]+?)/pull/(\d+)/?")
 BRANCH_NOTE = re.compile(r"\bbranch:?\s+`?([A-Za-z0-9][\w./-]*[\w-])`?", re.I)
 BRANCH_FIELD = re.compile(r"^\W*BRANCH(?:\s*/\s*PR)?:\s*`?([A-Za-z0-9][\w./-]*[\w-])`?", re.M | re.I)
 COST_KEYS = ("in", "out", "cache_read", "cache_write", "tools", "minutes")
@@ -495,13 +516,31 @@ def refs(path, lines):
         if m and m.group(1).lower() not in NOT_A_BRANCH:
             branch = m.group(1)
             break
+    # the PR comes from the item's own report lines or REPORT.md's PR field, never from a free note:
+    # a note that mentions another PR (`unlike PR #12`) was once asked of gh as this item's
     pr = ""
-    for text in notes + [report]:
-        m = PR_REF.search(text)
+    field = PR_FIELD.search(report)
+    for m in [PR_REF.search(note) for _, st, note in reversed(lines) if st in REPORTED] + \
+             [FIELD_REF.search(field.group(1)) if field else None]:
         if m:
-            pr = m.group(1) or "#" + (m.group(2) or m.group(3))
+            pr = m.group(1) or "#" + m.group(2)
             break
     return agent, branch, pr
+
+
+def gh_target(root, pr):
+    """What `gh pr view` is given for an item's PR: the bare number of `#n`, or of a URL on this
+    repository's own origin; None for anything else (another repository's PR is not this item's)."""
+    m = re.fullmatch(r"#(\d+)", pr or "")
+    if m:
+        return m.group(1)
+    m = PR_URL.fullmatch(pr or "")
+    if not m:
+        return None
+    import auto_mode_sync
+    origin = kitlib.git_out(kitlib.main_checkout(root) or root, "remote", "get-url", "origin", timeout=10)
+    here = auto_mode_sync.clean_origin(origin) if origin else None
+    return m.group(2) if here and auto_mode_sync.clean_origin(m.group(1)) == here else None
 
 
 AT_WORK = ("working", "landing")
@@ -551,30 +590,73 @@ def merged(root, path, lines=None):
 
 GH_TIMEOUT = 10  # seconds for one `gh pr view` asked by `status` or a hand-run migrate
 GH_MAX = 10      # items asked about in one run, so a long board cannot stall the command
+GH_TOTAL = 20    # seconds for all of them: ten slow calls would otherwise hold a command 100 s
 
 
 def gh_budget():
-    """What a caller that may use the network passes as `ask`: GH_MAX `gh pr view` calls."""
-    return {"left": GH_MAX}
+    """What a caller that may use the network passes as `ask`: GH_MAX `gh pr view` calls within
+    GH_TOTAL seconds; `not_asked` counts the items left out when either runs out."""
+    return {"left": GH_MAX, "until": time.monotonic() + GH_TOTAL, "not_asked": 0}
+
+
+def not_asked_line(ask):
+    """The one line for the items gh was not asked about, or "" when there were none."""
+    n = (ask or {}).get("not_asked", 0)
+    return (f"gh was not asked about {n} item{'s' if n != 1 else ''}: the {GH_TOTAL} s or {GH_MAX}-call "
+            f"budget ran out; {'they stay' if n != 1 else 'it stays'} at work until asked again") if n else ""
+
+
+REPORTED = ("reported", "review", "landing", "verdict")
 
 
 def stale_merged(root, path, status=None, lines=None, ask=None):
-    """An item logged `working` or `landing` whose branch is already merged: nothing runs for it,
-    and `items.py done <id>` closes it. Never closed here. With `ask` (gh_budget()), an item git
-    cannot place and whose LOG or REPORT names a PR is asked of `gh pr view`, as `done` does: the
-    owner's projects squash-merge and delete the branch, which git alone never reads as merged.
-    Unknown stays unknown. The session start's automatic migration passes no `ask`: no network."""
+    """An item logged `working` or `landing` that is done in git but not on the board: nothing runs
+    for it, and `items.py done <id>` closes it. Never closed here. Stale only when all three hold:
+    the item reported at least once (a REPORTED line), its branch is merged, and no linked worktree
+    has that branch checked out with uncommitted or untracked changes. A fresh `worktree-agent-*`
+    branch that ran `merge --ff-only main` has a tip already in main and two reflog entries; it read
+    as `stale (merged)` while its thread was editing (review of 2.0.1). An item that never reported
+    is at work, whatever git says.
+
+    With `ask` (gh_budget()), an item git cannot place and whose LOG or REPORT names a PR is asked
+    of `gh pr view`, as `done` does: the owner's projects squash-merge and delete the branch, which
+    git alone never reads as merged. Unknown stays unknown. The session start's automatic migration
+    passes no `ask`: no network."""
     status = status_of(path)[0] if status is None else status
     if status not in AT_WORK:
         return False
     lines = log_lines(path) if lines is None else lines
+    if not any(st in REPORTED for _, st, _ in lines):
+        return False
     found = merged(root, path, lines)
-    if found is None and ask is not None and ask["left"] > 0:
+    if found is None and ask is not None:
         pr = refs(path, lines)[2]
-        if pr:
+        target = gh_target(root, pr) if pr else None
+        remaining = ask.get("until", float("inf")) - time.monotonic()
+        if target and ask["left"] > 0 and remaining > 0:
             ask["left"] -= 1
-            found = merge_state(root, pr, timeout=GH_TIMEOUT)[0] == "merged"
-    return found is True
+            found = merge_state(root, pr, timeout=min(GH_TIMEOUT, remaining))[0] == "merged"
+        elif target:
+            ask["not_asked"] = ask.get("not_asked", 0) + 1
+    return found is True and not edited_in_worktree(root, refs(path, lines)[1])
+
+
+def edited_in_worktree(root, branch):
+    """True when a linked worktree has `branch` checked out with uncommitted or untracked changes,
+    or when git cannot say: a thread may be working there."""
+    if not branch:
+        return False
+    code, out, _ = kitlib.git_run(root, "worktree", "list", "--porcelain")
+    if code != 0:
+        return True
+    for block in out.split("\n\n"):
+        fields = dict(line.split(" ", 1) for line in block.splitlines() if " " in line)
+        if fields.get("branch") != f"refs/heads/{branch}" or "worktree" not in fields:
+            continue
+        code, changes, _ = kitlib.git_run(fields["worktree"], "status", "--porcelain")
+        if code != 0 or changes.strip():
+            return True
+    return False
 
 
 def at_work(root, path):
@@ -636,7 +718,7 @@ def snapshot(root, at=None, ask=None):
     for r in rows:
         counts[r["status"] or "?"] = counts.get(r["status"] or "?", 0) + 1
     return {"at": now(), "items": rows, "counts": counts, "questions": needs_you(root, [r["id"] for r in rows]),
-            "overnight": overnight_ended(root)}
+            "overnight": overnight_ended(root), "gh_not_asked": (ask or {}).get("not_asked", 0)}
 
 
 def overnight_ended(root):
@@ -664,6 +746,8 @@ def print_status(snap):
     if stale:
         print(f"stale (merged): {', '.join(stale)}: the branch is in the default branch and nothing runs for it; "
               f"`items.py done <id>` closes each")
+    if snap.get("gh_not_asked"):
+        print(not_asked_line({"not_asked": snap["gh_not_asked"]}))
     print("counts: " + (", ".join(f"{k} {v}" for k, v in sorted(snap["counts"].items())) or "none"))
     for run in snap.get("overnight") or ():
         print(kitlib.overnight_news_line(run).replace("kit: ", "", 1) + ": tell the user")
@@ -739,11 +823,13 @@ def conflicts(root, ids=None):
 def merge_state(root, pr, timeout=30):
     """("merged" | "open" | "closed" | "unknown", detail) for the item's PR from `gh pr view`; unknown
     when gh is missing, not logged in or the call fails, never a guess."""
+    target = gh_target(root, pr)
+    if not target:
+        return "unknown", f"{pr} is not a PR of this repository"
     gh = shutil.which("gh")
     if not gh:
         return "unknown", "gh is not installed"
     import subprocess
-    target = pr.lstrip("#")
     try:
         out = subprocess.run([gh, "pr", "view", target, "--json", "state,mergedAt"], cwd=str(root),
                              capture_output=True, text=True, timeout=timeout, env=kitlib.hermetic_env())
@@ -880,6 +966,21 @@ def main(argv=None):
                     print(f'  "{r}" also asks for other commands: removing it drops that prompt too; '
                           f"a narrower rule may be what the owner wants")
                 print(p["diff"])
+        return 0
+    if cmd == "forget":  # the owner's: guard.py refuses it from a thread
+        if rest:
+            print("items: forget takes no arguments", file=sys.stderr)
+            return 2
+        try:
+            record, had = kitlib.opt_in_record(root), kitlib.forget_opt_in(root)
+        except OSError as exc:
+            print(kitlib.write_failed(exc, "The kit's record of this project"), file=sys.stderr)
+            return 1
+        print((f"Forgot this project: removed {record}." if had else
+               f"Nothing to forget: no record at {record}.")
+              + " The kit's hooks stay quiet here while it has neither .claude/kit.json nor the kit's items "
+                "or board; either one makes it a kit project again. To keep the hooks off with kit.json "
+                'present, set "guard": "off" in it.')
         return 0
     if cmd in ("away", "sandbox"):
         action = rest[0] if rest else "status"

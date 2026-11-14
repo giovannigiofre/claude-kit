@@ -28,7 +28,7 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    the mergePullRequest mutation, a GitHub MCP merge tool); the coordinator merges,
                    and from the main session the merge is left to the permission system
   owner-settings   from a subagent: the kit's items.py commands that change the owner's settings
-                   (`away` and `sandbox` with on or off, `unattended` with any argument), and
+                   (`away` and `sandbox` with on or off, `unattended` with any argument, `forget`), and
                    `machine_setup.py --apply|--decline`, `migrate_state.py undo` and `migrate
                    --again|--force`; judged on what a simple command runs (directly, or a
                    shell function or variable bound to it), never on mentioned text; `away status`, `sandbox status`, a
@@ -931,6 +931,8 @@ def owner_words(script, args):
         words = [a for a in args if not a.startswith("-")]
         if words[:1] in (["away"], ["sandbox"]) and words[1:2] in (["on"], ["off"]):
             return words[:2]
+        if words[:1] == ["forget"]:  # drops the project's opt-in record: the owner's to decide
+            return words[:1]
         if words[:1] == ["unattended"] and any(re.fullmatch(r"[A-Za-z_][\w-]*=.*", a) for a in words[1:]):
             return words
     return None

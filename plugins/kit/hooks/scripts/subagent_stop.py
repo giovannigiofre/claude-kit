@@ -10,8 +10,8 @@ distiller then runs in the background). One seen again after it was delivered to
 counts as a miss.
 
 Any subagent briefed with `ITEM: <id>` also gets a `cost` line on that item: the input, output,
-cache read and cache write tokens its transcript records, its tool calls, and the minutes from
-its first to its last line (usage_of).
+cache read and cache write tokens its transcript records, its tool calls, and its active minutes:
+the gaps between its entries, each counted up to five minutes (usage_of).
 
 The verdict is parsed from the verifier's report (`VERDICT:` and the items under PROBLEMS):
 its final message, else, since a worker hands its report back through the SubagentHandback tool,
@@ -155,8 +155,10 @@ def missing_report(path):
 # (2026-11) the verifier's SubagentHandback entry was written at .684s, its result at .928s, the
 # hook ran at .995s and still read a transcript without them, blocked with NO_REPORT and returned
 # before filing anything; the thread never stopped again, so its verdict and cost were lost. So a
-# missing report is looked for again a few times before the hook believes it.
-REREAD_TRIES, REREAD_PAUSE = 5, 0.3  # about 1.5 s at most, well inside the hook's 10-second limit
+# missing report is looked for again over the whole window before the hook believes it. A first
+# version left early on a file that had not grown for two reads and still lost a hand-back that
+# landed 1.0 s after the hook started (review of 2.0.1): a quiet file proves nothing.
+REREAD_TRIES, REREAD_PAUSE = 6, 0.3  # about 1.8 s at most; the slowest hook measured 1.52 s of its 10 s
 STATUS_REPORT = re.compile(r"^\W*STATUS:\s*(done|blocked|partial)\b", re.M | re.I)
 
 
@@ -167,28 +169,15 @@ def report_in(message, agent_type):
 
 
 def still_missing(path, tries=REREAD_TRIES, pause=REREAD_PAUSE):
-    """missing_report, read again while the transcript may still be catching up: stops as soon as
-    a report appears, or when the file has not grown over two pauses in a row."""
+    """missing_report, read again while the transcript may still be catching up: True only when
+    no report appeared in any read over the whole window; leaves as soon as one does."""
     if not missing_report(path):
         return False
-    size, quiet = _size(path), 0
     for _ in range(tries):
         time.sleep(pause)
         if not missing_report(path):
             return False
-        now = _size(path)
-        quiet = quiet + 1 if now == size else 0
-        size = now
-        if quiet >= 2:
-            break
     return True
-
-
-def _size(path):
-    try:
-        return os.path.getsize(path)
-    except OSError:
-        return -1
 
 
 def scan_runs(lines):
@@ -336,14 +325,19 @@ def usage_of(path):
 
     # active time, not the span: a thread resumed for a second round showed 28.7 minutes for about
     # 15 of work, the hour between its rounds included. Each gap between entries counts up to IDLE_CAP.
-    minutes = 0.0
-    try:
-        from datetime import datetime
-        times = sorted(datetime.fromisoformat(t.replace("Z", "+00:00")) for t in stamps)
-        gaps = ((b - a).total_seconds() for a, b in zip(times, times[1:]))
-        minutes = round(sum(min(g, IDLE_CAP) for g in gaps) / 60, 1)
-    except (ValueError, TypeError):
-        pass
+    # A stamp that does not parse is skipped, not the whole line: the gaps between the others count.
+    from datetime import datetime, timezone
+    times = []
+    for t in stamps:
+        try:
+            when = datetime.fromisoformat(t.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        # one kind only, so the sort cannot fail: a stamp without a zone is read as UTC
+        times.append(when if when.tzinfo else when.replace(tzinfo=timezone.utc))
+    times.sort()
+    gaps = ((b - a).total_seconds() for a, b in zip(times, times[1:]))
+    minutes = round(sum(min(g, IDLE_CAP) for g in gaps) / 60, 1)
     return {"in": total("input_tokens"), "out": total("output_tokens"), "cache_read": total("cache_read_input_tokens"),
             "cache_write": total("cache_creation_input_tokens"), "tools": len(tools), "minutes": minutes}
 
@@ -435,7 +429,10 @@ def main():
     if not agent_type.endswith("verifier"):  # a thread: file its report, nothing else to parse
         if data.get("agent_transcript_path"):
             brief, handed = from_transcript_any(data["agent_transcript_path"])
-            report = handed or report  # the hand-back is the report; the closing text is not
+            # the hand-back is the report; the closing text is not. A payload that carries a report
+            # wins over transcript text without one (the hand-back may not have reached the file)
+            if handed and (report_in(handed, agent_type) or not report_in(report, agent_type)):
+                report = handed
         file_report(root, brief, report, agent_type, agent_id)
         return 0
     if data.get("agent_transcript_path"):

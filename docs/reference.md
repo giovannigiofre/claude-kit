@@ -8,14 +8,21 @@ user may choose to commit it instead, so every clone gets the same gates. Every 
 the mod, `gate.py`, the overnight runner, kit-llm) takes a checkout's own kit.json, else its main
 checkout's, so a linked worktree, which has no copy of an excluded file, runs with the main
 checkout's. A project also counts as using the kit when its main checkout holds the kit's state
-(`.kit/lead/`, or `.claude/lead/` before the move, with a board or an `items/` folder): when
+(`.kit/lead/`, or `.claude/lead/` before the move, with a board or an item folder holding a
+BRIEF.md; a symlinked `.kit`, `.claude` or lead folder does not count), or when a hook has seen it as a
+kit project before: the first time a hook reads its kit.json or its state, it writes a record under
+the account's config dir (`~/.claude/kit-projects/`, or `$CLAUDE_CONFIG_DIR/kit-projects/`), keyed by
+the repository's origin, else its main checkout's path, so every clone and worktree shares it, and a
+config dir that cannot be written fails no hook. When
 kit.json goes missing there (a commit removed it in the owner's project and nothing said so for
 days), the kit runs on its defaults (guard on, reports, verdicts and cost lines filed, the
 coordinator line), nothing gates a stop, `gate.py` says there is no gate, and every session start
 and compaction prints one line saying the file is missing, the gates are off, and how to restore it
 (`git show <commit>:.claude/kit.json` from its last version in git, else `/kit:init`), for the
-coordinator to tell the owner once and restore only with his approval. With neither file nor state
-the kit stays off. The owner's personal choices that are never shared
+coordinator to tell the owner once and restore only with his approval. With neither file, state nor record
+the kit stays off. The owner turns the record off with `"guard": "off"` in kit.json (the record is
+removed, and the kit is off while that file says so), or with `items.py forget`, which removes it and
+which a thread is refused, like `away on`. The owner's personal choices that are never shared
 (the unattended git steps) live in `.claude/kit.local.json` beside it.
 
 ```json
@@ -186,10 +193,11 @@ not merged into the default branch, decided from git alone: the branch its LOG o
 is an ancestor of it (and has a commit of its own), or, the branch deleted, the last commit the
 item names (a verifier's `REVIEWED:` sha) is. A squash merge leaves that sha outside the default
 branch, so a deleted branch reads as "cannot tell". Then, only where a person runs the command
-(`items.py status`, a hand-run `migrate_state.py migrate` or `status`), an item whose LOG or
-REPORT.md names a PR is asked of `gh pr view` as `done` does: MERGED makes it stale, anything else,
-no `gh` or a failing call leaves it unknown. Each call has 10 seconds and at most ten items are
-asked per run. The session start's automatic move never calls the network, and its "waits to
+(`items.py status`, a hand-run `migrate_state.py migrate` or `status`), an item that names its PR
+is asked of `gh pr view` as `done` does: MERGED makes it stale, anything else, no `gh` or a
+failing call leaves it unknown. Each call has 10 seconds, at most ten items are asked per run,
+and all the calls of one run share 20 seconds; the items left when either runs out stay at work,
+and one line says how many were not asked. The session start's automatic move never calls the network, and its "waits to
 move" line names `items.py status` for finding the stale items. When the kit cannot tell, the item stays at work. By
 hand: `python3 <kit>/hooks/scripts/migrate_state.py status|migrate|undo [--dry-run] [--force] [--again]`
 (`--force` moves anyway, for a thread that died and left `working`). Each entry moves on its own,
@@ -407,8 +415,10 @@ transcript without usage writes nothing and never fails the hook.
 `status` reads the item folders, not board.md, so it is right even when the board has drifted:
 per open item the id, kind, status, last event and its age, note, agent, branch and PR (from the
 LOG or the `BRANCH / PR:` line of REPORT.md) and summed cost, with `stale (merged)` after the
-status of a `working` or `landing` item whose branch is already merged (the same test as the
-move's, said once with `items.py done <id>` to close it; nothing is closed for you); then counts per status and the
+status of a `working` or `landing` item that reported at least once (a `reported`, `review`,
+`landing` or `verdict` line), whose branch is already merged, and whose branch no worktree has
+checked out with uncommitted or untracked changes; an item that never reported is at work
+whatever git says (the same test as the move's, said once with `items.py done <id>` to close it; nothing is closed for you); then counts per status and the
 board's NEEDS YOU line split into questions (only where a known item id starts the next
 `<id>:`, so a question with a colon in it stays whole). `--json` gives the same for a script.
 
@@ -419,7 +429,12 @@ until that item is done (archived, or last logged `done`); an id that does not e
 every pair against each other with `git merge-tree --write-tree --name-only`, which touches no
 checkout, and prints the files in conflict. Without git 2.38 or a branch it says `unknown` and why.
 
-`done <id>` on an item whose LOG or report names a PR runs `gh pr view <n> --json state,mergedAt`
+An item names its PR only in its own `reported`, `review`, `landing` or `verdict` LOG lines
+(`PR #n` or a URL) or in REPORT.md's `PR:` or `BRANCH / PR:` field, never in a free note (a note
+that compared it with another PR got that PR asked about). gh is given only the bare number: `#n`,
+or the number of a URL on this repository's own origin; another repository's URL is not asked.
+
+`done <id>` on an item that names its PR runs `gh pr view <n> --json state,mergedAt`
 and refuses an open or closed-unmerged PR; `--force` archives it anyway and says so. Without gh,
 or when the call fails or answers something unexpected, it prints "merge state unknown" and
 archives as before: it never calls a PR merged on an incomplete check. It does not check `gh auth
@@ -558,7 +573,8 @@ or missing `SubagentHandback`) is told once by `subagent_stop.py` to send it; if
 without one, the coordinator is woken to SendMessage it. Before telling it, the hook takes a
 report in the stop's own `last_assistant_message` (a `VERDICT:` line from a verifier, a
 `STATUS: done|blocked|partial` line otherwise) as delivered, and reads the transcript again for
-up to about 1.5 s, since a hand-back can reach the file after the hook starts; it files the cost
+for about 1.8 s (six reads 0.3 s apart, leaving early only when a report appears), since a
+hand-back can reach the file after the hook starts; it files the cost
 line before it blocks. The same report seen on a later stop is filed once. The coordinator addresses a thread by
 the agent ID the Agent call returned (a name needs agent teams, which the kit does not enable;
 the ID also survives a restart, and the hooks write it into the item's LOG); a message reaches

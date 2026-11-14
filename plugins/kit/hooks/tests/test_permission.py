@@ -73,6 +73,7 @@ def main():
             ("away on", "allow", "prompt"), ("away off", "allow", "prompt"), ("sandbox on", "allow", "prompt"),
             ("unattended push=ask", "allow", "prompt"), ("away status", "allow", "allow"),
             ("sandbox status", "allow", "allow"), ("unattended", "allow", "allow"), ("list", "allow", "allow"),
+            ("forget", "allow", "prompt"),
         ]:
             for agent, want in ((False, main_want), (True, thread_want)):
                 got = ask(repo, f"python3 {items} {args}", agent)

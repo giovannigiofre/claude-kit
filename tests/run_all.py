@@ -13,9 +13,11 @@ To make it this repo's gate for the kit itself, put it in your own .claude/kit.j
   {"verify": "python3 tests/run_all.py"}
 """
 
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,9 +28,13 @@ def main(argv):
     verbose = "-v" in argv
     files = sorted(p for pattern in PATTERNS for p in ROOT.glob(pattern))
     failed = []
+    # the hooks latch each kit project they see (kitlib.latch_opt_in): the tests' latches go to a
+    # folder of their own, not the user's config dir
+    latches = tempfile.mkdtemp(prefix="kit-opt-in-")
+    env = dict(os.environ, KIT_OPT_IN_DIR=latches)
     for path in files:
         rel = path.relative_to(ROOT)
-        out = subprocess.run([sys.executable, str(path)], cwd=str(ROOT), capture_output=True, text=True)
+        out = subprocess.run([sys.executable, str(path)], cwd=str(ROOT), capture_output=True, text=True, env=env)
         ok = out.returncode == 0
         print(f"{'ok  ' if ok else 'FAIL'} {rel}")
         if verbose or not ok:
@@ -47,6 +53,7 @@ def main(argv):
             print("\n".join(tail))
         if not ok:
             failed.append("claude plugin test plugins/kit")
+    shutil.rmtree(latches, ignore_errors=True)
     print(f"{'ok  ' if mod == 'ok' else mod[:4] if mod == 'FAIL' else 'skip'} mod tests: {mod}")
     print(f"run_all: {len(files)} test files, {len(failed)} failed" + (": " + ", ".join(failed) if failed else ""))
     return 1 if failed else 0

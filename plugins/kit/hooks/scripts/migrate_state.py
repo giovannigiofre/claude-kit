@@ -124,6 +124,8 @@ def busy(main, ask=None):
                 stale.add(item.name)  # its branch is merged: nothing runs for it (`items.py done` closes it)
             elif status in BUSY:
                 why.append(f"item {item.name} is {status} ({item / 'LOG.md'})")
+    if items.not_asked_line(ask):
+        why.append(items.not_asked_line(ask))
     config, _ = kitlib.load_config(main)
     if config:  # a board kept elsewhere (kit.json lead.board)
         boards.add(kitlib.board_file(main, config))
