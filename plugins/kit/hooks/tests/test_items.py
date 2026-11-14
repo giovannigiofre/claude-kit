@@ -336,6 +336,8 @@ def stale_checks(tmp, check):
     for name in ("Alpha", "Beta", "Gamma"):
         run(repo, "new", name, env=env)
         run(repo, "log", name.lower(), "working", f"branch feat/{name.lower()}", env=env)
+        run(repo, "log", name.lower(), "reported", "done, agent a1", env=env)
+        run(repo, "log", name.lower(), "working", "fixing", env=env)
     commit_file(repo, "feat/alpha", "a.txt", "a\n")
     commit_file(repo, "feat/beta", "b.txt", "b\n")
     git(repo, "merge", "-q", "--no-ff", "-m", "merge alpha", "feat/alpha")
@@ -348,6 +350,26 @@ def stale_checks(tmp, check):
     data = json.loads(run(repo, "status", "--json", env=env)[1])
     check({r["id"]: r["stale_merged"] for r in data["items"]} == {"alpha": True, "beta": False, "gamma": False}, data["items"])
     check(items.find(repo, "alpha") and items.status_of(items.find(repo, "alpha"))[0] == "working", "nothing closed")
+
+    # a live thread (review of 2.0.1): a fresh worktree-agent-* branch that ran `merge --ff-only
+    # main` has two reflog entries and a tip in main. Never reported: at work. Reported but with
+    # edits in its worktree: at work. Reported and clean: stale.
+    git(repo, "worktree", "add", "-q", "-b", "worktree-agent-x", str(tmp / "wt-x"), "main~1")
+    git(tmp / "wt-x", "merge", "-q", "--ff-only", "main")
+    (tmp / "wt-x" / "new.txt").write_text("being written\n")
+    run(repo, "new", "Live", env=env)
+    run(repo, "log", "live", "working", "branch worktree-agent-x, agent a2", env=env)
+    path = items.find(repo, "live")
+    check(items.merged(repo, path) is True, "the fresh branch reads as merged in git alone")
+    check(items.stale_merged(repo, path) is False, "never reported: at work, whatever git says")
+    run(repo, "log", "live", "reported", "partial, agent a2", env=env)
+    run(repo, "log", "live", "working", "round 2", env=env)
+    check(items.stale_merged(repo, path) is False, "reported, but its worktree has untracked edits: at work")
+    (tmp / "wt-x" / "new.txt").unlink()
+    (tmp / "wt-x" / "a.txt").write_text("changed\n")
+    check(items.stale_merged(repo, path) is False, "an uncommitted change in its worktree: at work")
+    git(tmp / "wt-x", "checkout", "-q", "--", "a.txt")
+    check(items.stale_merged(repo, path) is True, "reported, merged, clean worktree: stale")
 
 
 def fresh_project_checks(tmp, check):

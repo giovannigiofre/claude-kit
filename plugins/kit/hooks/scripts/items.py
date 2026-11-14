@@ -558,23 +558,53 @@ def gh_budget():
     return {"left": GH_MAX}
 
 
+REPORTED = ("reported", "review", "landing", "verdict")
+
+
 def stale_merged(root, path, status=None, lines=None, ask=None):
-    """An item logged `working` or `landing` whose branch is already merged: nothing runs for it,
-    and `items.py done <id>` closes it. Never closed here. With `ask` (gh_budget()), an item git
-    cannot place and whose LOG or REPORT names a PR is asked of `gh pr view`, as `done` does: the
-    owner's projects squash-merge and delete the branch, which git alone never reads as merged.
-    Unknown stays unknown. The session start's automatic migration passes no `ask`: no network."""
+    """An item logged `working` or `landing` that is done in git but not on the board: nothing runs
+    for it, and `items.py done <id>` closes it. Never closed here. Stale only when all three hold:
+    the item reported at least once (a REPORTED line), its branch is merged, and no linked worktree
+    has that branch checked out with uncommitted or untracked changes. A fresh `worktree-agent-*`
+    branch that ran `merge --ff-only main` has a tip already in main and two reflog entries; it read
+    as `stale (merged)` while its thread was editing (review of 2.0.1). An item that never reported
+    is at work, whatever git says.
+
+    With `ask` (gh_budget()), an item git cannot place and whose LOG or REPORT names a PR is asked
+    of `gh pr view`, as `done` does: the owner's projects squash-merge and delete the branch, which
+    git alone never reads as merged. Unknown stays unknown. The session start's automatic migration
+    passes no `ask`: no network."""
     status = status_of(path)[0] if status is None else status
     if status not in AT_WORK:
         return False
     lines = log_lines(path) if lines is None else lines
+    if not any(st in REPORTED for _, st, _ in lines):
+        return False
     found = merged(root, path, lines)
     if found is None and ask is not None and ask["left"] > 0:
         pr = refs(path, lines)[2]
         if pr:
             ask["left"] -= 1
             found = merge_state(root, pr, timeout=GH_TIMEOUT)[0] == "merged"
-    return found is True
+    return found is True and not edited_in_worktree(root, refs(path, lines)[1])
+
+
+def edited_in_worktree(root, branch):
+    """True when a linked worktree has `branch` checked out with uncommitted or untracked changes,
+    or when git cannot say: a thread may be working there."""
+    if not branch:
+        return False
+    code, out, _ = kitlib.git_run(root, "worktree", "list", "--porcelain")
+    if code != 0:
+        return True
+    for block in out.split("\n\n"):
+        fields = dict(line.split(" ", 1) for line in block.splitlines() if " " in line)
+        if fields.get("branch") != f"refs/heads/{branch}" or "worktree" not in fields:
+            continue
+        code, changes, _ = kitlib.git_run(fields["worktree"], "status", "--porcelain")
+        if code != 0 or changes.strip():
+            return True
+    return False
 
 
 def at_work(root, path):

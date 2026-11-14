@@ -407,8 +407,10 @@ transcript without usage writes nothing and never fails the hook.
 `status` reads the item folders, not board.md, so it is right even when the board has drifted:
 per open item the id, kind, status, last event and its age, note, agent, branch and PR (from the
 LOG or the `BRANCH / PR:` line of REPORT.md) and summed cost, with `stale (merged)` after the
-status of a `working` or `landing` item whose branch is already merged (the same test as the
-move's, said once with `items.py done <id>` to close it; nothing is closed for you); then counts per status and the
+status of a `working` or `landing` item that reported at least once (a `reported`, `review`,
+`landing` or `verdict` line), whose branch is already merged, and whose branch no worktree has
+checked out with uncommitted or untracked changes; an item that never reported is at work
+whatever git says (the same test as the move's, said once with `items.py done <id>` to close it; nothing is closed for you); then counts per status and the
 board's NEEDS YOU line split into questions (only where a known item id starts the next
 `<id>:`, so a question with a colon in it stays whole). `--json` gives the same for a script.
 

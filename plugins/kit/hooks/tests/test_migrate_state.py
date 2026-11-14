@@ -307,6 +307,22 @@ def main():
             else:
                 check(code == 2 and "item B1 is working" in out and "board row" not in out, f"{case}: still at work: {code} {out}")
 
+    # a live thread on a fresh worktree-agent-* branch fast-forwarded to main (review of 2.0.1):
+    # git alone reads it as merged, but it never reported and its worktree has edits: the move waits
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = project(tmp)
+        sh(repo, "commit", "-q", "--allow-empty", "-m", "next")
+        wt = Path(tmp) / "wt-live"
+        sh(repo, "worktree", "add", "-q", "-b", "worktree-agent-live", str(wt), "main~1")
+        sh(wt, "merge", "-q", "--ff-only", "main")
+        (wt / "edit.txt").write_text("in progress\n")
+        with open(repo / ".claude/lead/items/B1/LOG.md", "a") as f:
+            f.write("- 2026-11-01T10:05:00Z | working | branch worktree-agent-live, agent a1\n")
+        (repo / ".claude/lead/board.md").write_text("| B1 | ship | a | DONE WHEN x | working | agent a1 | - | from lead |\n")
+        code, out = run(repo, "migrate")
+        check(code == 2 and "item B1 is working" in out and not (repo / ".kit").exists(),
+              f"a live thread on a fast-forwarded branch holds the move: {code} {out}")
+
     squash_checks(check)
 
     # a tracked entry stays, with the git mv to run; the rest moves
