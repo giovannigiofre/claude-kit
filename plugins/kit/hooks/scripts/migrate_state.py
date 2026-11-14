@@ -18,8 +18,9 @@ from rewriting them; so do settings, skills, agents, worktrees, loop.md and othe
 
 How, one entry at a time, so a run that dies half-way leaves nothing unreadable:
   - refuses (exit 2) while a thread or run is at work: an item whose LOG.md ends in `working`
-    or `landing`, a board row in one of those statuses, an overnight run with no stop_reason
-    and no end-state.json. `--force` overrides (a thread that died leaves `working` behind);
+    or `landing` and whose branch is not merged into the default branch (items.stale_merged), a
+    board row in one of those statuses, an overnight run with no stop_reason and no
+    end-state.json. `--force` overrides (a thread that died leaves `working` behind);
   - the exclude lines are computed once and added in one call (kitlib.add_exclude_lines, which
     locks, appends and never removes a line) before anything moves: `/.kit/<entry>/` and the
     old `/.claude/<entry>/`, so a leftover or later-made `.claude/evidence/` stays out of
@@ -110,14 +111,16 @@ def board_status(row):
 
 def busy(main):
     """Why the state must not move now: one line per thread or run still at work."""
-    why, boards = [], set()
+    why, boards, stale = [], set(), set()
     for folder in (LEGACY, STATE):
         lead = Path(main) / folder / "lead"
         boards.add(lead / "board.md")
         found = lead / "items"
         for item in sorted(found.iterdir()) if found.is_dir() else []:
             status = items.status_of(item)[0] if item.is_dir() and item.name != "done" else None
-            if status in BUSY:
+            if status in BUSY and items.stale_merged(main, item, status):
+                stale.add(item.name)  # its branch is merged: nothing runs for it (`items.py done` closes it)
+            elif status in BUSY:
                 why.append(f"item {item.name} is {status} ({item / 'LOG.md'})")
     config, _ = kitlib.load_config(main)
     if config:  # a board kept elsewhere (kit.json lead.board)
@@ -129,7 +132,7 @@ def busy(main):
             continue
         for row in rows:
             got = board_status(row)
-            if got and got[1] in BUSY and not any(f"item {got[0]} " in w for w in why):
+            if got and got[1] in BUSY and got[0] not in stale and not any(f"item {got[0]} " in w for w in why):
                 why.append(f"board row {got[0]} is {got[1]} ({board})")
     for checkout in checkouts(main):
         for folder in (LEGACY, STATE):

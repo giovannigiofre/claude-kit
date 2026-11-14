@@ -504,6 +504,64 @@ def refs(path, lines):
     return agent, branch, pr
 
 
+AT_WORK = ("working", "landing")
+TIP = re.compile(r"(?:\breviewed\s+|^\W*REVIEWED:\s*(?:[\w./-]+,\s*)?)`?([0-9a-fA-F]{7,40})\b", re.M | re.I)
+
+
+def merged(root, path, lines=None):
+    """True when the branch an item names is already in the default branch, from git alone (no
+    network): the local branch is an ancestor of it, or, the branch deleted, the last commit the
+    item names (a verifier's `REVIEWED:` sha) is. A branch with no commit of its own since it was
+    made (one reflog entry) is a thread that has not committed yet, not a merged one. None when
+    the kit cannot tell, which the callers read as still at work."""
+    lines = log_lines(path) if lines is None else lines
+    branch = refs(path, lines)[1]
+    base = kitlib.git_base(root)
+    if not branch or not base:
+        return None
+    bases = [base] + ([base.split("/", 1)[1]] if base.startswith("origin/") else [])
+
+    def contains(commit):
+        found = None
+        for b in bases:
+            code = kitlib.git_run(root, "merge-base", "--is-ancestor", commit, b)[0]
+            if code == 0:
+                return True
+            found = False if code == 1 else found
+        return found
+
+    code, tip, _ = kitlib.git_run(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}")
+    if code == 0:
+        entries = kitlib.git_run(root, "reflog", "show", "--format=%H", f"refs/heads/{branch}")[1].split()
+        if len(entries) <= 1:
+            return None
+        return contains(tip.strip())
+    texts = [note for _, st, note in reversed(lines) if st != "cost"]
+    for name in ("VERDICT.md", "REPORT.md"):
+        try:
+            texts.append((path / name).read_text(encoding="utf-8"))
+        except OSError:
+            pass
+    shas = [m.group(1) for m in map(TIP.search, texts) if m]
+    if not shas or kitlib.git_run(root, "rev-parse", "--verify", "--quiet", shas[0] + "^{commit}")[0] != 0:
+        return None
+    return contains(shas[0])
+
+
+def stale_merged(root, path, status=None, lines=None):
+    """An item logged `working` or `landing` whose branch is already merged: nothing runs for it,
+    and `items.py done <id>` closes it. Never closed here."""
+    status = status_of(path)[0] if status is None else status
+    return status in AT_WORK and merged(root, path, lines) is True
+
+
+def at_work(root, path):
+    """Is a thread or a landing still at work on this item: `working` or `landing`, and its branch
+    not merged (or the kit cannot tell)."""
+    status = status_of(path)[0]
+    return status in AT_WORK and not stale_merged(root, path, status)
+
+
 def needs_you(root, known=()):
     """[{"id", "question"}] from the board's NEEDS YOU line, or None without a board. An entry starts
     where `<id>:` follows a `;`, for an id the items or the board rows know (any id-like word
@@ -549,6 +607,7 @@ def snapshot(root, at=None):
         rows.append({"id": item["id"], "kind": kind, "status": item["status"], "last_event": last[1],
                      "last_at": last[0], "age_minutes": age_minutes(last[0], at), "note": item["note"],
                      "agent": agent, "branch": branch, "pr": pr, "cost": costs(lines),
+                     "stale_merged": stale_merged(root, p, item["status"], lines),
                      "blocked_by": item["blocked_by"], "brief": item["brief"]})
     counts = {}
     for r in rows:
@@ -575,8 +634,13 @@ def print_status(snap):
                  if cost else "-")
         age = f"{r['age_minutes']}m ago" if r["age_minutes"] is not None else "?"
         where = " ".join(x for x in (r["branch"], r["pr"]) if x) or "-"
-        state = (r["status"] or "?") + (f" blocked-by {', '.join(r['blocked_by'])}" if r["blocked_by"] else "")
+        state = ((r["status"] or "?") + (" stale (merged)" if r.get("stale_merged") else "")
+                 + (f" blocked-by {', '.join(r['blocked_by'])}" if r["blocked_by"] else ""))
         print(f"{r['id']} | {r['kind'] or '-'} | {state} | {age} | {where} | agent {r['agent'] or '-'} | {spent} | {r['note']}")
+    stale = [r["id"] for r in rows if r.get("stale_merged")]
+    if stale:
+        print(f"stale (merged): {', '.join(stale)}: the branch is in the default branch and nothing runs for it; "
+              f"`items.py done <id>` closes each")
     print("counts: " + (", ".join(f"{k} {v}" for k, v in sorted(snap["counts"].items())) or "none"))
     for run in snap.get("overnight") or ():
         print(kitlib.overnight_news_line(run).replace("kit: ", "", 1) + ": tell the user")

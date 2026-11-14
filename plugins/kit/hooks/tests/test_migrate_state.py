@@ -165,6 +165,33 @@ def main():
             code, out = run(repo, "migrate", "--force")
             check(code == 0 and (repo / ".kit/lead/board.md").exists(), f"{case}: --force moves it: {out}")
 
+    # an item left `working` after its branch was merged is stale, not at work: the move goes on.
+    # One whose branch is not merged, has no commit of its own yet, or cannot be found stays at work
+    for case in ("merged", "deleted", "unmerged", "fresh", "gone"):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = project(tmp)
+            sh(repo, "checkout", "-qb", "feat/m")
+            if case != "fresh":
+                (repo / "m.txt").write_text("m\n")
+                sh(repo, "add", "m.txt")
+                sh(repo, "commit", "-qm", "m")
+            tip = sh(repo, "rev-parse", "HEAD").strip()
+            sh(repo, "checkout", "-q", "main")
+            if case in ("merged", "deleted"):
+                sh(repo, "merge", "-q", "--no-ff", "-m", "merge feat/m", "feat/m")
+            if case in ("deleted", "gone"):
+                sh(repo, "branch", "-q", "-D", "feat/m")
+            note = f"PASS, reviewed {tip[:12]}, agent v1" if case in ("deleted", "gone") else "branch feat/m"
+            with open(repo / ".claude/lead/items/B1/LOG.md", "a") as f:
+                f.write(f"- 2026-11-01T10:05:00Z | working | branch feat/m\n- 2026-11-01T10:06:00Z | verdict | {note}\n"
+                        "- 2026-11-01T10:07:00Z | working | fixing\n")
+            (repo / ".claude/lead/board.md").write_text("| B1 | ship | a | DONE WHEN x | working | agent x | - | from lead |\n")
+            code, out = run(repo, "migrate")
+            if case in ("merged", "deleted"):
+                check(code == 0 and (repo / ".kit/lead/board.md").exists(), f"{case}: a merged item does not hold the move: {code} {out}")
+            else:
+                check(code == 2 and "item B1 is working" in out and "board row" not in out, f"{case}: still at work: {code} {out}")
+
     # a tracked entry stays, with the git mv to run; the rest moves
     with tempfile.TemporaryDirectory() as tmp:
         repo = project(tmp)

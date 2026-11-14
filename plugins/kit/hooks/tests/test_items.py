@@ -321,6 +321,35 @@ def race_checks(tmp, check):
     check(out == {} and log.count("| verdict |") == 1 and log.count("| cost |") == 2 and (folder / "VERDICT.md").is_file(), log)
 
 
+def stale_checks(tmp, check):
+    """An item still logged `working` whose branch is merged into the default branch: `status`
+    marks it `stale (merged)` and says once that `items.py done <id>` closes it; nothing is closed."""
+    home = tmp / "home"
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), TMPDIR=str(tmp))
+    repo = tmp / "stale"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "kit.json").write_text("{}")
+    for name in ("Alpha", "Beta", "Gamma"):
+        run(repo, "new", name, env=env)
+        run(repo, "log", name.lower(), "working", f"branch feat/{name.lower()}", env=env)
+    commit_file(repo, "feat/alpha", "a.txt", "a\n")
+    commit_file(repo, "feat/beta", "b.txt", "b\n")
+    git(repo, "merge", "-q", "--no-ff", "-m", "merge alpha", "feat/alpha")
+    git(repo, "branch", "-q", "feat/gamma")  # made, nothing committed yet: not merged, just started
+    code, out, _ = run(repo, "status", env=env)
+    rows = {line.split(" | ")[0]: line for line in out.splitlines() if " | " in line}
+    check(code == 0 and "| working stale (merged) |" in rows.get("alpha", ""), out)
+    check("stale" not in rows.get("beta", "x") and "stale" not in rows.get("gamma", "x"), f"unmerged and fresh stay working: {out}")
+    check(out.count("`items.py done <id>` closes") == 1 and "stale (merged): alpha:" in out, out)
+    data = json.loads(run(repo, "status", "--json", env=env)[1])
+    check({r["id"]: r["stale_merged"] for r in data["items"]} == {"alpha": True, "beta": False, "gamma": False}, data["items"])
+    check(items.find(repo, "alpha") and items.status_of(items.find(repo, "alpha"))[0] == "working", "nothing closed")
+
+
 def fresh_project_checks(tmp, check):
     """A project with only kit.json: every command writes under .kit/, from a worktree too, and
     git status stays clean."""
@@ -1125,6 +1154,9 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmp:
         missing_config_checks(Path(os.path.realpath(tmp)), check)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        stale_checks(Path(os.path.realpath(tmp)), check)
 
     with tempfile.TemporaryDirectory() as tmp:
         race_checks(Path(os.path.realpath(tmp)), check)

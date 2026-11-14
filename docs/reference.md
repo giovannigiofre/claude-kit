@@ -181,7 +181,10 @@ from `kit.json`, so it stays behind the protected path. A kit.json `lead.board` 
 
 An older project moves at a session start when nothing is at work, and the session says so in one
 line (or, when an item is `working` or `landing` or an overnight run is live, why it waits, said
-once and again only when the reason changes). By
+once and again only when the reason changes). An item counts as at work only while its branch is
+not merged into the default branch, decided from git alone: the branch its LOG or REPORT.md names
+is an ancestor of it (and has a commit of its own), or, the branch deleted, the last commit the
+item names (a verifier's `REVIEWED:` sha) is. When the kit cannot tell, the item stays at work. By
 hand: `python3 <kit>/hooks/scripts/migrate_state.py status|migrate|undo [--dry-run] [--force] [--again]`
 (`--force` moves anyway, for a thread that died and left `working`). Each entry moves on its own,
 one rename from `.claude/<entry>` to `.kit/<entry>` (across filesystems: copy, compare, delete),
@@ -392,7 +395,9 @@ transcript without usage writes nothing and never fails the hook.
 
 `status` reads the item folders, not board.md, so it is right even when the board has drifted:
 per open item the id, kind, status, last event and its age, note, agent, branch and PR (from the
-LOG or the `BRANCH / PR:` line of REPORT.md) and summed cost; then counts per status and the
+LOG or the `BRANCH / PR:` line of REPORT.md) and summed cost, with `stale (merged)` after the
+status of a `working` or `landing` item whose branch is already merged (the same test as the
+move's, said once with `items.py done <id>` to close it; nothing is closed for you); then counts per status and the
 board's NEEDS YOU line split into questions (only where a known item id starts the next
 `<id>:`, so a question with a colon in it stays whole). `--json` gives the same for a script.
 
