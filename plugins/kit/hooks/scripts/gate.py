@@ -201,6 +201,10 @@ def main(argv=None):
     if config is None:
         print("kit gate: this project has no .claude/kit.json (run /kit:init)", file=sys.stderr)
         return 3
+    if not config.get(cmd) and kitlib.config_missing(root):  # the kit's state is here, its kit.json is not
+        print(f"kit gate: there is no `{cmd}` gate: .claude/kit.json is missing in this project although it "
+              "uses the kit. Tell the coordinator; the session start says how to restore the file.", file=sys.stderr)
+        return 3
     timeout = None
     if "--timeout" in rest:
         try:

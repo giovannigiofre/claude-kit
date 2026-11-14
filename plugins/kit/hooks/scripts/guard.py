@@ -79,7 +79,8 @@ Multi-line commands, subshells, braces, if/for/while bodies, $(...) and backtick
 `cd` within one command are followed; quoted text over several lines (a commit message) and
 here-document bodies are arguments, not commands.
 
-Active when the project has .claude/kit.json (unless its "guard" is "off"), or everywhere when
+Active when the project has opted in (.claude/kit.json, unless its "guard" is "off", or the kit's
+state when kit.json went missing: kitlib.load_config), or everywhere when
 ~/.claude/kit.json says "guard": "on". Options, under "guard" in either file:
   {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40,
    "allowCommands": ["^rm -rf /opt/my-build$"], "attribution": "block", "waits": true, "sleepMaxSec": 60,

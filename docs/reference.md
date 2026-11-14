@@ -7,7 +7,15 @@
 user may choose to commit it instead, so every clone gets the same gates. Every reader (the hooks,
 the mod, `gate.py`, the overnight runner, kit-llm) takes a checkout's own kit.json, else its main
 checkout's, so a linked worktree, which has no copy of an excluded file, runs with the main
-checkout's; with neither the kit stays off. The owner's personal choices that are never shared
+checkout's. A project also counts as using the kit when its main checkout holds the kit's state
+(`.kit/lead/`, or `.claude/lead/` before the move, with a board or an `items/` folder): when
+kit.json goes missing there (a commit removed it in the owner's project and nothing said so for
+days), the kit runs on its defaults (guard on, reports, verdicts and cost lines filed, the
+coordinator line), nothing gates a stop, `gate.py` says there is no gate, and every session start
+and compaction prints one line saying the file is missing, the gates are off, and how to restore it
+(`git show <commit>:.claude/kit.json` from its last version in git, else `/kit:init`), for the
+coordinator to tell the owner once and restore only with his approval. With neither file nor state
+the kit stays off. The owner's personal choices that are never shared
 (the unattended git steps) live in `.claude/kit.local.json` beside it.
 
 ```json
@@ -292,7 +300,7 @@ resume from; the source of the idea is in CATALOG.md).
 ```
 
 ```bash
-python3 <kit>/hooks/scripts/items.py new "<name>" --brief - --from lead|handoff [--kind scout]  # id and folder printed
+python3 <kit>/hooks/scripts/items.py new "<name>" --brief - --from lead|handoff [--kind scout] [--again]  # id and folder printed
 python3 <kit>/hooks/scripts/items.py list [--status queued]
 python3 <kit>/hooks/scripts/items.py log <id> <status> [note]
 python3 <kit>/hooks/scripts/items.py put <id> <file>...   # copy files into the item's out/ folder
@@ -303,6 +311,11 @@ python3 <kit>/hooks/scripts/items.py conflicts [<id> ...]   # exit 0 clean, 1 co
 python3 <kit>/hooks/scripts/worktrees.py [--json]           # classify linked worktrees, print a plan
 python3 <kit>/hooks/scripts/items.py unattended [push=ask|allow] [rebase=ask|allow] [merge=ask] [--proposal]
 ```
+
+`new` refuses the name of an open item, naming it, its status and when it was created: two
+coordinator sessions on one project once made the same item 40 seconds apart, the second silently
+as `<id>-2`, and worked one issue twice. Read that item's LOG.md first; `--again` makes the
+numbered item on purpose. A name found only among the archived items gets its suffix as before.
 
 `unattended`: the owner's git preferences for unattended runs in this repo, in the main
 checkout's `.claude/kit.local.json` (`{"lead": {"unattended": {"push": "allow", "rebase": "allow",
@@ -569,7 +582,8 @@ whether to change the rules, through `items.py unattended --proposal`. The kit n
 `settings_guard.py` (PreToolUse: Write, Edit, MultiEdit, NotebookEdit, Bash, Monitor) answers
 `ask` in every permission mode for a change to a Claude Code settings file: `settings*.json` in
 any `.claude` folder or in `CLAUDE_CONFIG_DIR`, and the managed settings, in any case. Like
-every kit hook it acts only in a project with kit.json (a worktree's, else its main checkout's).
+every kit hook it acts only in a project that uses the kit (kit.json, a worktree's else its main
+checkout's, or the kit's state when kit.json went missing: see `.claude/kit.json` above).
 A shell command counts when it names one, quotes and backslashes inside the name included, and is
 not a plain read (`cat`, `grep`, `jq`, `git diff`, …, alone or piped into one another, with no
 redirection or chain). A bare `settings.json` counts only in a Claude folder: the cwd is one, the
@@ -739,7 +753,8 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
 
 ## Routing and the status line
 
-- **One mode**: in a project with `.claude/kit.json`, session start (and the start after a
+- **One mode**: in a project that uses the kit (`.claude/kit.json`, or its state when the file went
+  missing), session start (and the start after a
   compaction) prints one line that makes the session the coordinator: every message is handled with
   `kit:lead`, which answers a question in place, makes a small change itself and starts background
   threads for the rest. It is a hook, not the mod, so it works in a cloud session and over Remote

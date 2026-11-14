@@ -23,8 +23,8 @@ number), and a PASS confirms only the last FAIL on that same branch; with neithe
 confirms nothing. The LOG line of a filed report names the agent (`..., agent <id>`) and, for a
 verifier, the `REVIEWED: <sha>` its report states. Items are looked up in the main checkout: a
 thread stopping in its worktree (the hook's cwd) has no `lead/` folder of its own. Apart from
-the missing report, silent and never blocks a stop. A project without .claude/kit.json does
-nothing, the nudge included. Standard library only. `subagent_stop.py --missing <transcript>`
+the missing report, silent and never blocks a stop. A project that has not opted in does
+nothing, the nudge included: kit.json, or the kit's state when kit.json went missing (kitlib.load_config). Standard library only. `subagent_stop.py --missing <transcript>`
 exits 1 when that transcript's last run delivered no report (the hooks module asks).
 """
 

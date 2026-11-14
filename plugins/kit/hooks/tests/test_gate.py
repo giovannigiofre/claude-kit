@@ -152,6 +152,14 @@ def main():
         check(sh(repo, "status", "--porcelain") == "", "evidence excluded: " + sh(repo, "status", "--porcelain"))
         check("/.kit/evidence/" in (repo / ".git" / "info" / "exclude").read_text().splitlines(), "its own line")
 
+        # kit.json went missing while the kit's items are here: verify says there is no gate
+        (repo / ".claude" / "kit.json").unlink()
+        code, out = gate_cmd(repo, "verify")
+        check(code == 3 and "no .claude/kit.json" in out, f"neither file nor state: the old answer: {code} {out}")
+        (repo / ".kit" / "lead" / "items").mkdir(parents=True)
+        code, out = gate_cmd(repo, "verify")
+        check(code == 3 and "there is no `verify` gate" in out and "kit.json is missing" in out, f"{code} {out}")
+
     print("gate: all checks passed" if not failed else f"gate: {failed} failures")
     return 1 if failed else 0
 

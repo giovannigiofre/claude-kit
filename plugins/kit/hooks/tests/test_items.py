@@ -205,6 +205,35 @@ def snapshot_checks(tmp, check):
     check(code == 0 and "is open, archived with --force" in out, out)
 
 
+def missing_config_checks(tmp, check):
+    """kit.json went missing in a project that uses the kit: the hooks still file reports and cost
+    lines. A project with neither file nor state gets nothing filed."""
+    home = tmp / "home"
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), TMPDIR=str(tmp))
+    repo = tmp / "gone"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+    t = tmp / "agent-gone.jsonl"
+    rows = [{"type": "user", "timestamp": "2026-11-13T10:00:00.000Z", "message": {"role": "user", "content": "ITEM: alpha\ngo"}},
+            usage_row("g1", "2026-11-13T10:03:00.000Z", (3, 100, 1000, 500), tool="t1"),
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "SubagentHandback",
+                                                           "input": {"message": "STATUS: done\nCHANGED: a.py"}}]}}]
+    t.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    payload = {"cwd": str(repo), "agent_type": "kit:implementer", "agent_id": "g1",
+               "agent_transcript_path": str(t), "last_assistant_message": ""}
+    code, err = hook(repo, payload, env)
+    check(code == 0 and err == "" and not (repo / ".kit").exists(), f"neither file nor state: nothing filed {err}")
+    code, out, err = run(repo, "new", "Alpha", env=env)  # the kit's state, no kit.json
+    check(code == 0 and not (repo / ".claude" / "kit.json").exists(), f"new without kit.json: {code} {err}")
+    code, err = hook(repo, payload, env)
+    folder = repo / ".kit" / "lead" / "items" / "alpha"
+    log = (folder / "LOG.md").read_text()
+    check(code == 0 and (folder / "REPORT.md").read_text().startswith("STATUS: done"), f"REPORT.md filed: {err}")
+    check("| cost | in=3 out=100 cache_read=1000 cache_write=500 tools=2 minutes=3.0 agent=g1" in log, log)
+
+
 def fresh_project_checks(tmp, check):
     """A project with only kit.json: every command writes under .kit/, from a worktree too, and
     git status stays clean."""
@@ -1006,6 +1035,9 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmp:
         fresh_project_checks(Path(os.path.realpath(tmp)), check)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        missing_config_checks(Path(os.path.realpath(tmp)), check)
 
     print("items: all checks passed" if not failed else f"items: {failed} failures")
     return 1 if failed else 0

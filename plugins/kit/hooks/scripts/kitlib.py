@@ -1,6 +1,7 @@
 """Shared helpers for the kit hooks. Standard library only, Python 3.9+.
 
-Every hook is a no-op unless the project has `.claude/kit.json` (see the README for the schema),
+Every hook is a no-op unless the project has opted in: `.claude/kit.json` (see the README for the
+schema), or the kit's working state in its main checkout when kit.json went missing (load_config),
 so installing the plugin at user scope never changes behaviour in a project that has not opted in.
 A linked worktree with no kit.json of its own (it is personal and kept out of git by default)
 uses its main checkout's: config_file.
@@ -97,22 +98,57 @@ CONFIG = ".claude/kit.json"
 def config_file(root):
     """The kit.json that applies in checkout `root`: its own, else its main checkout's. /kit:init
     keeps kit.json out of git by default (personal), so a linked worktree has none of its own."""
+    return _config_and_main(root)[0]
+
+
+def _config_and_main(root):
+    """(config_file(root), the main checkout when it was looked up, else None)."""
     own = Path(root) / CONFIG
     if own.exists():
-        return own
+        return own, None
     main = main_checkout(root)
     if main and (Path(main) / CONFIG).exists():
-        return Path(main) / CONFIG
-    return own
+        return Path(main) / CONFIG, main
+    return own, main
+
+
+def has_kit_state(base):
+    """True when the checkout `base` holds the coordinator's working state: a `lead/` folder in
+    `.kit/` (or the legacy `.claude/`) with a board.md or an `items/` folder in it."""
+    for folder in (STATE_DIR, LEGACY_STATE_DIR):
+        lead = Path(base) / folder / "lead"
+        try:
+            if (Path(base) / folder).is_symlink() or not lead.is_dir():
+                continue
+            if (lead / "items").is_dir() or any(p.name.lower() == "board.md" and p.is_file() for p in lead.iterdir()):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def config_missing(root):
+    """True when no kit.json applies in `root` although its main checkout holds kit state: the
+    project uses the kit and its kit.json went missing (load_config then returns `{}`)."""
+    path, main = _config_and_main(root)
+    return not path.exists() and has_kit_state(main or Path(root))
 
 
 def load_config(root):
-    """Return (config, error). config is None when the project has no kit.json; a kit.json that
-    is present means the project opted in, even an empty `{}` (callers test `config is None`).
-    A worktree without one uses its main checkout's (config_file)."""
-    path = config_file(root)
+    """Return (config, error). config is None when the project has not opted in; a kit.json that
+    is present means it did, even an empty `{}` (callers test `config is None`). A worktree
+    without one uses its main checkout's (config_file).
+
+    The other opt-in is the kit's own working state in the main checkout (has_kit_state): then a
+    missing kit.json gives `{}`, the defaults, and config_missing(root) is True. In the owner's
+    project (2026-11) a commit removed kit.json from git and disk, and every hook went silent for
+    days while the coordinator kept its board and items: no guard, no REPORT.md, no cost lines.
+    A project with neither stays untouched, as before."""
+    path, main = _config_and_main(root)
     if not path.is_file():
-        return None, None
+        if path.exists():  # a folder named kit.json: not opted in, as before
+            return None, None
+        return ({} if has_kit_state(main or Path(root)) else None), None
     try:
         config = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # a broken config must be visible, not silently ignored

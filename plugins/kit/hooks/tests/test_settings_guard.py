@@ -8,6 +8,7 @@ Run: python3 plugins/kit/hooks/tests/test_settings_guard.py   (exit 0 = all good
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -117,6 +118,13 @@ def main():
                           ("Bash", {"command": "echo {} > .claude/settings.json"})]:
             decision, reason = hook(tool, inp, plain, env)
             check(decision == "pass", f"no kit.json, no decision: {tool} {decision} {reason}")
+        # kit.json went missing but the kit's board is here: still the kit's business
+        (plain / ".claude" / "lead").mkdir()
+        (plain / ".claude" / "lead" / "board.md").write_text("SHIP: pr\n")
+        decision, reason = hook("Edit", {"file_path": str(plain / ".claude" / "settings.json"), **edit}, plain, env,
+                                agent_id="a9", agent_type="kit:implementer")
+        check(decision == "deny", f"kit state without kit.json is guarded: {decision} {reason}")
+        shutil.rmtree(plain / ".claude" / "lead")
 
         # without kitlib nothing can be judged: ask
         lone = tmp / "lone"
