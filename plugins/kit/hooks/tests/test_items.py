@@ -238,6 +238,17 @@ def fresh_project_checks(tmp, check):
     status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all"],
                             capture_output=True, text=True).stdout
     check(status == "", f"git status clean of kit state: {status!r}")
+    # an overnight run that ended unattended, in a worktree: status lists it and leaves it for the session start
+    runs = tree / ".kit" / "overnight"
+    runs.mkdir(parents=True)
+    (runs / "untold.jsonl").write_text(json.dumps({"run": "r1", "stop_reason": "USD cap reached", "iterations": 4,
+                                                   "cost": 25.0, "branch": "feat/a", "pushed": False}) + "\n")
+    code, out, _ = run(repo, "status", env=env)
+    check("the overnight run r1 ended: USD cap reached, 4 iterations, USD 25.00, branch feat/a not pushed: tell the user"
+          in out, f"status lists an untold overnight end: {out}")
+    data = json.loads(run(repo, "status", "--json", env=env)[1])
+    check([r["run"] for r in data["overnight"]] == ["r1"] and (runs / "untold.jsonl").exists(),
+          f"status reads it and leaves it: {data['overnight']}")
 
 
 def away_checks(tmp, check):
@@ -497,6 +508,43 @@ def lock_checks(tmp, check):
     check(not list(cfg.glob("*.lock")) and not list((repo / ".claude").glob("*.lock")), "no lock beside the settings")
 
 
+def local_settings_exclude_checks(tmp, check):
+    """sandbox on in a repo with no ignore rule for settings.local.json excludes it, so git status
+    stays clean and the overnight runner starts; a repo that tracks the file gets no line."""
+    env = dict(os.environ, HOME=str(tmp / "home3"), CLAUDE_CONFIG_DIR=str(tmp / "cfg3"), TMPDIR=str(tmp / "t3"))
+    env.pop("KIT_HEADLESS", None)
+    (tmp / "t3").mkdir()
+    (tmp / "cfg3").mkdir()
+    for name, tracked in (("noignore", False), ("tracked", True)):
+        repo = tmp / name
+        (repo / ".claude").mkdir(parents=True)
+        git = ["git", "-C", str(repo), "-c", "user.email=a@b.c", "-c", "user.name=A"]
+        subprocess.run(git + ["init", "-q", "-b", "main"], check=True)
+        (repo / ".claude" / "kit.json").write_text(json.dumps({"check": "true"}))
+        if tracked:
+            (repo / ".claude" / "settings.local.json").write_text("{}\n")
+        subprocess.run(git + ["add", "-A"], check=True)
+        subprocess.run(git + ["commit", "-qm", "i"], check=True)
+        code, out, err = run(repo, "sandbox", "on", env=env)
+        exclude = repo / ".git" / "info" / "exclude"
+        lines = exclude.read_text().splitlines() if exclude.exists() else []
+        status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"], capture_output=True, text=True).stdout
+        if tracked:
+            check(code == 0 and "/.claude/settings.local.json" not in lines and status.strip() == "M .claude/settings.local.json",
+                  f"a tracked settings.local.json gets no exclude line: {lines} {status!r} {out} {err}")
+            continue
+        check(code == 0 and "/.claude/settings.local.json" in lines and status == "",
+              f"sandbox on leaves git status clean: {lines} {status!r} {out} {err}")
+        overnight = SCRIPTS.parent.parent / "skills" / "overnight" / "scripts" / "overnight.py"
+        got = subprocess.run([sys.executable, str(overnight), "tidy the readme", "--dry-run"], cwd=str(repo),
+                             capture_output=True, text=True, timeout=60, env=env)
+        check(got.returncode == 0 and "not clean" not in got.stdout + got.stderr,
+              f"overnight --dry-run starts after sandbox on: {got.returncode} {got.stdout[-300:]} {got.stderr[-300:]}")
+        before = exclude.read_text()
+        run(repo, "sandbox", "on", env=env)
+        check(exclude.read_text() == before, "a second sandbox on adds nothing")
+
+
 def lock_place_checks(tmp, check):
     """sandbox on leaves the checkout clean, so an overnight run starts after it; a symlinked
     settings file leaves nothing new in its target's folder; a lock an earlier version left beside
@@ -518,6 +566,8 @@ def lock_place_checks(tmp, check):
     code, out, err = run(repo, "sandbox", "on", env=env)
     status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--ignored"], capture_output=True, text=True).stdout
     check(code == 0 and status.strip() == "!! .claude/settings.local.json", f"git status after sandbox on: {status!r} {out} {err}")
+    check("/.claude/settings.local.json" not in (repo / ".git" / "info" / "exclude").read_text(),
+          "already ignored by .gitignore: no exclude line")
     overnight = SCRIPTS.parent.parent / "skills" / "overnight" / "scripts" / "overnight.py"
     got = subprocess.run([sys.executable, str(overnight), "tidy the readme", "--dry-run"], cwd=str(repo),
                          capture_output=True, text=True, timeout=60, env=env)
@@ -929,6 +979,7 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmp:
         lock_place_checks(Path(os.path.realpath(tmp)), check)
+        local_settings_exclude_checks(Path(os.path.realpath(tmp)), check)
 
     with tempfile.TemporaryDirectory() as tmp:
         fresh_project_checks(Path(os.path.realpath(tmp)), check)

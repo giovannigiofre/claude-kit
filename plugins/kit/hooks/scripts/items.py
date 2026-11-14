@@ -74,7 +74,8 @@ owner set himself is left as it is. `away status` says since when it is on.
 
 `sandbox on` writes SANDBOX into this checkout's .claude/settings.local.json beside its other keys
 (through a symlink to its target, under the kit's settings lock: kitlib.update_settings);
-a sandbox block the owner wrote is left as it is. `sandbox off` changes nothing and prints the exact
+a sandbox block the owner wrote is left as it is. Unless git tracks or ignores the file, it gets
+a line in .git/info/exclude, so the overnight runner's clean-tree check passes. `sandbox off` changes nothing and prints the exact
 edit: loosening a setting is the owner's to approve (settings_guard.py asks for it), not the kit's.
 """
 
@@ -126,6 +127,7 @@ def sandbox(here, action):
         return 0, "Sandbox: off for this checkout (the merged settings may still turn it on: /sandbox shows them)."
     if action == "on":
         if current == SANDBOX:
+            kitlib.exclude_local_settings(here)  # a block written before the kit excluded the file
             return 0, f"Sandbox is already on ({path})."
         if current is not None:
             return 0, f"{path} already has a sandbox block of yours; the kit left it as it is."
@@ -140,6 +142,7 @@ def sandbox(here, action):
             return 1, kitlib.write_failed(exc, f"The sandbox in {path}")
         if result != "written":
             return 1, f"{path} changed while the kit wrote it; nothing was changed. Run sandbox on again."
+        kitlib.exclude_local_settings(here)  # an untracked file would stop the overnight runner
         return 0, (f"Sandbox on: wrote the kit's block to {path}. Bash runs inside it without a prompt; "
                    "git push, fetch and pull run outside it. Check it with /sandbox; add a host under "
                    "sandbox.network.allowedDomains.")
@@ -525,7 +528,8 @@ def snapshot(root, at=None):
     counts = {}
     for r in rows:
         counts[r["status"] or "?"] = counts.get(r["status"] or "?", 0) + 1
-    return {"at": now(), "items": rows, "counts": counts, "questions": needs_you(root, [r["id"] for r in rows])}
+    return {"at": now(), "items": rows, "counts": counts, "questions": needs_you(root, [r["id"] for r in rows]),
+            "overnight": kitlib.overnight_news(root)}  # read only: the next interactive start says them
 
 
 def print_status(snap):
@@ -541,6 +545,8 @@ def print_status(snap):
         state = (r["status"] or "?") + (f" blocked-by {', '.join(r['blocked_by'])}" if r["blocked_by"] else "")
         print(f"{r['id']} | {r['kind'] or '-'} | {state} | {age} | {where} | agent {r['agent'] or '-'} | {spent} | {r['note']}")
     print("counts: " + (", ".join(f"{k} {v}" for k, v in sorted(snap["counts"].items())) or "none"))
+    for run in snap.get("overnight") or ():
+        print(kitlib.overnight_news_line(run).replace("kit: ", "", 1) + ": tell the user")
     if snap["questions"]:
         print("NEEDS YOU:")
         for q in snap["questions"]:

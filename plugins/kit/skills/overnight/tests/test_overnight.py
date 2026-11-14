@@ -517,6 +517,25 @@ def test_detach_returns_at_once_and_the_run_goes_on():
     # no caps named: a detached run, which nobody watches, gets the skill's 40 iterations and USD 25
     assert state["args"]["max_iterations"] == 40 and state["args"]["max_usd"] == 25, state["args"]
     assert "stops at 40 iterations or USD 25" in out.stdout, out.stdout
+    # it ended with nobody there: one line waits for the next interactive session start to say it
+    untold = runs(d) / "untold.jsonl"
+    while time.monotonic() < deadline and not untold.exists():
+        time.sleep(0.2)
+    lines = untold.read_text().splitlines()
+    assert len(lines) == 1, lines
+    told = json.loads(lines[0])
+    assert told["run"] == state["run_id"] and told["iterations"] == 3 and told["cost"] == 1.5, told
+    assert told["branch"] == state["branch"] and told["pushed"] is False and "stop condition" in told["stop_reason"], told
+    assert state["detached"] is True and isinstance(state["pid"], int), state
+    assert clean(d), "the marker sits in the excluded runs folder"
+
+
+def test_a_foreground_run_leaves_nothing_to_tell():
+    d, fake = repo(["change", "done"])
+    _, _, run_dir = run(d, fake)
+    assert not (run_dir.parent / "untold.jsonl").exists()
+    state = json.loads((run_dir / "state.json").read_text())
+    assert state["detached"] is False and isinstance(state["pid"], int), state
 
 
 def dry(d, fake, *args):

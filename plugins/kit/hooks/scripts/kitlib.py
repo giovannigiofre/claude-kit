@@ -557,6 +557,19 @@ def add_exclude_lines(root, lines):
         return []
 
 
+LOCAL_SETTINGS = ".claude/settings.local.json"
+
+
+def exclude_local_settings(checkout):
+    """Keep the checkout's settings.local.json, once the kit writes it, out of `git status` (an
+    untracked file stops the overnight runner): one line in .git/info/exclude, unless git
+    already tracks or ignores the file. Returns the lines added."""
+    for args in (("ls-files", "--error-unmatch", "--", LOCAL_SETTINGS), ("check-ignore", "-q", "--", LOCAL_SETTINGS)):
+        if git_run(checkout, *args)[0] in (0, None):
+            return []
+    return add_exclude_lines(checkout, ["/" + LOCAL_SETTINGS])
+
+
 def exclude_lines(root, files=(), dirs=()):
     """The exclude lines (`/<file>`, `/<dir>/`) for paths under the checkout `root` that git does not
     ignore yet. One `git check-ignore` call for all of them; when that call fails (one path beyond a
@@ -678,6 +691,95 @@ def state_entry(root, name, per_checkout=None):
         if (base / folder / name).exists():
             return base / folder / name
     return base / state_dir_name(main) / name
+
+
+OVERNIGHT_UNTOLD = "untold.jsonl"  # overnight.py's tell_later: detached runs that ended, not yet said
+OVERNIGHT_GONE = "stopped without finishing: its process is gone (its container or machine stopped)"
+
+
+def overnight_alive(pid):
+    """Whether `pid` is still an overnight runner. With /proc a reused pid is told apart by its
+    command line; without, a process that exists counts as alive."""
+    proc = Path("/proc")
+    if proc.is_dir():
+        try:
+            return b"overnight.py" in (proc / str(pid) / "cmdline").read_bytes()
+        except OSError:
+            return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def overnight_news(root, consume=False):
+    """The project's overnight runs that ended unseen: the lines detached runs left in each
+    checkout's untold.jsonl, and runs whose state.json has a pid but no stop_reason while that
+    process is gone (a run that died with its container writes nothing). `consume` says each one
+    once: it empties untold.jsonl and records the stop reason of a dead run in its state.json."""
+    rc, out, _ = git_run(root, "worktree", "list", "--porcelain")
+    checkouts = [Path(ln[9:]) for ln in out.splitlines() if ln.startswith("worktree ")] if rc == 0 else []
+    news = []
+    for checkout in checkouts:
+        for folder in (STATE_DIR, LEGACY_STATE_DIR):
+            runs = checkout / folder / "overnight"
+            if not runs.is_dir() or (checkout / folder).is_symlink():
+                continue
+            untold = runs / OVERNIGHT_UNTOLD
+            source = untold
+            if consume and untold.exists():
+                source = untold.with_name(f"{OVERNIGHT_UNTOLD}.{os.getpid()}.reading")
+                try:
+                    os.replace(untold, source)
+                except OSError:
+                    source = untold
+            try:
+                text = source.read_text(encoding="utf-8")
+            except OSError:
+                text = ""
+            for line in text.splitlines():
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(entry, dict) and entry.get("run"):
+                    news.append(entry)
+            if source != untold:
+                try:
+                    source.unlink()
+                except OSError:
+                    pass
+            for state_file in sorted(runs.glob("*/state.json")):
+                try:
+                    state = json.loads(state_file.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(state, dict) or state.get("stop_reason"):
+                    continue
+                pid = state.get("pid")
+                if not isinstance(pid, int) or overnight_alive(pid):
+                    continue
+                news.append({"run": state.get("run_id") or state_file.parent.name, "dir": str(state_file.parent),
+                             "stop_reason": OVERNIGHT_GONE, "iterations": state.get("iteration", 0),
+                             "cost": round(float(state.get("cost") or 0), 2), "branch": state.get("branch", "?"),
+                             "pushed": False})
+                if consume:
+                    state["stop_reason"] = OVERNIGHT_GONE
+                    try:
+                        write_text_atomic(state_file, json.dumps(state, indent=2))
+                    except OSError:
+                        pass
+    return news
+
+
+def overnight_news_line(entry):
+    """One run from overnight_news, as the session start says it."""
+    return (f"kit: the overnight run {entry.get('run')} ended: {entry.get('stop_reason')}, "
+            f"{entry.get('iterations', 0)} iterations, USD {float(entry.get('cost') or 0):.2f}, "
+            f"branch {entry.get('branch')} {'pushed' if entry.get('pushed') else 'not pushed'}")
 
 
 def board_file(root, config=None):

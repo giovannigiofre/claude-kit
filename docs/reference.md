@@ -801,8 +801,9 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
     and `pull` (bare and with arguments) outside it, so they keep their credentials while a command
     inside cannot read them. Check it with `/sandbox`; add hosts under `sandbox.network.allowedDomains`. Where
     the sandbox can't start, commands run unsandboxed with a warning rather than all failing. The
-    status line shows `sandbox` while it is on. `sandbox off` changes nothing and prints the edit:
-    loosening a setting is yours to approve.
+    status line shows `sandbox` while it is on. Unless git tracks or ignores that file, it also gets
+    `/.claude/settings.local.json` in `.git/info/exclude`, so the tree stays clean for an overnight
+    run. `sandbox off` changes nothing and prints the edit: loosening a setting is yours to approve.
   - `permissions.blockWritesOutsideWorkingDirectories` (2.1.314) is not for a kit project: it
     refuses a thread's edits in another repo and removes the worktree tools.
 
@@ -832,6 +833,12 @@ command to push it. A `--detach` run given no caps takes `--max-iterations 40 --
 prints that line; `--no-caps` runs it without. The runner refuses a `--branch` the guard protects
 (`guard.protectedBranches` in `.claude/kit.json`, else in `~/.claude/kit.json`, else `main` and
 `master`, plus `origin`'s default branch), since a run commits on a branch of its own.
+A detached run that ends appends one line (run, stop reason, iterations, spend, branch, pushed) to
+`untold.jsonl` in its runs folder; the next interactive session start in the project (a
+compaction too, not a headless run or a subagent) says each such line once and removes it, and
+`items.py status` lists them without removing them. A run whose `state.json` has no
+`stop_reason` while its recorded `pid` is no longer a runner (it died with its container) is said
+once the same way, and its `state.json` records that it stopped without finishing.
 
 Each iteration runs `claude -p` in permission mode `auto` unless `--permission-mode` says
 otherwise, with `--permission-prompts none` (a headless session cannot answer a prompt: anything

@@ -70,8 +70,8 @@ that reaches you anyway needs no reply: end the turn without a word.
   (SendMessage to its agent ID; it arrives even while a command runs). Say which thread got what.
   - Finding something out without changing code is a **scout** thread: a `kit:implementer` on a
     `--kind scout` item, briefed read-only; its report lands in the item's REPORT.md.
-  - Hours of grinding toward one measurable objective is **overnight**: without asking, run
-    `I away on` and start `kit:overnight`'s runner with `--worktree --push --detach`.
+  - Hours of grinding toward one measurable objective is **overnight**: without asking, run `I away on`, start
+    `kit:overnight`'s runner with `--worktree --push --detach`; when the user next writes, `I status` says how it ended.
 - **Unclear work:** when readings lead to different work or there is no checkable done, ask a
   few multiple-choice questions as `kit:shape` does, or put it under NEEDS YOU and start the rest.
 - **Steering** ("also X", "drop Y", "Z first"): SendMessage to the thread when it fits its brief;

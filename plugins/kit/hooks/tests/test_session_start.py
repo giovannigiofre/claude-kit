@@ -296,7 +296,61 @@ def main():
         (fresh / ".claude" / "kit.json").write_text("{}")
         out = run({"cwd": str(fresh), "source": "startup"})
         assert "kit state" not in out and not (fresh / ".kit").exists(), out
+    overnight_checks()
     print("session_start: all checks passed")
+
+
+def overnight_checks():
+    """A detached overnight run cannot send a push: the next interactive start says how it ended, once."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / "repo"
+        git = ["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t"]
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+        subprocess.run(git + ["-C", str(repo), "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+        wt = Path(tmp) / "wt"  # a run with --worktree keeps its state in that worktree
+        subprocess.run(git + ["-C", str(repo), "worktree", "add", "-q", "-b", "overnight/x", str(wt)], check=True)
+        runs = wt / ".kit" / "overnight"
+        runs.mkdir(parents=True)
+        told = {"run": "20261114-010203", "dir": str(runs / "20261114-010203"), "stop_reason": "stop condition met",
+                "iterations": 7, "cost": 3.456, "branch": "overnight/x", "pushed": True}
+        (runs / "untold.jsonl").write_text(json.dumps(told) + "\n")
+        line = ("kit: the overnight run 20261114-010203 ended: stop condition met, 7 iterations, USD 3.46, "
+                "branch overnight/x pushed: tell the user once, with a push notification")
+        # a run that died with its container: state without stop_reason, its process gone
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        dead = repo / ".kit" / "overnight" / "20261113-220000"
+        dead.mkdir(parents=True)
+        (dead / "state.json").write_text(json.dumps({"run_id": "20261113-220000", "branch": "overnight/y",
+                                                     "iteration": 2, "cost": 1.0, "stop_reason": None,
+                                                     "pid": gone.pid}))
+        # a run still going (its process names overnight.py) is not news
+        alive = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "overnight.py"])
+        live = repo / ".kit" / "overnight" / "20261114-030000"
+        live.mkdir(parents=True)
+        (live / "state.json").write_text(json.dumps({"run_id": "20261114-030000", "branch": "overnight/z",
+                                                    "iteration": 1, "cost": 0.5, "stop_reason": None,
+                                                    "pid": alive.pid}))
+        try:
+            payload = {"cwd": str(repo), "source": "startup"}
+            assert "overnight run" not in run(payload, KIT_HEADLESS="1"), "a headless start leaves it for the owner"
+            assert "overnight run" not in run({**payload, "agent_id": "a1"}), "so does a subagent"
+            assert (runs / "untold.jsonl").exists()
+            out = run(payload).splitlines()
+            said = [l for l in out if "overnight run" in l]
+            assert line in said and len(said) == 2, out
+            assert any("20261113-220000 ended: stopped without finishing: its process is gone" in l
+                       and "branch overnight/y not pushed" in l for l in said), said
+            assert not any("20261114-030000" in l for l in said), "a live run is not news"
+            assert "overnight run" not in run(payload), "said once"
+            assert json.loads((dead / "state.json").read_text())["stop_reason"].startswith("stopped without"), \
+                "the dead run's end is recorded"
+            (runs / "untold.jsonl").write_text(json.dumps(told) + "\n")
+            assert line in run({"cwd": str(repo), "source": "compact"}).splitlines(), "after a compaction too"
+            assert "overnight run" not in run({"cwd": str(repo), "source": "compact"}), "and once"
+        finally:
+            alive.kill()
+            alive.wait()
 
 
 if __name__ == "__main__":
