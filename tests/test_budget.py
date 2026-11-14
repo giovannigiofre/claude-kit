@@ -24,12 +24,20 @@ Checks, over every plugin in plugins/:
 Run: python3 tests/test_budget.py   (exit 0 = all good; standard library only)
 """
 
+import atexit
 import json
+import os
 import re
 import shutil
 import sys
 import tempfile
 from pathlib import Path
+
+# run alone or through tests/run_all.py, the hooks' opt-in records (kitlib.latch_opt_in) go to a
+# temp folder, never the user's config dir: running the test files alone once left 84 records there
+if not os.environ.get("KIT_OPT_IN_DIR"):
+    os.environ["KIT_OPT_IN_DIR"] = tempfile.mkdtemp(prefix="kit-opt-in-")
+    atexit.register(shutil.rmtree, os.environ["KIT_OPT_IN_DIR"], True)
 
 ROOT = Path(__file__).resolve().parent.parent
 PLUGINS = ROOT / "plugins"

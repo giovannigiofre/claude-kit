@@ -4,14 +4,22 @@
 Run: python3 plugins/kit/hooks/tests/test_items.py   (exit 0 = all good)
 """
 
+import atexit
 import json
-import re
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+
+# run alone or through tests/run_all.py, the hooks' opt-in records (kitlib.latch_opt_in) go to a
+# temp folder, never the user's config dir: running the test files alone once left 84 records there
+if not os.environ.get("KIT_OPT_IN_DIR"):
+    os.environ["KIT_OPT_IN_DIR"] = tempfile.mkdtemp(prefix="kit-opt-in-")
+    atexit.register(shutil.rmtree, os.environ["KIT_OPT_IN_DIR"], True)
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -269,7 +277,7 @@ def forget_checks(tmp, check):
     """`forget` removes the record a hook wrote the first time it saw the project, so the hooks go
     quiet once kit.json and the kit's state are both gone; without a record it says so."""
     opt = tmp / "opt-in"
-    env = dict(os.environ, KIT_OPT_IN_DIR=str(opt))
+    env = dict(os.environ, KIT_OPT_IN_DIR=str(opt), KIT_TEMP_ROOTS="")  # record a temp repository
     repo = tmp / "forgotten"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")

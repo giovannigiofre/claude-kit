@@ -6,6 +6,7 @@ mapping and load_config's opt-in rule.
 Run: python3 plugins/kit/hooks/tests/test_kitlib.py   (exit 0 = all good)
 """
 
+import atexit
 import json
 import os
 import shutil
@@ -13,6 +14,12 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+# run alone or through tests/run_all.py, the hooks' opt-in records (kitlib.latch_opt_in) go to a
+# temp folder, never the user's config dir: running the test files alone once left 84 records there
+if not os.environ.get("KIT_OPT_IN_DIR"):
+    os.environ["KIT_OPT_IN_DIR"] = tempfile.mkdtemp(prefix="kit-opt-in-")
+    atexit.register(shutil.rmtree, os.environ["KIT_OPT_IN_DIR"], True)
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -49,6 +56,7 @@ def sh(repo, *args):
 def main():
     failed = 0
     os.environ["KIT_OPT_IN_DIR"] = tempfile.mkdtemp(prefix="kit-opt-in-")  # the latches of this run only
+    os.environ["KIT_TEMP_ROOTS"] = ""  # these repositories live in the temp dir; record them anyway
 
     def check(cond, msg):
         nonlocal failed
@@ -185,6 +193,47 @@ def main():
         check(kitlib.load_config(repo) == ({}, None), "an unwritable latch folder: the hook goes on")
         (repo / ".claude" / "kit.json").unlink()
         os.environ["KIT_OPT_IN_DIR"] = saved
+
+        # the record is the key alone; one keyed by a path that is gone is dropped the next time the
+        # records are read, one keyed by an origin stays (a test run once left 84 of the first kind)
+        folder = Path(saved)
+        kitlib._LATCHED.clear()
+        kitlib.latch_opt_in(repo)
+        record = kitlib.opt_in_record(repo)
+        check(json.loads(record.read_text()) == {"key": "github.com/owner/repo"}, record.read_text())
+        gone = Path(tmp) / "gone"
+        gone.mkdir()
+        sh(gone, "init", "-q", "-b", "main")
+        kitlib.latch_opt_in(gone)
+        gone_record = kitlib.opt_in_record(gone)
+        check(gone_record.is_file() and json.loads(gone_record.read_text()) == {"key": str(gone.resolve())},
+              "a repository without an origin is keyed by its path")
+        shutil.rmtree(gone)
+        kitlib._PRUNED.clear()
+        kitlib.opted_in_before(repo)  # a read prunes
+        check(not gone_record.exists() and record.is_file(), f"the path record is dropped, the origin's kept: "
+              f"{sorted(x.name for x in folder.glob('*.json'))}")
+        kitlib.forget_opt_in(repo)
+
+        # a repository under the system temp dir is never recorded; its file and state still count
+        os.environ["KIT_TEMP_ROOTS"] = str(Path(tmp).resolve())
+        kitlib._LATCHED.clear()
+        throwaway = Path(tmp) / "throwaway"
+        throwaway.mkdir()
+        sh(throwaway, "init", "-q", "-b", "main")
+        (throwaway / ".claude").mkdir()
+        (throwaway / ".claude" / "kit.json").write_text("{}")
+        check(kitlib.load_config(throwaway) == ({}, None) and not kitlib.opted_in_before(throwaway),
+              "a temp repository with kit.json: on, not recorded")
+        (throwaway / ".claude" / "kit.json").unlink()
+        (throwaway / ".kit" / "lead").mkdir(parents=True)
+        (throwaway / ".kit" / "lead" / "board.md").write_text("SHIP: local\n")
+        check(kitlib.load_config(throwaway) == ({}, None) and not kitlib.opted_in_before(throwaway),
+              "a temp repository with state: on, not recorded")
+        shutil.rmtree(throwaway / ".kit")
+        check(kitlib.load_config(throwaway) == (None, None), "a temp repository that lost both: off")
+        check(not list(folder.glob("*.json")), f"nothing recorded: {list(folder.glob('*.json'))}")
+        os.environ["KIT_TEMP_ROOTS"] = ""
 
     # hermetic git: inside a git hook GIT_DIR and friends point at the hook's repository; the helpers
     # still answer for the folder they were asked about
