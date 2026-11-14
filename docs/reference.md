@@ -558,7 +558,8 @@ or missing `SubagentHandback`) is told once by `subagent_stop.py` to send it; if
 without one, the coordinator is woken to SendMessage it. Before telling it, the hook takes a
 report in the stop's own `last_assistant_message` (a `VERDICT:` line from a verifier, a
 `STATUS: done|blocked|partial` line otherwise) as delivered, and reads the transcript again for
-up to about 1.5 s, since a hand-back can reach the file after the hook starts; it files the cost
+for about 1.8 s (six reads 0.3 s apart, leaving early only when a report appears), since a
+hand-back can reach the file after the hook starts; it files the cost
 line before it blocks. The same report seen on a later stop is filed once. The coordinator addresses a thread by
 the agent ID the Agent call returned (a name needs agent teams, which the kit does not enable;
 the ID also survives a restart, and the hooks write it into the item's LOG); a message reaches
