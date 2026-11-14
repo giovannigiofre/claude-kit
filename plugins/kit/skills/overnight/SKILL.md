@@ -74,8 +74,8 @@ It runs for hours, so start it yourself where it survives the session. First run
 denial until the user writes again). Then launch with `--detach`: the runner starts again
 in its own process session, output in a log under the runs folder, and the Bash call returns
 within about 5 seconds with the pid and the log path, or with the error and exit code of a run
-that stopped at once. Add `--push` unless the user said not to push in this repo: when the run
-ends with commits it pushes the branch once, so the result can be read from a phone; with
+that stopped at once; when it ends, the next interactive session start says so once. Add
+`--push` unless the user said not to push in this repo: when the run ends with commits it pushes the branch once, so the result can be read from a phone; with
 `push=ask` in the unattended settings it leaves the branch local and the log says so. The runner
 refuses a protected `--branch` (main, master, the guard's `protectedBranches`, origin's default). Do not use
 Bash `run_in_background` for it: that run ends with the session. A user who wants it in their own

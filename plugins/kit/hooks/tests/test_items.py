@@ -238,6 +238,17 @@ def fresh_project_checks(tmp, check):
     status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all"],
                             capture_output=True, text=True).stdout
     check(status == "", f"git status clean of kit state: {status!r}")
+    # an overnight run that ended unattended, in a worktree: status lists it and leaves it for the session start
+    runs = tree / ".kit" / "overnight"
+    runs.mkdir(parents=True)
+    (runs / "untold.jsonl").write_text(json.dumps({"run": "r1", "stop_reason": "USD cap reached", "iterations": 4,
+                                                   "cost": 25.0, "branch": "feat/a", "pushed": False}) + "\n")
+    code, out, _ = run(repo, "status", env=env)
+    check("the overnight run r1 ended: USD cap reached, 4 iterations, USD 25.00, branch feat/a not pushed: tell the user"
+          in out, f"status lists an untold overnight end: {out}")
+    data = json.loads(run(repo, "status", "--json", env=env)[1])
+    check([r["run"] for r in data["overnight"]] == ["r1"] and (runs / "untold.jsonl").exists(),
+          f"status reads it and leaves it: {data['overnight']}")
 
 
 def away_checks(tmp, check):

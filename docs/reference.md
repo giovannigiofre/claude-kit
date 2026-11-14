@@ -832,6 +832,12 @@ command to push it. A `--detach` run given no caps takes `--max-iterations 40 --
 prints that line; `--no-caps` runs it without. The runner refuses a `--branch` the guard protects
 (`guard.protectedBranches` in `.claude/kit.json`, else in `~/.claude/kit.json`, else `main` and
 `master`, plus `origin`'s default branch), since a run commits on a branch of its own.
+A detached run that ends appends one line (run, stop reason, iterations, spend, branch, pushed) to
+`untold.jsonl` in its runs folder; the next interactive session start in the project (a
+compaction too, not a headless run or a subagent) says each such line once and removes it, and
+`items.py status` lists them without removing them. A run whose `state.json` has no
+`stop_reason` while its recorded `pid` is no longer a runner (it died with its container) is said
+once the same way, and its `state.json` records that it stopped without finishing.
 
 Each iteration runs `claude -p` in permission mode `auto` unless `--permission-mode` says
 otherwise, with `--permission-prompts none` (a headless session cannot answer a prompt: anything

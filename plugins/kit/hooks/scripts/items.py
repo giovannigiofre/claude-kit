@@ -525,7 +525,8 @@ def snapshot(root, at=None):
     counts = {}
     for r in rows:
         counts[r["status"] or "?"] = counts.get(r["status"] or "?", 0) + 1
-    return {"at": now(), "items": rows, "counts": counts, "questions": needs_you(root, [r["id"] for r in rows])}
+    return {"at": now(), "items": rows, "counts": counts, "questions": needs_you(root, [r["id"] for r in rows]),
+            "overnight": kitlib.overnight_news(root)}  # read only: the next interactive start says them
 
 
 def print_status(snap):
@@ -541,6 +542,8 @@ def print_status(snap):
         state = (r["status"] or "?") + (f" blocked-by {', '.join(r['blocked_by'])}" if r["blocked_by"] else "")
         print(f"{r['id']} | {r['kind'] or '-'} | {state} | {age} | {where} | agent {r['agent'] or '-'} | {spent} | {r['note']}")
     print("counts: " + (", ".join(f"{k} {v}" for k, v in sorted(snap["counts"].items())) or "none"))
+    for run in snap.get("overnight") or ():
+        print(kitlib.overnight_news_line(run).replace("kit: ", "", 1) + ": tell the user")
     if snap["questions"]:
         print("NEEDS YOU:")
         for q in snap["questions"]:

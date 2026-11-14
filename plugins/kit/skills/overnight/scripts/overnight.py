@@ -388,6 +388,8 @@ def cap_reached(args, state):
     return None
 
 
+UNTOLD = "untold.jsonl"  # in the runs folder: detached runs that ended, until a session start says so
+DETACHED_ENV = "KIT_OVERNIGHT_DETACHED"  # set by detach() for the run it starts
 DETACH_WAIT = 5  # seconds the launcher watches the run start, so an early refusal is not lost in a log
 DETACH_CAPS = (40, 25.0)  # iterations and USD for a detached run that names no cap (the skill's defaults)
 
@@ -447,7 +449,8 @@ def detach(argv):
     log_path = runs / "launch" / f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}.log"
     with open(log_path, "w", encoding="utf-8") as log, open(os.devnull) as nothing:
         child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), *argv], cwd=Path.cwd(),
-                                 stdin=nothing, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                                 stdin=nothing, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                                 env=dict(os.environ, **{DETACHED_ENV: "1"}))
     try:
         code = child.wait(timeout=DETACH_WAIT)
     except subprocess.TimeoutExpired:
@@ -457,6 +460,20 @@ def detach(argv):
     print(log_path.read_text(encoding="utf-8", errors="replace").rstrip())
     print(f"overnight: the run ended at once (exit {code}); log {log_path}")
     return code
+
+
+def tell_later(run_dir, state):
+    """A detached run that ended leaves one line in its runs folder's untold.jsonl; the next
+    interactive session start in the project says it once (kitlib.overnight_news) and drops it."""
+    pushed = str(state.get("pushed") or "").startswith("pushed")
+    line = {"run": state["run_id"], "dir": str(run_dir), "stop_reason": state["stop_reason"],
+            "iterations": state["iteration"], "cost": round(state["cost"], 2), "branch": state["branch"],
+            "pushed": pushed}
+    try:
+        with open(Path(run_dir).parent / UNTOLD, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(line) + "\n")
+    except OSError as exc:  # the run's own end stands; only the morning line is lost
+        print(f"overnight: could not leave the end for the next session start: {exc}")
 
 
 def push_branch(root, branch):
@@ -532,6 +549,7 @@ def main(argv=None):
               f"USD {DETACH_CAPS[1]:g}; name caps, or pass --no-caps to run without")
     if args.detach and not args.dry_run:
         return detach([a for a in argv if a != "--detach"])
+    detached = os.environ.pop(DETACHED_ENV, "") == "1"  # not passed on to the agent sessions
 
     root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel"))
     main_checkout = root
@@ -629,6 +647,9 @@ def main(argv=None):
         print(f"overnight: #{state['iteration']} failed ({state['failures']} in a row): {reason}")
         save()
 
+    # who runs it, so a session start can tell a run whose process is gone (kitlib.overnight_news)
+    state.update(pid=os.getpid(), detached=detached)
+    save()
     rate_waits = 0
     try:
         while True:
@@ -755,6 +776,8 @@ def main(argv=None):
             undo(root, start or "HEAD")
         finally:
             save()
+            if detached:
+                tell_later(run_dir, state)
         raise
     finally:
         log.close()
@@ -769,6 +792,8 @@ def main(argv=None):
     (run_dir / "end-state.json").write_text(json.dumps(
         {k: state[k] for k in ("branch", "iteration", "cost", "tokens", "commits", "stop_reason", "pushed") if k in state},
         indent=2), encoding="utf-8")
+    if detached:
+        tell_later(run_dir, state)
     print(f"overnight: stopped - {state['stop_reason']}")
     print(f"overnight: {len(state['commits'])} commits on {state['branch']} in {state['iteration']} iterations, "
           f"USD {state['cost']:.2f}, {state['tokens']} tokens; run dir {run_dir}")
