@@ -185,48 +185,48 @@ def main():
     got = _ss.parse("VERDICT: CANNOT_VERIFY: ci-red\nREVIEWED: main, abc\nEVIDENCE: gh pr view: 2 failing\n"
                     "PROBLEMS:\nQUESTIONS:\nNOT CHECKED: everything\n")
     assert got == ("CANNOT_VERIFY", []), got
-    tail_checks(_ss)
+    with tempfile.TemporaryDirectory() as tmp:
+        reread_checks(tmp, _ss)
     print("subagent_stop: all checks passed")
 
 
-def tail_checks(ss):
-    """The re-reads take the transcript's last TAIL_BYTES only (a 25 MB transcript read whole seven
-    times cost 3 s, review round 2), and still see a hand-back that lands at the end of a run whose
-    start is far before the cut."""
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "big.jsonl"
-        pad = json.dumps(user("x" * 1000)) + "\n"
-        head = "".join(json.dumps(e) + "\n" for e in [user("ITEM: B2. brief"), user(REMINDER)])
-        path.write_text(head + pad * (3 * ss.TAIL_BYTES // len(pad)))
-        assert ss.missing_report(path) and ss.missing_report(path, tail=True), "no report, read whole and from the tail"
-        calls = []
-        whole = ss.missing_report
-        ss.missing_report = lambda p, tail=False: calls.append(tail) or whole(p, tail)
-        try:
-            assert ss.still_missing(path, tries=2, pause=0), "still missing over the re-reads"
-        finally:
-            ss.missing_report = whole
-        assert calls == [False, True, True], f"one whole read, then the tail: {calls}"
-        reads = []
-        real_open = open
+def reread_checks(tmp, ss):
+    """The re-reads read the whole transcript, and only when its size or mtime changed (review round
+    3: a read of its last 2 MB gave other answers than the whole file, in the F2 and C cases)."""
+    (Path(tmp) / ".claude").mkdir()
+    (Path(tmp) / ".claude" / "kit.json").write_text("{}")
+    work = [user("y" * 10000)] * 300  # 3 MB of a run's own lines
+    # F2: a refused hand-back near the start, 3 MB of work, then a background task; the whole read
+    # says no report reached the caller, so the stop is blocked
+    started = dict(result("b1", "started"), toolUseResult={"backgroundTaskId": "t9"})
+    f2 = [user("ITEM: B2. brief"), user(REMINDER), call("h1", "SubagentHandback", {"message": "STATUS: done"}),
+          result("h1", "refused: servers running", is_error=True)] + work + [started]
+    assert stop(tmp, f2).get("decision") == "block", "F2: a refused hand-back far back is still no report"
+    # C: a 3 MB hand-back lands while the hook re-reads; its call line starts more than 2 MB before the end
+    big = call("h1", "SubagentHandback", {"message": "STATUS: done " + "r" * (3 * 1024 * 1024)})
+    c = [user("ITEM: B2. brief"), user(REMINDER)] + [user("y" * 10000)] * 100
+    assert stop(tmp, c, late=[big, result("h1", DELIVERED)], after=0.8) == {}, "C: a large hand-back that lands late counts"
 
-        def counting_open(file, mode="r", *args, **kwargs):
-            handle = real_open(file, mode, *args, **kwargs)
-            if str(file) == str(path) and "b" in mode:
-                read = handle.read
-                handle.read = lambda *a: reads.append(len(chunk := read(*a))) or chunk
-            return handle
-        ss.open = counting_open  # the module's own open, used by the tail read
-        try:
-            ss.missing_report(path, tail=True)
-        finally:
-            del ss.open
-        assert reads and max(reads) <= ss.TAIL_BYTES, f"the tail read takes {reads} bytes"
-        with open(path, "a") as f:
-            f.write("".join(json.dumps(e) + "\n" for e in [call("h1", "SubagentHandback", {"message": "r"}),
-                                                           result("h1", DELIVERED)]))
-        assert not ss.missing_report(path, tail=True) and not ss.still_missing(path, tries=1, pause=0), \
-            "a hand-back at the end is found in the tail"
+    path = Path(tmp) / "agent.jsonl"
+    path.write_text("".join(json.dumps(e) + "\n" for e in [user("ITEM: B2. brief"), user(REMINDER)] + work))
+    calls, whole, sleep = [], ss.missing_report, ss.time.sleep
+    ss.missing_report = lambda p: calls.append(p) or whole(p)
+    try:
+        assert ss.still_missing(path, tries=3, pause=0), "no report over the re-reads"
+        assert len(calls) == 1, f"an unchanged file is read once: {len(calls)} reads"
+        calls.clear()
+        appended = []
+
+        def grow(_):  # the file grows during the first pause only
+            if not appended:
+                appended.append(1)
+                with open(path, "a") as f:
+                    f.write(json.dumps(user("more work")) + "\n")
+        ss.time.sleep = grow
+        assert ss.still_missing(path, tries=3, pause=0)
+        assert len(calls) == 2, f"read again once after the file changed: {len(calls)} reads"
+    finally:
+        ss.missing_report, ss.time.sleep = whole, sleep
 
 
 if __name__ == "__main__":

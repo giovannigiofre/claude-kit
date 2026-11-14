@@ -201,9 +201,9 @@ from `kit.json`, so it stays behind the protected path. A kit.json `lead.board` 
 
 An older project moves at a session start when nothing is at work, and the session says so in one
 line (or, when an item is `working` or `landing` or an overnight run is live, why it waits, said
-once and again only when the reason changes). An item counts as at work while it was sent back
-after its last report or never reported (the `stale (merged)` test of `items.py status`), and
-otherwise only while its branch is not merged into the default branch, decided from git alone: the branch its LOG or REPORT.md names
+once and again only when the reason changes). An item counts as at work while it never reported, or while it was sent
+back after its last report and a worktree still has its branch checked out (the `stale (merged)`
+test of `items.py status`), and otherwise only while its branch is not merged into the default branch, decided from git alone: the branch its LOG or REPORT.md names
 is an ancestor of it (and has a commit of its own), or, the branch deleted, the last commit the
 item names (a verifier's `REVIEWED:` sha) is. A squash merge leaves that sha outside the default
 branch, so a deleted branch reads as "cannot tell". Then, only where a person runs the command
@@ -430,9 +430,10 @@ transcript without usage writes nothing and never fails the hook.
 per open item the id, kind, status, last event and its age, note, agent, branch and PR (from the
 LOG or the `BRANCH / PR:` line of REPORT.md) and summed cost, with `stale (merged)` after the
 status of a `working` or `landing` item that reported at least once (a `reported`, `review`,
-`landing` or `verdict` line) and was not sent back since (no `working` line after its last
-report: a thread restarted on a merged branch has a clean worktree until it edits), whose branch is already merged, and whose branch no worktree has
-checked out with uncommitted or untracked changes; an item that never reported is at work
+`landing` or `verdict` line), whose branch is already merged, and whose branch no worktree has
+checked out with uncommitted or untracked changes, or, after a `working` line that follows its last
+report (sent back, or landing it), checked out at all: a thread restarted on a merged branch has a
+clean worktree until it edits; an item that never reported is at work
 whatever git says (the same test as the move's, said once with `items.py done <id>` to close it; nothing is closed for you); then counts per status and the
 board's NEEDS YOU line split into questions (only where a known item id starts the next
 `<id>:`, so a question with a colon in it stays whole). `--json` gives the same for a script.
@@ -588,7 +589,7 @@ or missing `SubagentHandback`) is told once by `subagent_stop.py` to send it; if
 without one, the coordinator is woken to SendMessage it. Before telling it, the hook takes a
 report in the stop's own `last_assistant_message` (a `VERDICT:` line from a verifier, a
 `STATUS: done|blocked|partial` line otherwise) as delivered, and reads the transcript again for
-for about 1.8 s (six reads 0.3 s apart of its last 2 MB only, leaving early only when a report appears), since a
+for about 1.8 s (six reads 0.3 s apart, each of the whole file and only when its size or mtime changed, leaving early only when a report appears), since a
 hand-back can reach the file after the hook starts; it files the cost
 line before it blocks. The same report seen on a later stop is filed once. The coordinator addresses a thread by
 the agent ID the Agent call returned (a name needs agent teams, which the kit does not enable;

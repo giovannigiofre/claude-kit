@@ -612,13 +612,14 @@ REPORTED = ("reported", "review", "landing", "verdict")
 def stale_merged(root, path, status=None, lines=None, ask=None):
     """An item logged `working` or `landing` that is done in git but not on the board: nothing runs
     for it, and `items.py done <id>` closes it. Never closed here. Stale only when all three hold:
-    the item reported at least once (a REPORTED line) and was not sent back since (no `working` line
-    after its last report), its branch is merged, and no linked worktree
+    the item reported at least once (a REPORTED line), its branch is merged, and no linked worktree
     has that branch checked out with uncommitted or untracked changes. A fresh `worktree-agent-*`
     branch that ran `merge --ff-only main` has a tip already in main and two reflog entries; it read
     as `stale (merged)` while its thread was editing (review of 2.0.1). An item that never reported
-    is at work, whatever git says, and so is one sent back after its report: a thread restarted on a
-    merged branch with a clean worktree read as stale before it edited anything (review round 2).
+    is at work, whatever git says. One with a `working` line after its last report (sent back, or
+    "landing it") stays at work while any linked worktree has its branch checked out, clean or not:
+    a thread restarted on a merged branch with a clean worktree read as stale before it edited
+    anything (review round 2). With no such worktree it is stale as above (review round 3).
 
     With `ask` (gh_budget()), an item git cannot place and whose LOG or REPORT names a PR is asked
     of `gh pr view`, as `done` does: the owner's projects squash-merge and delete the branch, which
@@ -629,7 +630,9 @@ def stale_merged(root, path, status=None, lines=None, ask=None):
         return False
     lines = log_lines(path) if lines is None else lines
     last = max((i for i, (_, st, _) in enumerate(lines) if st in REPORTED), default=None)
-    if last is None or any(st == "working" for _, st, _ in lines[last + 1:]):
+    if last is None:
+        return False
+    if any(st == "working" for _, st, _ in lines[last + 1:]) and in_worktree(root, refs(path, lines)[1], clean_counts=True):
         return False
     found = merged(root, path, lines)
     if found is None and ask is not None:
@@ -647,6 +650,12 @@ def stale_merged(root, path, status=None, lines=None, ask=None):
 def edited_in_worktree(root, branch):
     """True when a linked worktree has `branch` checked out with uncommitted or untracked changes,
     or when git cannot say: a thread may be working there."""
+    return in_worktree(root, branch)
+
+
+def in_worktree(root, branch, clean_counts=False):
+    """True when a linked worktree has `branch` checked out (with changes, unless `clean_counts`),
+    or when git cannot say."""
     if not branch:
         return False
     code, out, _ = kitlib.git_run(root, "worktree", "list", "--porcelain")
@@ -656,6 +665,8 @@ def edited_in_worktree(root, branch):
         fields = dict(line.split(" ", 1) for line in block.splitlines() if " " in line)
         if fields.get("branch") != f"refs/heads/{branch}" or "worktree" not in fields:
             continue
+        if clean_counts:
+            return True
         code, changes, _ = kitlib.git_run(fields["worktree"], "status", "--porcelain")
         if code != 0 or changes.strip():
             return True
