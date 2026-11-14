@@ -358,8 +358,10 @@ preview, through an ordinary Edit that `settings_guard.py` turns into Claude Cod
 status label and closing comment, a progress or status file, a changelog or diary, a published
 page. Not set, it prints how to find them; the coordinator reads the repo's guidance on its first
 run, confirms the list with the user once and saves it (`records set "…" "…"`, which replaces
-the list). `done` then prints the list as the item's checklist, so a merged item is not called
-done while its issue, progress file or diary still say otherwise.
+the list). `done` then prints the list as the item's checklist, under a header that names
+`lead.records` as its source; the coordinator updates the places the item touches and only then
+tells the owner, so a merged item is not called done while its issue, progress file or diary
+still say otherwise.
 
 A command the user would type (a login, a script, a setup step) the coordinator runs itself with
 Bash: the Allow/Deny prompt reaches the user on the phone too over Remote Control, where a line

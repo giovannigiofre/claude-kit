@@ -1110,7 +1110,9 @@ def main():
         check(code == 2, f"an unknown records verb is refused: {err}")
         code, out, _ = run(repo, "records", "set", "GitHub issue: status label off, closing comment",
                            "  plans/progress.json:   the item's state ", env=env)
-        check(code == 0 and out.splitlines() == [f"RECORDS (from {local.resolve()}):", "- GitHub issue: status label off, closing comment",
+        header = (f"RECORDS: this project's record places (from {local.resolve()} lead.records). Update the ones this "
+                  "item touches, then tell the owner it is done:")
+        check(code == 0 and out.splitlines() == [header, "- GitHub issue: status label off, closing comment",
                                                  "- plans/progress.json: the item's state"], f"records set saves and prints: {out}")
         saved = json.loads(local.read_text())
         check({k: v for k, v in saved.items() if k != "lead"} == {k: v for k, v in before.items() if k != "lead"}
@@ -1118,7 +1120,8 @@ def main():
               f"records set keeps the file's other settings: {saved}")
         run(repo, "new", "Records item two", env=env)
         code, out, _ = run(repo, "done", "records-item-two", env=env)
-        check(code == 0 and out.splitlines()[1:] == ["- [ ] GitHub issue: status label off, closing comment",
+        check(code == 0 and out.splitlines()[0] == "items: records-item-two done (archived). " + header
+              and out.splitlines()[1:] == ["- [ ] GitHub issue: status label off, closing comment",
                                                      "- [ ] plans/progress.json: the item's state"],
               f"done lists the records as a checklist: {out}")
         code, out, _ = run(repo, "records", "set", "only one", env=env)
@@ -1135,7 +1138,7 @@ def main():
         code, out, _ = run(wt, "unattended", env=env)
         check("push=allow rebase=allow merge=ask" in out and str(local) in out, f"a worktree reads the main checkout's: {out}")
         code, out, _ = run(wt, "records", env=env)
-        check(out == f"RECORDS (from {local.resolve()}):\n- only one", f"a worktree reads the main checkout's records: {out}")
+        check(out == f"{header}\n- only one", f"a worktree reads the main checkout's records: {out}")
 
     with tempfile.TemporaryDirectory() as tmp:
         snapshot_checks(Path(tmp), check)

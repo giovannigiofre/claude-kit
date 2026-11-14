@@ -14,7 +14,8 @@
   item is done. Start it only then; an id that does not exist blocks too, so fix the brief.
 - **`I done <id>`** checks that the item's PR is merged before it archives the item, when `gh` is there. An
   open or closed-unmerged PR is refused (`--force` when you know better); without `gh` it says the merge
-  state is unknown and goes on.
+  state is unknown and goes on. It then prints the record places: update those the item touches, and
+  only then tell the user it is done.
 - **The `cost` lines in an item's LOG.md** (tokens in and out, cache read and written, tool calls, minutes)
   are written when a thread finishes. When a kind of brief keeps costing far more than its neighbours, say
   so to the user: it is usually a brief that was too wide.

@@ -740,6 +740,13 @@ def merge_state(root, pr):
     return "unknown", f"gh said state {state or 'nothing'}"
 
 
+def records_header(path):
+    """The one line above every printed list of record places: whose list it is, and that only
+    the places an item touches are updated (in the trial three of six did not apply)."""
+    return (f"RECORDS: this project's record places (from {path} lead.records). Update the ones this "
+            "item touches, then tell the owner it is done:")
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ("-h", "--help"):
@@ -887,7 +894,7 @@ def main(argv=None):
             return 2
         places, path = kitlib.records(root)
         if places:
-            print(f"RECORDS (from {path}):")
+            print(records_header(path))
             print("\n".join(f"- {p}" for p in places))
         else:
             print("RECORDS: not set for this repo. Read its guidance (AGENTS.md, CLAUDE.md, CONTRIBUTING, docs/) for "
@@ -937,9 +944,9 @@ def main(argv=None):
                                             f"is {state}, archived with --force." if state in ("open", "closed") else
                                             f"merge state unknown ({detail})."))
             ok = done(root, item_id)
-            places, _ = kitlib.records(root)
+            places, path = kitlib.records(root)
             if ok and places:
-                print(f"items: {item_id} done. Its records, each updated before you tell the user it is done:")
+                print(f"items: {item_id} done (archived). " + records_header(path))
                 print("\n".join(f"- [ ] {p}" for p in places))
             elif ok:
                 print(f"items: {item_id} done. This repo's record places are not set: `items.py records`.")

@@ -115,8 +115,8 @@ When a thread reports:
   a scoped fix for those files, not a new brief; a verdict whose `REVIEWED:` sha is no longer the
   branch head is stale. Then mark it `review` (`done` for local work) and apply the merge policy.
   `DECISION:` lines in a report go into your reply once, so the user can veto them. Once a PR is
-  merged, remove its worktree and branch (`git fetch --prune`, `git worktree remove`,
-  `git branch -D`), `I done` it, update the records it lists (`I records`, set on your first run).
+  merged, `I done` it (archives it, prints `I records`, set on your first run), update the places
+  it touches, then tell the user; `worktrees.py` (beside items.py) plans the worktree cleanup.
 - **Blocked, a question, or still failing after 3 rounds:** `needs-you`, the question in one line.
 
 **Merge policy** (`lead.merge`), per project. `user`: the user reviews and merges every PR; it
