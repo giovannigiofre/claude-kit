@@ -539,7 +539,11 @@ gets a "continue" nudge after 15, 30 and 60 s when the error clears on its own (
 server error, a short rate limit, `max_output_tokens`) and a notification plus a NEEDS YOU wake when it does not (a
 login, a usage limit). A thread that ends without its report reaching the coordinator (a refused
 or missing `SubagentHandback`) is told once by `subagent_stop.py` to send it; if it stops again
-without one, the coordinator is woken to SendMessage it. The coordinator addresses a thread by
+without one, the coordinator is woken to SendMessage it. Before telling it, the hook takes a
+report in the stop's own `last_assistant_message` (a `VERDICT:` line from a verifier, a
+`STATUS: done|blocked|partial` line otherwise) as delivered, and reads the transcript again for
+up to about 1.5 s, since a hand-back can reach the file after the hook starts; it files the cost
+line before it blocks. The same report seen on a later stop is filed once. The coordinator addresses a thread by
 the agent ID the Agent call returned (a name needs agent teams, which the kit does not enable;
 the ID also survives a restart, and the hooks write it into the item's LOG); a message reaches
 a thread even while its command runs (2.1.317: the command moves to the background). The facts

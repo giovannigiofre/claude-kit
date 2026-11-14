@@ -235,6 +235,92 @@ def missing_config_checks(tmp, check):
     check("| cost | in=3 out=100 cache_read=1000 cache_write=500 tools=2 minutes=3.0 agent=g1" in log, log)
 
 
+REMINDER = "<system-reminder>\nYour final report is delivered through SubagentHandback: when your work is complete...</system-reminder>"
+DELIVERED = '{"success":true,"message":"Report delivered to your caller."}'
+VERDICT = "VERDICT: PASS\nREVIEWED: main, abc1234\nEVIDENCE:\n- gate ok\nPROBLEMS:\n- none\n"
+
+
+def stop_out(payload, env):
+    out = subprocess.run([sys.executable, str(SCRIPTS / "subagent_stop.py")], input=json.dumps(payload),
+                         capture_output=True, text=True, timeout=60, env=env)
+    return out.returncode, json.loads(out.stdout) if out.stdout.strip() else {}, out.stderr
+
+
+def handback_rows(tid, message):
+    return [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": tid, "name": "SubagentHandback",
+                                                           "input": {"message": message}}]}},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "is_error": False,
+                                                      "content": [{"type": "text", "text": DELIVERED}]}]}}]
+
+
+def race_checks(tmp, check):
+    """A verifier's hand-back that reaches its transcript after the SubagentStop hook started
+    reading it (the 2026-11 trial that lost a verdict and its cost line): the hook uses the
+    payload's report, waits for a late one, files the cost line before any block, and files the
+    same report once however many stops see it. Minutes are active time."""
+    import threading
+    home = tmp / "home"
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), TMPDIR=str(tmp))
+    repo = tmp / "race"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "kit.json").write_text("{}")
+    head = [{"type": "user", "timestamp": "2026-11-13T10:00:00.000Z", "message": {"role": "user", "content": "ITEM: {id}\nReview"}},
+            {"type": "user", "message": {"role": "user", "content": REMINDER}},
+            usage_row("v1", "2026-11-13T10:02:00.000Z", (3, 100, 1000, 500), tool="t0"),
+            usage_row("v2", "2026-11-13T10:22:00.000Z", (1, 10, 0, 0)),  # a 20-minute hole: counts as five
+            usage_row("v3", "2026-11-13T10:23:00.000Z", (1, 10, 0, 0))]
+
+    def case(name):
+        run(repo, "new", name, env=env)
+        item = name.lower()
+        rows = [dict(head[0], message={"role": "user", "content": f"ITEM: {item}\nReview"})] + head[1:]
+        t = tmp / f"agent-{item}.jsonl"
+        t.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        return item, t, items.find(repo, item)
+
+    def payload(t, last=""):
+        return {"cwd": str(repo), "agent_type": "kit:verifier", "agent_id": "v9",
+                "agent_transcript_path": str(t), "last_assistant_message": last}
+
+    cost = "| cost | in=5 out=120 cache_read=1000 cache_write=500 tools=1 minutes=8.0 agent=v9\n"
+    # truncated before the hand-back, the verdict in the payload: filed, no block
+    item, t, folder = case("Alpha")
+    code, out, err = stop_out(payload(t, VERDICT), env)
+    log = (folder / "LOG.md").read_text()
+    check(code == 0 and out == {} and (folder / "VERDICT.md").read_text() == VERDICT, f"payload verdict filed: {out} {err}")
+    check(cost in log and "| verdict | PASS, agent v9" in log, log)
+
+    # the same truncated transcript, completed by another writer 0.5 s after the hook starts: it waits
+    item, t, folder = case("Beta")
+    late = threading.Timer(0.5, lambda: t.write_text(t.read_text() + "".join(json.dumps(r) + "\n" for r in handback_rows("h1", VERDICT))))
+    late.start()
+    code, out, err = stop_out(payload(t), env)
+    late.join()
+    log = (folder / "LOG.md").read_text()
+    check(code == 0 and out == {} and (folder / "VERDICT.md").read_text() == VERDICT, f"a late hand-back is waited for: {out} {err}")
+    check(log.count("| verdict |") == 1 and cost.replace("tools=1", "tools=2") in log, log)
+    # the same report on a second stop: one verdict line, one cost line
+    code, out, err = stop_out(payload(t), env)
+    log = (folder / "LOG.md").read_text()
+    check(code == 0 and log.count("| verdict |") == 1 and log.count("| cost |") == 1, f"filed once: {log}")
+
+    # no report anywhere: it blocks as before, and the cost line is filed first
+    item, t, folder = case("Gamma")
+    code, out, err = stop_out(payload(t, "Still checking the redirect."), env)
+    log = (folder / "LOG.md").read_text()
+    check(out.get("decision") == "block" and "SubagentHandback" in out.get("reason", ""), f"blocks: {out} {err}")
+    check(cost in log and not (folder / "VERDICT.md").exists(), f"the cost line is there: {log}")
+    # its later stop with the report: filed, with a fresh cost line
+    t.write_text(t.read_text() + "".join(json.dumps(r) + "\n" for r in handback_rows("h2", VERDICT)))
+    code, out, err = stop_out(dict(payload(t), stop_hook_active=True), env)
+    log = (folder / "LOG.md").read_text()
+    check(out == {} and log.count("| verdict |") == 1 and log.count("| cost |") == 2 and (folder / "VERDICT.md").is_file(), log)
+
+
 def fresh_project_checks(tmp, check):
     """A project with only kit.json: every command writes under .kit/, from a worktree too, and
     git status stays clean."""
@@ -1039,6 +1125,9 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmp:
         missing_config_checks(Path(os.path.realpath(tmp)), check)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        race_checks(Path(os.path.realpath(tmp)), check)
 
     print("items: all checks passed" if not failed else f"items: {failed} failures")
     return 1 if failed else 0
