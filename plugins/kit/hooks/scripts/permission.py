@@ -38,9 +38,10 @@ PYTHON = {"python", "python3"}
 
 def owner_command(args):
     """items.py arguments that change the owner's settings: away or sandbox with an action other
-    than status, unattended with any choice."""
+    than status, unattended with any choice, forget."""
     sub, rest = (args[0], args[1:]) if args else ("", [])
-    return (sub in ("away", "sandbox") and rest not in ([], ["status"])) or (sub == "unattended" and bool(rest))
+    return ((sub in ("away", "sandbox") and rest not in ([], ["status"])) or (sub == "unattended" and bool(rest))
+            or sub == "forget")
 
 
 def own_script(command, agent=False):

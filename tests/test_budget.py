@@ -24,12 +24,20 @@ Checks, over every plugin in plugins/:
 Run: python3 tests/test_budget.py   (exit 0 = all good; standard library only)
 """
 
+import atexit
 import json
+import os
 import re
 import shutil
 import sys
 import tempfile
 from pathlib import Path
+
+# run alone or through tests/run_all.py, the hooks' opt-in records (kitlib.latch_opt_in) go to a
+# temp folder, never the user's config dir: running the test files alone once left 84 records there
+if not os.environ.get("KIT_OPT_IN_DIR"):
+    os.environ["KIT_OPT_IN_DIR"] = tempfile.mkdtemp(prefix="kit-opt-in-")
+    atexit.register(shutil.rmtree, os.environ["KIT_OPT_IN_DIR"], True)
 
 ROOT = Path(__file__).resolve().parent.parent
 PLUGINS = ROOT / "plugins"
@@ -46,6 +54,9 @@ SESSION_LESSONS = 1600  # about 400 tokens, added to the session start text
 # the coordinator line session_start.py prints in a kit project (start and compaction); its length
 # comes out of SESSION_LESSONS, so this cap keeps most of that room for the lessons
 COORDINATOR_MAX = 450
+# the line printed instead of the header while kit.json is missing in a kit project; it also comes
+# out of SESSION_LESSONS, measured here with a long checkout path in its restore hint
+MISSING_MAX = 500
 MAX_SKILL_LINES = 150
 MAX_AGENT_LINES = 80
 MAX_REFERENCE_LINES = 200
@@ -210,6 +221,13 @@ def main():
     if len(session_start.COORDINATOR) > COORDINATOR_MAX:
         problems.append(f"plugins/kit/hooks/scripts/session_start.py: COORDINATOR is {len(session_start.COORDINATOR)} "
                         f"chars (max {COORDINATOR_MAX})")
+    how = ("in /home/someone/code/a-project-with-a-long-name, `git show abcdef12^:.claude/kit.json > "
+           ".claude/kit.json` (its last version in git), else /kit:init")
+    forget = "python3 /home/someone/.claude/plugins/cache/claude-kit/kit/2.0.1/hooks/scripts/items.py forget"
+    for name in ("MISSING", "RECORD_ONLY"):  # the record-only line takes the same place
+        missing = getattr(session_start, name).format(how=how, forget=forget)
+        if len(missing) > MISSING_MAX:
+            problems.append(f"plugins/kit/hooks/scripts/session_start.py: {name} is {len(missing)} chars (max {MISSING_MAX})")
 
     docs = [p for p in PLUGINS.rglob("*.md") if "evals" not in p.parts]
     docs += [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md"))

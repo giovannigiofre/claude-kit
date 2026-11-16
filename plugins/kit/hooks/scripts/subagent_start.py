@@ -20,7 +20,7 @@ the agent or cannot be read, it falls back to reading the two indexes directly:
 Both are keyed by the main checkout, so a thread in a worktree gets the same lessons. Index lines
 only (the thread opens a file when a line applies), lines that look like a key or token are
 skipped, and lines past the budget are cut (the oldest pitfalls first) with a note saying how
-many. A missing file or a project without .claude/kit.json adds nothing. Standard library only.
+many. A missing file or a project that has not opted in (kitlib.load_config) adds nothing. Standard library only.
 """
 
 import json
@@ -98,7 +98,8 @@ def compose(sections, limit=MAX_CHARS):
 
 
 def enabled(cwd):
-    """The main checkout when the project has opted in (kit.json there or in this worktree)."""
+    """The main checkout when the project has opted in (kit.json there or in this worktree, or
+    the kit's state there: kitlib.load_config)."""
     main = main_checkout(cwd)
     if not main:
         return None
@@ -189,7 +190,9 @@ def verifier_memory(cwd):
     the move), the same from every worktree and subfolder, made and kept out of git here (its own
     line: other agents' memory beside it is not the kit's); None outside git."""
     main = main_checkout(cwd)
-    if not main:
+    # a project the kit recorded whose kit.json and state are gone keeps only the guards: no folder
+    # or exclude line written there (review round 2 of kit 2.0.1)
+    if not main or kitlib.record_only(main):
         return None
     folder = kitlib.state_entry(main, MEMORY_NAME)
     try:

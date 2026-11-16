@@ -6,6 +6,9 @@ to push, and put its last lines in the PR. It runs each standard-library test fi
 mod's tests (`claude plugin test plugins/kit`: status line, watchdog, interim notices) when the
 `claude` command is there; without it that step is reported as skipped, not as passed.
 
+Each file runs as if alone (run_isolated): a file that writes an opt-in record into the config
+dir fails, so a new test cannot bring back the leak that once left 84 records there.
+
 Run: python3 tests/run_all.py        (exit 0 = all good)
      python3 tests/run_all.py -v     (print each test's own output)
 
@@ -13,26 +16,77 @@ To make it this repo's gate for the kit itself, put it in your own .claude/kit.j
   {"verify": "python3 tests/run_all.py"}
 """
 
+import os
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PATTERNS = ("tests/test_*.py", "plugins/*/hooks/tests/test_*.py", "plugins/*/skills/*/tests/test_*.py")
 
 
+def records(folder):
+    return {p for p in Path(folder).rglob("*") if p.is_file()} if Path(folder).is_dir() else set()
+
+
+def real_records_dir(env):
+    """Where a hook run by the user would keep its opt-in records (kitlib.opt_in_folder without
+    the test override)."""
+    config = env.get("CLAUDE_CONFIG_DIR") or str(Path(env.get("HOME") or Path.home()) / ".claude")
+    return Path(config) / "kit-projects"
+
+
+def run_isolated(path, env, real):
+    """Run one test file the way a person runs it alone, with nothing set for it: KIT_OPT_IN_DIR
+    and KIT_TEMP_ROOTS unset, HOME and CLAUDE_CONFIG_DIR at an empty temp folder. Running the test
+    files alone once left 84 opt-in records in the real config dir; any record that appears under
+    the fake config dir or the real one fails the file. Returns (process, leaked paths)."""
+    # outside the system temp dir, as a person's HOME is: test_guard puts its repositories under
+    # HOME to test the rules that differ for temp folders
+    user_home = Path(env.get("HOME") or Path.home())
+    home = Path(tempfile.mkdtemp(prefix=".kit-test-home-", dir=str(user_home)))
+    env = {k: v for k, v in env.items() if k not in ("KIT_OPT_IN_DIR", "KIT_TEMP_ROOTS")}
+    gitconfig = user_home / ".gitconfig"
+    if "GIT_CONFIG_GLOBAL" not in env and gitconfig.is_file():
+        env["GIT_CONFIG_GLOBAL"] = str(gitconfig)  # git's identity, not the Claude config dir
+    env.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"))
+    before = records(real)
+    try:
+        out = subprocess.run([sys.executable, str(path)], cwd=str(ROOT), capture_output=True, text=True, env=env)
+        leaked = sorted(records(home / ".claude" / "kit-projects")) + sorted(records(real) - before)
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+    return out, leaked
+
+
+def exit_on_signal():
+    """A SIGTERM or SIGHUP (a closed terminal, a killed session) ends the run through SystemExit, so
+    run_isolated's `finally` still removes its fake home: the reviewer's terminated run left a
+    ~/.kit-test-home-* folder behind (review round 2 of kit 2.0.1). Ctrl-C does this already."""
+    def stop(signum, _frame):
+        raise SystemExit(128 + signum)
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), stop)
+
+
 def main(argv):
     verbose = "-v" in argv
     files = sorted(p for pattern in PATTERNS for p in ROOT.glob(pattern))
     failed = []
+    real = real_records_dir(os.environ)
     for path in files:
         rel = path.relative_to(ROOT)
-        out = subprocess.run([sys.executable, str(path)], cwd=str(ROOT), capture_output=True, text=True)
-        ok = out.returncode == 0
+        out, leaked = run_isolated(path, os.environ, real)
+        ok = out.returncode == 0 and not leaked
         print(f"{'ok  ' if ok else 'FAIL'} {rel}")
         if verbose or not ok:
             print((out.stdout + out.stderr).rstrip())
+        if leaked:
+            print(f"  wrote opt-in records outside a temp folder of its own: {', '.join(map(str, leaked))}")
         if not ok:
             failed.append(str(rel))
     mod = "skipped (no `claude` command here)"
@@ -53,4 +107,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    exit_on_signal()
     sys.exit(main(sys.argv[1:]))

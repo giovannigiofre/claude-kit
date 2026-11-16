@@ -5,12 +5,20 @@ whose tree was verified from one that changed since.
 Run: python3 plugins/kit/hooks/tests/test_gate.py   (exit 0 = all good)
 """
 
+import atexit
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+# run alone or through tests/run_all.py, the hooks' opt-in records (kitlib.latch_opt_in) go to a
+# temp folder, never the user's config dir: running the test files alone once left 84 records there
+if not os.environ.get("KIT_OPT_IN_DIR"):
+    os.environ["KIT_OPT_IN_DIR"] = tempfile.mkdtemp(prefix="kit-opt-in-")
+    atexit.register(shutil.rmtree, os.environ["KIT_OPT_IN_DIR"], True)
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -30,6 +38,7 @@ def gate_cmd(repo, *args):
 
 def main():
     failed = 0
+    os.environ["KIT_TEMP_ROOTS"] = ""  # the repositories here live in the temp dir; record them anyway
 
     def check(cond, msg):
         nonlocal failed
@@ -151,6 +160,22 @@ def main():
         check(gate.status(repo, "verify")[0], "status reads the .kit record")
         check(sh(repo, "status", "--porcelain") == "", "evidence excluded: " + sh(repo, "status", "--porcelain"))
         check("/.kit/evidence/" in (repo / ".git" / "info" / "exclude").read_text().splitlines(), "its own line")
+
+        # kit.json went missing in a project a hook saw as a kit project (latched), with no state:
+        # verify says there is no gate, that file and state are gone, and both ways out (review
+        # round 2: it said "missing ... although it uses the kit" and only how to restore it)
+        (repo / ".claude" / "kit.json").unlink()
+        code, out = gate_cmd(repo, "verify")
+        check(code == 3 and "there is no `verify` gate" in out and "both gone" in out and "items.py forget`" in out
+              and "restores .claude/kit.json" in out and "board and items" not in out, f"latched: {code} {out}")
+        kitlib.forget_opt_in(repo)
+        code, out = gate_cmd(repo, "verify")
+        check(code == 3 and "no .claude/kit.json" in out, f"neither file nor state: the old answer: {code} {out}")
+        (repo / ".kit" / "lead" / "items" / "a1").mkdir(parents=True)
+        (repo / ".kit" / "lead" / "items" / "a1" / "BRIEF.md").write_text("ITEM: a1\n")
+        code, out = gate_cmd(repo, "verify")
+        check(code == 3 and "there is no `verify` gate" in out and "kit.json is missing" in out
+              and "board and items" in out and "items.py forget`" in out, f"state: {code} {out}")
 
     print("gate: all checks passed" if not failed else f"gate: {failed} failures")
     return 1 if failed else 0

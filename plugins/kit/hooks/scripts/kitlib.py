@@ -1,6 +1,7 @@
 """Shared helpers for the kit hooks. Standard library only, Python 3.9+.
 
-Every hook is a no-op unless the project has `.claude/kit.json` (see the README for the schema),
+Every hook is a no-op unless the project has opted in: `.claude/kit.json` (see the README for the
+schema), or the kit's working state in its main checkout when kit.json went missing (load_config),
 so installing the plugin at user scope never changes behaviour in a project that has not opted in.
 A linked worktree with no kit.json of its own (it is personal and kept out of git by default)
 uses its main checkout's: config_file.
@@ -97,28 +98,213 @@ CONFIG = ".claude/kit.json"
 def config_file(root):
     """The kit.json that applies in checkout `root`: its own, else its main checkout's. /kit:init
     keeps kit.json out of git by default (personal), so a linked worktree has none of its own."""
+    return _config_and_main(root)[0]
+
+
+def _config_and_main(root):
+    """(config_file(root), the main checkout when it was looked up, else None)."""
     own = Path(root) / CONFIG
     if own.exists():
-        return own
+        return own, None
     main = main_checkout(root)
     if main and (Path(main) / CONFIG).exists():
-        return Path(main) / CONFIG
-    return own
+        return Path(main) / CONFIG, main
+    return own, main
 
 
-def load_config(root):
-    """Return (config, error). config is None when the project has no kit.json; a kit.json that
-    is present means the project opted in, even an empty `{}` (callers test `config is None`).
-    A worktree without one uses its main checkout's (config_file)."""
-    path = config_file(root)
+def has_kit_state(base):
+    """True when the checkout `base` holds what looks like the coordinator's working state: a real
+    (not symlinked) `lead/` folder in `.kit/` (or the legacy `.claude/`) with a board.md, or with an
+    `items/` folder holding at least one item folder that has a BRIEF.md. An empty `items/` or a
+    symlink planted in a repository does not opt it in."""
+    for folder in (STATE_DIR, LEGACY_STATE_DIR):
+        lead = Path(base) / folder / "lead"
+        try:
+            if (Path(base) / folder).is_symlink() or lead.is_symlink() or not lead.is_dir():
+                continue
+            if any(p.name.lower() == "board.md" and p.is_file() for p in lead.iterdir()):
+                return True
+            items = lead / "items"
+            if items.is_dir() and not items.is_symlink() and any((i / "BRIEF.md").is_file() for i in items.iterdir()):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+# The opt-in, latched outside the project. In a project that is a kit project only through its
+# state, `mv .kit/lead/items /tmp/x` or `rmdir .kit/lead/items` switched every hook off (review of
+# 2.0.1). So the first time a hook sees a project as a kit project, by kit.json or by its state, it
+# records that under the user's config dir, keyed by the main checkout's path (its worktrees
+# follow it). Keyed by the origin, a second clone or a fork that never opted in became
+# coordinated, and `forget` there was undone by the other clone's next hook (review round 2).
+# A project kept on by its record alone, with neither kit.json nor state, gets the guards only
+# (load_config(root, safety=True)): no coordinator line, no auto-allows, no memory folder. The
+# owner turns it off with `"guard": "off"` in kit.json (no record is kept, and one kept before is
+# removed) or with `items.py forget`, which a subagent may not run. A repository under the system
+# temp dir is never recorded (a test run left 84 records of repositories that no longer existed),
+# a record whose path is gone is dropped the next time the records are read, and a `kit-projects`
+# that is a symlink is never written through.
+OPT_IN_DIR = "kit-projects"
+_LATCHED = set()
+_PRUNED = set()
+
+
+def temp_roots():
+    """The system temp folders (as lessons.temp_roots reads them: KIT_TEMP_ROOTS, tests only)."""
+    raw = os.environ.get("KIT_TEMP_ROOTS")
+    roots = raw.split(os.pathsep) if raw is not None else \
+        ["/tmp", "/private/tmp", "/var/folders", "/private/var/folders", tempfile.gettempdir()]
+    return {os.path.realpath(r) for r in roots if r}
+
+
+def under_temp(root):
+    """True when the repository at `root` (its main checkout) lies under a system temp folder."""
+    here = os.path.realpath(str(main_checkout(root) or root))
+    return any(here == t or here.startswith(t.rstrip(os.sep) + os.sep) for t in temp_roots())
+
+
+def opt_in_folder():
+    return Path(os.environ.get("KIT_OPT_IN_DIR") or config_dir() / OPT_IN_DIR)  # the env: tests only
+
+
+def _folder_linked(folder):
+    try:
+        return Path(folder).is_symlink()
+    except OSError:
+        return True
+
+
+def prune_opt_ins(folder=None):
+    """Drop the records whose key is not a path that exists (one that is gone, or an origin key
+    of 2.0.1 that no longer matches anything), once per process; never raises."""
+    folder = Path(folder or opt_in_folder())
+    if str(folder) in _PRUNED or _folder_linked(folder):
+        return
+    _PRUNED.add(str(folder))
+    try:
+        for record in folder.glob("*.json"):
+            try:
+                key = json.loads(record.read_text(encoding="utf-8")).get("key")
+            except (OSError, ValueError, AttributeError):
+                continue
+            if not (isinstance(key, str) and os.path.isabs(key) and os.path.exists(key)):
+                record.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def opt_in_key(root):
+    """The repository's key: its main checkout's path, else `root` outside git."""
+    return str(Path(main_checkout(root) or root).resolve())
+
+
+def opt_in_record(root):
+    """The latch file for the repository at `root`."""
+    import hashlib
+    key = opt_in_key(root)
+    slug = re.sub(r"[^a-z0-9]+", "-", key.lower()).strip("-")[-60:]
+    return opt_in_folder() / f"{slug}-{hashlib.sha1(key.encode()).hexdigest()[:8]}.json"
+
+
+def opted_in_before(root):
+    """True when a hook once saw this repository as a kit project and nobody has forgotten it."""
+    try:
+        prune_opt_ins()
+        return opt_in_record(root).is_file()
+    except Exception:
+        return False
+
+
+def latch_opt_in(root):
+    """Record that the repository at `root` is a kit project. Never raises: a hook must not fail
+    because the config dir cannot be written."""
+    try:
+        here = str(Path(root).resolve())
+        if here in _LATCHED:
+            return
+        _LATCHED.add(here)
+        if under_temp(root):  # a throwaway repository: the hooks work there, nothing is recorded
+            return
+        prune_opt_ins()
+        if _folder_linked(opt_in_folder()):  # a symlinked folder: no record, no error
+            return
+        record = opt_in_record(root)
+        if not record.is_file():
+            write_json_atomic(record, {"key": opt_in_key(root)})
+    except Exception:
+        pass
+
+
+def forget_opt_in(root):
+    """Remove the latch: True when there was one. The owner's command (items.py forget)."""
+    _LATCHED.clear()  # a checkout and its worktrees share the record: none of them is latched now
+    try:
+        opt_in_record(root).unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+_DROPPED = set()
+
+
+def drop_opt_in(root):
+    """forget_opt_in once per process for a kit.json that says `"guard": "off"`; never raises."""
+    here = str(Path(root).resolve())
+    if here in _DROPPED:
+        return
+    _DROPPED.add(here)
+    try:
+        forget_opt_in(root)
+    except Exception:
+        pass
+
+
+def config_missing(root):
+    """True when no kit.json applies in `root` although the project uses the kit: its main
+    checkout holds kit state, or a hook latched it before (load_config then returns `{}`)."""
+    path, main = _config_and_main(root)
+    return not path.exists() and (has_kit_state(main or Path(root)) or opted_in_before(main or Path(root)))
+
+
+def record_only(root):
+    """True when only the record keeps `root` a kit project: no kit.json, no kit state."""
+    path, main = _config_and_main(root)
+    base = main or Path(root)
+    return not path.exists() and not has_kit_state(base) and opted_in_before(base)
+
+
+def load_config(root, safety=False):
+    """Return (config, error). config is None when the project has not opted in; a kit.json that
+    is present means it did, even an empty `{}` (callers test `config is None`). A worktree
+    without one uses its main checkout's (config_file).
+
+    The other opt-in is the kit's own working state in the main checkout (has_kit_state): then a
+    missing kit.json gives `{}`, the defaults, and config_missing(root) is True. In the owner's
+    project (2026-11) a commit removed kit.json from git and disk, and every hook went silent for
+    days while the coordinator kept its board and items: no guard, no REPORT.md, no cost lines.
+    A project with neither stays untouched, as before. One with only the record left gives `{}`
+    to the guards (`safety=True`: guard.py, settings_guard.py) and None to every other hook."""
+    path, main = _config_and_main(root)
+    base = main or Path(root)
     if not path.is_file():
-        return None, None
+        if path.exists():  # a folder named kit.json: not opted in, as before
+            return None, None
+        if has_kit_state(base):
+            latch_opt_in(base)
+            return {}, None
+        return ({} if safety and opted_in_before(base) else None), None
     try:
         config = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # a broken config must be visible, not silently ignored
         return None, f"kit: cannot read {path}: {exc}"
     if not isinstance(config, dict):
         return None, f"kit: {path} must hold a JSON object"
+    if config.get("guard") == "off":  # the owner's off switch: nothing latched, an old latch dropped
+        drop_opt_in(base)
+    else:
+        latch_opt_in(base)
     return config, None
 
 
@@ -360,8 +546,8 @@ def _unattended_steps(cwd):
 
 def asking_rules(cwd):
     """{step: [(rule, where)]}: the ask rules, in any settings scope or the kit guard's askCommands,
-    that match a push, rebase or merge as the kit runs them. Each such command stops on a prompt
-    in every permission mode (auto too) and from a thread; the owner's saved preference is not read."""
+    that match a push, rebase or merge as the kit runs them, so such a command may stop on a prompt.
+    Whether it does in a given mode is Claude Code's to decide; the owner's saved preference is not read."""
     rules = []
     for f in permission_files(cwd):
         value, ok = read_json(f)

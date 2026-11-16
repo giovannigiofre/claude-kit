@@ -14,7 +14,8 @@ never listed):
     unknown   committed work whose merge could not be tested (an old git, say)
 
 and the plan: `remove` only for a merged worktree with nothing uncommitted, `salvage` (push the
-branch or bundle it first) for stale unmerged work, `keep` for the rest. It removes nothing.
+branch or bundle it first) for stale unmerged work, `keep` for the rest; a `remove` also deletes
+the merged `worktree-agent-*` branch Claude Code left for that worktree. It removes nothing.
 git runs with GIT_DIR, GIT_WORK_TREE and the like cleared (kitlib.hermetic_env), so a run from
 inside a git hook reads this repository and not the one the hook was started for.
 
@@ -136,16 +137,42 @@ def main_root(cwd):
     return str(common.parent) if common.name == ".git" and common.parent.is_dir() else top
 
 
+def agent_branches(root, base, rows, entries):
+    """For each `remove` row, the `worktree-agent-<id>` branches to delete with it. Claude Code makes
+    one per agent worktree; when the thread then works on a branch of its own, the agent branch stays
+    behind after the sweep. One goes with a row when it is at the row's commit or named after the
+    row's folder (`agent-<id>`), is merged into base, and no worktree has it checked out."""
+    checked_out = {e["branch"] for e in entries if e["branch"]}  # grows: each branch goes with one row
+    refs = git(root, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/worktree-agent-*")
+    tips = dict(line.split(" ", 1) for line in refs.splitlines() if " " in line)
+    for row, entry in zip(rows, entries):
+        row["also_delete"] = []
+        if row["plan"] != "remove" or not base:
+            continue
+        for name, tip in sorted(tips.items()):
+            if name in checked_out or name == row["branch"]:
+                continue
+            if tip != entry["head"] and name != "worktree-" + Path(row["path"]).name:
+                continue
+            if git(root, "rev-list", "--count", f"{base}..{tip}").strip() == "0":
+                row["also_delete"].append(name)
+                checked_out.add(name)
+
+
 def plan(root, now=None):
     base = kitlib.git_base(root)
-    return {"repo": str(root), "base": base, "worktrees": [classify(root, e, base, now) for e in linked(root)]}
+    entries = linked(root)
+    rows = [classify(root, e, base, now) for e in entries]
+    agent_branches(root, base, rows, entries)
+    return {"repo": str(root), "base": base, "worktrees": rows}
 
 
 def how(row, base):
     """The command a person would run for a plan, printed, never run."""
     path, branch = row["path"], row["branch"]
     if row["plan"] == "remove":
-        return f"git worktree remove {path}" + (f" && git branch -d {branch}" if branch != "(detached)" else "")
+        names = ([branch] if branch != "(detached)" else []) + row.get("also_delete", [])
+        return f"git worktree remove {path}" + (f" && git branch -d {' '.join(names)}" if names else "")
     if row["plan"] == "salvage":
         if branch == "(detached)":
             return f"git -C {path} branch salvage/{row['head']} (then push or bundle it)"

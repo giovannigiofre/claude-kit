@@ -28,7 +28,7 @@ slip past it. The OS boundary is the Bash sandbox (the kit's "Sandbox" safety pr
                    the mergePullRequest mutation, a GitHub MCP merge tool); the coordinator merges,
                    and from the main session the merge is left to the permission system
   owner-settings   from a subagent: the kit's items.py commands that change the owner's settings
-                   (`away` and `sandbox` with on or off, `unattended` with any argument), and
+                   (`away` and `sandbox` with on or off, `unattended` with any argument, `forget`), and
                    `machine_setup.py --apply|--decline`, `migrate_state.py undo` and `migrate
                    --again|--force`; judged on what a simple command runs (directly, or a
                    shell function or variable bound to it), never on mentioned text; `away status`, `sandbox status`, a
@@ -79,7 +79,8 @@ Multi-line commands, subshells, braces, if/for/while bodies, $(...) and backtick
 `cd` within one command are followed; quoted text over several lines (a commit message) and
 here-document bodies are arguments, not commands.
 
-Active when the project has .claude/kit.json (unless its "guard" is "off"), or everywhere when
+Active when the project has opted in (.claude/kit.json, unless its "guard" is "off", or the kit's
+state when kit.json went missing: kitlib.load_config), or everywhere when
 ~/.claude/kit.json says "guard": "on". Options, under "guard" in either file:
   {"protectedBranches": ["main", "master"], "agentsAsk": 15, "agentsDeny": 40,
    "allowCommands": ["^rm -rf /opt/my-build$"], "attribution": "block", "waits": true, "sleepMaxSec": 60,
@@ -347,7 +348,7 @@ def under(path, root):
 
 def settings(root):
     """(active, options): project kit.json wins, else the user's ~/.claude/kit.json."""
-    project, _ = kitlib.load_config(root)
+    project, _ = kitlib.load_config(root, safety=True)
     user = {}
     try:
         user = json.loads((home() / ".claude" / "kit.json").read_text(encoding="utf-8"))
@@ -930,6 +931,8 @@ def owner_words(script, args):
         words = [a for a in args if not a.startswith("-")]
         if words[:1] in (["away"], ["sandbox"]) and words[1:2] in (["on"], ["off"]):
             return words[:2]
+        if words[:1] == ["forget"]:  # drops the project's opt-in record: the owner's to decide
+            return words[:1]
         if words[:1] == ["unattended"] and any(re.fullmatch(r"[A-Za-z_][\w-]*=.*", a) for a in words[1:]):
             return words
     return None

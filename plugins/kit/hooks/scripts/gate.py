@@ -198,8 +198,21 @@ def main(argv=None):
     if cmd not in NAMES:
         print(f"kit gate: unknown gate `{cmd}` (check, verify, status)", file=sys.stderr)
         return 3
+    forget = f"python3 {Path(__file__).resolve().parent / 'items.py'} forget"
+    if config is None and kitlib.record_only(root):  # used the kit here once; its file and state are gone
+        print(f"kit gate: there is no `{cmd}` gate: this project used the kit on this machine, but .claude/kit.json "
+              "and the kit's state are both gone (the guard stays on). Tell the coordinator: the owner either "
+              f"restores .claude/kit.json (the session start says how) or, to stop the kit here, runs `{forget}`.",
+              file=sys.stderr)
+        return 3
     if config is None:
         print("kit gate: this project has no .claude/kit.json (run /kit:init)", file=sys.stderr)
+        return 3
+    if not config.get(cmd) and kitlib.config_missing(root):  # the kit's state is here, its kit.json is not
+        print(f"kit gate: there is no `{cmd}` gate: .claude/kit.json is missing in this project although it "
+              "uses the kit. Tell the coordinator; the session start says how to restore the file, and to stop "
+              f"using the kit here instead the owner moves the board and items out of .kit/lead and runs `{forget}`.",
+              file=sys.stderr)
         return 3
     timeout = None
     if "--timeout" in rest:

@@ -10,8 +10,8 @@ distiller then runs in the background). One seen again after it was delivered to
 counts as a miss.
 
 Any subagent briefed with `ITEM: <id>` also gets a `cost` line on that item: the input, output,
-cache read and cache write tokens its transcript records, its tool calls, and the minutes from
-its first to its last line (usage_of).
+cache read and cache write tokens its transcript records, its tool calls, and its active minutes:
+the gaps between its entries, each counted up to five minutes (usage_of).
 
 The verdict is parsed from the verifier's report (`VERDICT:` and the items under PROBLEMS):
 its final message, else, since a worker hands its report back through the SubagentHandback tool,
@@ -23,8 +23,8 @@ number), and a PASS confirms only the last FAIL on that same branch; with neithe
 confirms nothing. The LOG line of a filed report names the agent (`..., agent <id>`) and, for a
 verifier, the `REVIEWED: <sha>` its report states. Items are looked up in the main checkout: a
 thread stopping in its worktree (the hook's cwd) has no `lead/` folder of its own. Apart from
-the missing report, silent and never blocks a stop. A project without .claude/kit.json does
-nothing, the nudge included. Standard library only. `subagent_stop.py --missing <transcript>`
+the missing report, silent and never blocks a stop. A project that has not opted in does
+nothing, the nudge included: kit.json, or the kit's state when kit.json went missing (kitlib.load_config). Standard library only. `subagent_stop.py --missing <transcript>`
 exits 1 when that transcript's last run delivered no report (the hooks module asks).
 """
 
@@ -33,6 +33,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -148,6 +149,52 @@ def missing_report(path):
         return scan_runs(Path(path).read_text(errors="replace").splitlines())
     except Exception:  # an unreadable or odd transcript: never a false "no report"
         return False
+
+
+# A hand-back can reach the transcript after the hook has started reading it: in a live trial
+# (2026-11) the verifier's SubagentHandback entry was written at .684s, its result at .928s, the
+# hook ran at .995s and still read a transcript without them, blocked with NO_REPORT and returned
+# before filing anything; the thread never stopped again, so its verdict and cost were lost. So a
+# missing report is looked for again over the whole window before the hook believes it. A first
+# version left early on a file that had not grown for two reads and still lost a hand-back that
+# landed 1.0 s after the hook started (review of 2.0.1): a quiet file proves nothing.
+REREAD_TRIES, REREAD_PAUSE = 6, 0.3  # about 1.8 s at most; the slowest hook measured 1.52 s of its 10 s
+STATUS_REPORT = re.compile(r"^\W*STATUS:\s*(done|blocked|partial)\b", re.M | re.I)
+
+
+def report_in(message, agent_type):
+    """The payload's last_assistant_message (in memory, not on disk) already holds a report: a
+    VERDICT line for a verifier, the thread's STATUS report otherwise."""
+    return bool((HAS_VERDICT if agent_type.endswith("verifier") else STATUS_REPORT).search(message or ""))
+
+
+def stamp(path):
+    """The transcript's size and mtime, or None when it cannot be read (then it is read again)."""
+    try:
+        st = os.stat(path)
+        return st.st_size, st.st_mtime_ns
+    except OSError:
+        return None
+
+
+def still_missing(path, tries=REREAD_TRIES, pause=REREAD_PAUSE):
+    """missing_report, read again while the transcript may still be catching up: True only when
+    no report appeared in any read over the whole window; leaves as soon as one does. Each read is
+    of the whole file, and only when its size or mtime changed since the read before: an unchanged
+    file gives the same answer. A 25 MB transcript read whole seven times cost 3 s (review round 2);
+    reading only its last 2 MB instead gave different answers, so that was undone (review round 3)."""
+    seen = stamp(path)  # taken before the read, so a write during it changes the next stamp
+    if not missing_report(path):
+        return False
+    for _ in range(tries):
+        time.sleep(pause)
+        now = stamp(path)
+        if now is not None and now == seen:
+            continue
+        seen = now
+        if not missing_report(path):
+            return False
+    return True
 
 
 def scan_runs(lines):
@@ -293,15 +340,26 @@ def usage_of(path):
     def total(key):
         return sum(u.get(key) for u in replies.values() if isinstance(u.get(key), int))
 
-    minutes = 0.0
-    try:
-        from datetime import datetime
-        times = sorted(datetime.fromisoformat(t.replace("Z", "+00:00")) for t in stamps)
-        minutes = round((times[-1] - times[0]).total_seconds() / 60, 1) if times else 0.0
-    except (ValueError, TypeError):
-        pass
+    # active time, not the span: a thread resumed for a second round showed 28.7 minutes for about
+    # 15 of work, the hour between its rounds included. Each gap between entries counts up to IDLE_CAP.
+    # A stamp that does not parse is skipped, not the whole line: the gaps between the others count.
+    from datetime import datetime, timezone
+    times = []
+    for t in stamps:
+        try:
+            when = datetime.fromisoformat(t.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        # one kind only, so the sort cannot fail: a stamp without a zone is read as UTC
+        times.append(when if when.tzinfo else when.replace(tzinfo=timezone.utc))
+    times.sort()
+    gaps = ((b - a).total_seconds() for a, b in zip(times, times[1:]))
+    minutes = round(sum(min(g, IDLE_CAP) for g in gaps) / 60, 1)
     return {"in": total("input_tokens"), "out": total("output_tokens"), "cache_read": total("cache_read_input_tokens"),
             "cache_write": total("cache_creation_input_tokens"), "tools": len(tools), "minutes": minutes}
+
+
+IDLE_CAP = 300  # seconds: a longer gap between two transcript entries counts as five minutes
 
 
 def file_cost(root, transcript, agent_id=""):
@@ -316,7 +374,14 @@ def file_cost(root, transcript, agent_id=""):
         if not use:
             return
         note = " ".join(f"{k}={use[k]}" for k in ("in", "out", "cache_read", "cache_write", "tools", "minutes"))
-        items.log(root, item_id, "cost", note + (f" agent={agent_id}" if agent_id else ""))
+        note += f" agent={agent_id}" if agent_id else ""
+        log = items.find(root, item_id) / "LOG.md"
+        try:  # a second stop with nothing new: the same line again would only add noise
+            if f"| cost | {note}\n" in log.read_text(encoding="utf-8"):
+                return
+        except OSError:
+            pass
+        items.log(root, item_id, "cost", note)
     except Exception:
         pass
 
@@ -331,6 +396,12 @@ def file_report(root, brief, report, agent_type, agent_id=""):
         item_id = items.find_id(brief)
         if not item_id or not items.find(root, item_id):
             return
+        name = "VERDICT.md" if agent_type.endswith("verifier") else "REPORT.md"
+        try:  # the same report seen on a second stop: filed once (one LOG line per report)
+            if (items.find(root, item_id) / name).read_text(encoding="utf-8") == (report or "").rstrip() + "\n":
+                return
+        except OSError:
+            pass
         who = f", agent {agent_id}" if agent_id else ""
         if agent_type.endswith("verifier"):
             m = re.search(r"^\W*VERDICT:\s*([A-Z_]+(?:\s+scope=\S+)?)", report, re.M)
@@ -357,11 +428,14 @@ def main():
     if config is None:  # not opted in: no nudge, nothing filed
         return 0
     transcript = data.get("agent_transcript_path")
-    # once per stop: the second stop (stop_hook_active) is the hooks module's to report
-    if transcript and not data.get("stop_hook_active") and missing_report(transcript):
+    agent_type = str(data.get("agent_type") or "")
+    # once per stop: the second stop (stop_hook_active) is the hooks module's to report. A report in
+    # the payload counts whatever the transcript says; a missing one is looked for again first
+    if (transcript and not data.get("stop_hook_active") and not report_in(data.get("last_assistant_message"), agent_type)
+            and still_missing(transcript)):
+        file_cost(root, transcript, str(data.get("agent_id") or ""))  # a thread that never stops again keeps its cost
         print(json.dumps({"decision": "block", "reason": NO_REPORT}))
         return 0
-    agent_type = str(data.get("agent_type") or "")
     if transcript:  # before the report line, so the item's last event stays the report
         file_cost(root, transcript, str(data.get("agent_id") or ""))
     if agent_type not in KIT_TYPES:
@@ -372,7 +446,10 @@ def main():
     if not agent_type.endswith("verifier"):  # a thread: file its report, nothing else to parse
         if data.get("agent_transcript_path"):
             brief, handed = from_transcript_any(data["agent_transcript_path"])
-            report = handed or report  # the hand-back is the report; the closing text is not
+            # the hand-back is the report; the closing text is not. A payload that carries a report
+            # wins over transcript text without one (the hand-back may not have reached the file)
+            if handed and (report_in(handed, agent_type) or not report_in(report, agent_type)):
+                report = handed
         file_report(root, brief, report, agent_type, agent_id)
         return 0
     if data.get("agent_transcript_path"):

@@ -4,13 +4,22 @@
 Run: python3 plugins/kit/hooks/tests/test_items.py   (exit 0 = all good)
 """
 
+import atexit
 import json
-import re
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
+
+# run alone or through tests/run_all.py, the hooks' opt-in records (kitlib.latch_opt_in) go to a
+# temp folder, never the user's config dir: running the test files alone once left 84 records there
+if not os.environ.get("KIT_OPT_IN_DIR"):
+    os.environ["KIT_OPT_IN_DIR"] = tempfile.mkdtemp(prefix="kit-opt-in-")
+    atexit.register(shutil.rmtree, os.environ["KIT_OPT_IN_DIR"], True)
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -98,7 +107,8 @@ def snapshot_checks(tmp, check):
     hook(repo, {"cwd": str(repo), "agent_type": "kit:implementer", "agent_id": "a1",
                 "agent_transcript_path": str(t1), "last_assistant_message": ""}, env)
     log = (lead / "items" / "login" / "LOG.md").read_text()
-    check("| cost | in=5 out=150 cache_read=3000 cache_write=510 tools=3 minutes=12.5 agent=a1\n" in log, log)
+    # minutes are active time: the 12.5-minute wait before m2 counts as five
+    check("| cost | in=5 out=150 cache_read=3000 cache_write=510 tools=3 minutes=5.1 agent=a1\n" in log, log)
     check(log.rstrip().splitlines()[-1].split(" | ")[1] == "reported", f"the report stays the last event: {log}")
     # a transcript without usage records: no cost line, the hook still files the report
     t2 = tmp / "agent-a2.jsonl"
@@ -113,7 +123,7 @@ def snapshot_checks(tmp, check):
                 "agent_transcript_path": str(t1), "last_assistant_message": ""}, env)
     snap = items.snapshot(repo)
     login = next(r for r in snap["items"] if r["id"] == "login")
-    check(login["cost"] == {"in": 6, "out": 160, "cache_read": 3000, "cache_write": 510, "tools": 3, "minutes": 20.0,
+    check(login["cost"] == {"in": 6, "out": 160, "cache_read": 3000, "cache_write": 510, "tools": 3, "minutes": 10.1,
                             "threads": 1}, f"status counts a thread's latest cost line only: {login['cost']}")
     check(login["agent"] == "a1" and login["branch"] == "feat/login" and login["pr"] == "#12",
           f"agent, branch and PR from the LOG and REPORT.md: {login}")
@@ -203,6 +213,235 @@ def snapshot_checks(tmp, check):
     answer.write_text('{"state": "OPEN"}')
     code, out, _ = run(repo, "done", "--force", "forced", env=withgh)
     check(code == 0 and "is open, archived with --force" in out, out)
+
+
+def missing_config_checks(tmp, check):
+    """kit.json went missing in a project that uses the kit: the hooks still file reports and cost
+    lines. A project with neither file nor state gets nothing filed."""
+    home = tmp / "home"
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), TMPDIR=str(tmp))
+    repo = tmp / "gone"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+    t = tmp / "agent-gone.jsonl"
+    rows = [{"type": "user", "timestamp": "2026-11-13T10:00:00.000Z", "message": {"role": "user", "content": "ITEM: alpha\ngo"}},
+            usage_row("g1", "2026-11-13T10:03:00.000Z", (3, 100, 1000, 500), tool="t1"),
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "SubagentHandback",
+                                                           "input": {"message": "STATUS: done\nCHANGED: a.py"}}]}}]
+    t.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    payload = {"cwd": str(repo), "agent_type": "kit:implementer", "agent_id": "g1",
+               "agent_transcript_path": str(t), "last_assistant_message": ""}
+    code, err = hook(repo, payload, env)
+    check(code == 0 and err == "" and not (repo / ".kit").exists(), f"neither file nor state: nothing filed {err}")
+    code, out, err = run(repo, "new", "Alpha", env=env)  # the kit's state, no kit.json
+    check(code == 0 and not (repo / ".claude" / "kit.json").exists(), f"new without kit.json: {code} {err}")
+    code, err = hook(repo, payload, env)
+    folder = repo / ".kit" / "lead" / "items" / "alpha"
+    log = (folder / "LOG.md").read_text()
+    check(code == 0 and (folder / "REPORT.md").read_text().startswith("STATUS: done"), f"REPORT.md filed: {err}")
+    check("| cost | in=3 out=100 cache_read=1000 cache_write=500 tools=2 minutes=3.0 agent=g1" in log, log)
+
+
+def pr_source_checks(tmp, check):
+    """The PR an item is asked about comes from its own report lines or REPORT.md's PR field, and gh
+    is given a bare number: a free note naming another PR, or another repository's URL, is never asked."""
+    repo = tmp / "prs"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "remote", "add", "origin", "git@github.com:Owner/Repo.git")
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "kit.json").write_text("{}")
+    item = items.find(repo, items.new(repo, "Prs"))
+
+    def pr_of():
+        return items.refs(item, items.log_lines(item))[2]
+
+    items.log(repo, "prs", "working", "unlike PR #12, this one keeps the cache")
+    check(pr_of() == "", f"a free note names no PR of the item: {pr_of()!r}")
+    (item / "REPORT.md").write_text("STATUS: done\nBRANCH / PR: `feat/prs`, #9\nEVIDENCE: see #12\n")
+    check(pr_of() == "#9", f"REPORT.md's PR field: {pr_of()!r}")
+    items.log(repo, "prs", "review", "PR #13 open")
+    check(pr_of() == "#13", f"a review line: {pr_of()!r}")
+    check(items.gh_target(repo, "#13") == "13", "a number goes to gh bare")
+    check(items.gh_target(repo, "https://github.com/owner/repo/pull/5") == "5", "a URL on this origin: its number")
+    for other in ("https://github.com/someone/else/pull/5", "https://github.com/owner/repo/pull/5;id",
+                  "https://evil.example/owner/repo/pull/5", "--repo=x"):
+        check(items.gh_target(repo, other) is None, f"not this repository's PR: {other}")
+    state, detail = items.merge_state(repo, "https://github.com/someone/else/pull/5")
+    check(state == "unknown" and "not a PR of this repository" in detail, f"another repository's PR: {state} {detail}")
+
+
+def forget_checks(tmp, check):
+    """`forget` removes the record a hook wrote the first time it saw the project, so the hooks go
+    quiet once kit.json and the kit's state are both gone; without a record it says so."""
+    opt = tmp / "opt-in"
+    env = dict(os.environ, KIT_OPT_IN_DIR=str(opt), KIT_TEMP_ROOTS="")  # record a temp repository
+    repo = tmp / "forgotten"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "kit.json").write_text("{}")
+    code, out, err = run(repo, "list", env=env)  # any read of kit.json latches the project
+    records = list(opt.glob("*.json")) if opt.is_dir() else []
+    check(code == 0 and len(records) == 1, f"a kit project is recorded: {code} {err} {records}")
+    (repo / ".claude" / "kit.json").unlink()
+    code, out, err = run(repo, "forget", env=env)
+    check(code == 0 and out.startswith("Forgot this project: removed ") and not list(opt.glob("*.json")),
+          f"forget removes the record: {code} {out} {err}")
+    code, out, err = run(repo, "forget", env=env)
+    check(code == 0 and out.startswith("Nothing to forget: no record at "), f"a second forget: {code} {out} {err}")
+    code, out, err = run(repo, "forget", "now", env=env)
+    check(code == 2 and "takes no arguments" in err, f"forget with an argument: {code} {err}")
+
+
+REMINDER = "<system-reminder>\nYour final report is delivered through SubagentHandback: when your work is complete...</system-reminder>"
+DELIVERED = '{"success":true,"message":"Report delivered to your caller."}'
+VERDICT = "VERDICT: PASS\nREVIEWED: main, abc1234\nEVIDENCE:\n- gate ok\nPROBLEMS:\n- none\n"
+
+
+def stop_out(payload, env):
+    out = subprocess.run([sys.executable, str(SCRIPTS / "subagent_stop.py")], input=json.dumps(payload),
+                         capture_output=True, text=True, timeout=60, env=env)
+    return out.returncode, json.loads(out.stdout) if out.stdout.strip() else {}, out.stderr
+
+
+def handback_rows(tid, message):
+    return [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": tid, "name": "SubagentHandback",
+                                                           "input": {"message": message}}]}},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "is_error": False,
+                                                      "content": [{"type": "text", "text": DELIVERED}]}]}}]
+
+
+def race_checks(tmp, check):
+    """A verifier's hand-back that reaches its transcript after the SubagentStop hook started
+    reading it (the 2026-11 trial that lost a verdict and its cost line): the hook uses the
+    payload's report, waits for a late one, files the cost line before any block, and files the
+    same report once however many stops see it. Minutes are active time."""
+    import threading
+    home = tmp / "home"
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), TMPDIR=str(tmp))
+    repo = tmp / "race"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "kit.json").write_text("{}")
+    head = [{"type": "user", "timestamp": "2026-11-13T10:00:00.000Z", "message": {"role": "user", "content": "ITEM: {id}\nReview"}},
+            {"type": "user", "message": {"role": "user", "content": REMINDER}},
+            usage_row("v1", "2026-11-13T10:02:00.000Z", (3, 100, 1000, 500), tool="t0"),
+            usage_row("v2", "2026-11-13T10:22:00.000Z", (1, 10, 0, 0)),  # a 20-minute hole: counts as five
+            usage_row("v3", "2026-11-13T10:23:00.000Z", (1, 10, 0, 0))]
+
+    def case(name):
+        run(repo, "new", name, env=env)
+        item = name.lower()
+        rows = [dict(head[0], message={"role": "user", "content": f"ITEM: {item}\nReview"})] + head[1:]
+        t = tmp / f"agent-{item}.jsonl"
+        t.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        return item, t, items.find(repo, item)
+
+    def payload(t, last=""):
+        return {"cwd": str(repo), "agent_type": "kit:verifier", "agent_id": "v9",
+                "agent_transcript_path": str(t), "last_assistant_message": last}
+
+    cost = "| cost | in=5 out=120 cache_read=1000 cache_write=500 tools=1 minutes=8.0 agent=v9\n"
+    # truncated before the hand-back, the verdict in the payload: filed, no block
+    item, t, folder = case("Alpha")
+    code, out, err = stop_out(payload(t, VERDICT), env)
+    log = (folder / "LOG.md").read_text()
+    check(code == 0 and out == {} and (folder / "VERDICT.md").read_text() == VERDICT, f"payload verdict filed: {out} {err}")
+    check(cost in log and "| verdict | PASS, agent v9" in log, log)
+
+    # the same truncated transcript, completed by another writer 0.5 s after the hook starts: it waits
+    item, t, folder = case("Beta")
+    late = threading.Timer(0.5, lambda: t.write_text(t.read_text() + "".join(json.dumps(r) + "\n" for r in handback_rows("h1", VERDICT))))
+    late.start()
+    code, out, err = stop_out(payload(t), env)
+    late.join()
+    log = (folder / "LOG.md").read_text()
+    check(code == 0 and out == {} and (folder / "VERDICT.md").read_text() == VERDICT, f"a late hand-back is waited for: {out} {err}")
+    check(log.count("| verdict |") == 1 and cost.replace("tools=1", "tools=2") in log, log)
+    # the same report on a second stop: one verdict line, one cost line
+    code, out, err = stop_out(payload(t), env)
+    log = (folder / "LOG.md").read_text()
+    check(code == 0 and log.count("| verdict |") == 1 and log.count("| cost |") == 1, f"filed once: {log}")
+
+    # no report anywhere: it blocks as before, and the cost line is filed first
+    item, t, folder = case("Gamma")
+    code, out, err = stop_out(payload(t, "Still checking the redirect."), env)
+    log = (folder / "LOG.md").read_text()
+    check(out.get("decision") == "block" and "SubagentHandback" in out.get("reason", ""), f"blocks: {out} {err}")
+    check(cost in log and not (folder / "VERDICT.md").exists(), f"the cost line is there: {log}")
+    # its later stop with the report: filed, with a fresh cost line
+    t.write_text(t.read_text() + "".join(json.dumps(r) + "\n" for r in handback_rows("h2", VERDICT)))
+    code, out, err = stop_out(dict(payload(t), stop_hook_active=True), env)
+    log = (folder / "LOG.md").read_text()
+    check(out == {} and log.count("| verdict |") == 1 and log.count("| cost |") == 2 and (folder / "VERDICT.md").is_file(), log)
+
+
+def stale_checks(tmp, check):
+    """An item still logged `working` whose branch is merged into the default branch: `status`
+    marks it `stale (merged)` and says once that `items.py done <id>` closes it; nothing is closed."""
+    home = tmp / "home"
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), TMPDIR=str(tmp))
+    repo = tmp / "stale"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "kit.json").write_text("{}")
+    for name in ("Alpha", "Beta", "Gamma"):
+        run(repo, "new", name, env=env)
+        run(repo, "log", name.lower(), "working", f"branch feat/{name.lower()}", env=env)
+        run(repo, "log", name.lower(), "reported", "done, agent a1", env=env)
+        run(repo, "log", name.lower(), "working", "fixing", env=env)
+    commit_file(repo, "feat/alpha", "a.txt", "a\n")
+    commit_file(repo, "feat/beta", "b.txt", "b\n")
+    git(repo, "merge", "-q", "--no-ff", "-m", "merge alpha", "feat/alpha")
+    git(repo, "branch", "-q", "feat/gamma")  # made, nothing committed yet: not merged, just started
+    code, out, _ = run(repo, "status", env=env)
+    rows = {line.split(" | ")[0]: line for line in out.splitlines() if " | " in line}
+    check(code == 0 and "| working stale (merged) |" in rows.get("alpha", ""), out)
+    check("stale" not in rows.get("beta", "x") and "stale" not in rows.get("gamma", "x"), f"unmerged and fresh stay working: {out}")
+    check(out.count("`items.py done <id>` closes") == 1 and "stale (merged): alpha:" in out, out)
+    data = json.loads(run(repo, "status", "--json", env=env)[1])
+    check({r["id"]: r["stale_merged"] for r in data["items"]} == {"alpha": True, "beta": False, "gamma": False}, data["items"])
+    check(items.find(repo, "alpha") and items.status_of(items.find(repo, "alpha"))[0] == "working", "nothing closed")
+
+    # a live thread (review of 2.0.1): a fresh worktree-agent-* branch that ran `merge --ff-only
+    # main` has two reflog entries and a tip in main. Never reported: at work. Reported but with
+    # edits in its worktree: at work. Reported and clean: stale.
+    git(repo, "worktree", "add", "-q", "-b", "worktree-agent-x", str(tmp / "wt-x"), "main~1")
+    git(tmp / "wt-x", "merge", "-q", "--ff-only", "main")
+    (tmp / "wt-x" / "new.txt").write_text("being written\n")
+    run(repo, "new", "Live", env=env)
+    run(repo, "log", "live", "working", "branch worktree-agent-x, agent a2", env=env)
+    path = items.find(repo, "live")
+    check(items.merged(repo, path) is True, "the fresh branch reads as merged in git alone")
+    check(items.stale_merged(repo, path) is False, "never reported: at work, whatever git says")
+    run(repo, "log", "live", "reported", "partial, agent a2", env=env)
+    run(repo, "log", "live", "landing", "approved", env=env)  # a `working` line here is case e below
+    check(items.stale_merged(repo, path) is False, "reported, but its worktree has untracked edits: at work")
+    (tmp / "wt-x" / "new.txt").unlink()
+    (tmp / "wt-x" / "a.txt").write_text("changed\n")
+    check(items.stale_merged(repo, path) is False, "an uncommitted change in its worktree: at work")
+    git(tmp / "wt-x", "checkout", "-q", "--", "a.txt")
+    check(items.stale_merged(repo, path) is True, "reported, merged, clean worktree: stale")
+    # sent back after its report (review round 2, case e): the thread restarts on the merged branch
+    # and has edited nothing yet, so the worktree is clean; it is at work while that worktree stands
+    run(repo, "log", "live", "reported", "STATUS: done", env=env)
+    run(repo, "log", "live", "working", "sent back: also do y", env=env)
+    check(items.stale_merged(repo, path) is False, "sent back after its last report, its worktree there: at work")
+    # cases c and v (review round 3): reported, then `working "landing it"`, merged, worktree gone
+    run(repo, "log", "live", "verdict", "PASS", env=env)
+    run(repo, "log", "live", "working", "landing it", env=env)
+    check(items.stale_merged(repo, path) is False, "landing it with its worktree still there: at work")
+    git(repo, "worktree", "remove", "-f", str(tmp / "wt-x"))
+    check(items.stale_merged(repo, path) is True, "reported, working after it, merged, worktree gone: stale")
 
 
 def fresh_project_checks(tmp, check):
@@ -646,8 +885,30 @@ def main():
         check(brief.startswith("ITEM: login-page\nKIND: ship\n\nBRIEF: a login page"), brief)
         check("| queued | from handoff" in (folder / "LOG.md").read_text(), "first log line")
         check("/.claude/lead/" in (repo / ".git" / "info" / "exclude").read_text(), "lead folder excluded")
-        code, out, _ = run(repo, "new", "Login page")
-        check(out.startswith("login-page-2\t"), f"a second item with the same name gets a suffix: {out}")
+        # the name of an open item: refused, naming it (two sessions once worked one issue twice)
+        code, out, err = run(repo, "new", "Login page")
+        created = (folder / "LOG.md").read_text().split(" | ")[0].lstrip("- ").strip()
+        check(code == 1 and out == "" and "login-page is already an open item (queued, created " + created in err
+              and "LOG.md" in err and "--again" in err, f"a duplicate name is refused: {code} {out} {err}")
+        check(not (folder.parent / "login-page-2").exists(), "nothing made on a refusal")
+        code, out, _ = run(repo, "new", "Login page", "--again")
+        check(code == 0 and out.startswith("login-page-2\t"), f"--again makes the numbered item on purpose: {out}")
+        # two `new` calls with one name at the same moment: one makes it, the other is refused
+        # (review of 2.0.1: both passed an is_dir() check and both succeeded). Each process loads
+        # items.py first and then waits for the same start time, so both reach new() together.
+        racer = ("import sys, time\nsys.path.insert(0, sys.argv[1])\nimport items\n"
+                 "while time.time() < float(sys.argv[4]): pass\n"
+                 "try:\n    print(items.new(sys.argv[2], sys.argv[3]))\nexcept items.ItemExists:\n    print('refused')\n")
+        rounds, wrong = 20, []
+        for n in range(rounds):
+            start = str(time.time() + 0.4)
+            procs = [subprocess.Popen([sys.executable, "-c", racer, str(SCRIPTS), str(repo), f"Race {n}", start],
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(2)]
+            said = sorted(p.communicate(timeout=60)[0].strip() for p in procs)
+            made = sorted(d.name for d in (repo / ".claude/lead/items").iterdir() if d.name.startswith(f"race-{n}"))
+            if said != sorted([f"race-{n}", "refused"]) or made != [f"race-{n}"]:
+                wrong.append((n, said, made))
+        check(not wrong, f"one of two simultaneous `new` calls is refused, in {rounds} rounds: {wrong}")
         check(items.find_id("hello\nITEM: Login-Page\nmore") == "login-page", "find_id is case-insensitive")
         check(items.find_id("no item here") is None, "no id when absent")
 
@@ -774,6 +1035,10 @@ def main():
             check((archived / "REPORT.md").read_text() == "the first round\n", "the first archive is untouched")
             check((folder.parent / "done" / f"login-page-{n}" / "LOG.md").read_text().endswith("| done\n"),
                   f"the next archive lands at done/login-page-{n}")
+        code, out, err = run(repo, "new", "Search box archived")
+        run(repo, "done", "search-box-archived")
+        code, out, err = run(repo, "new", "Search box archived")
+        check(code == 0 and out.startswith("search-box-archived-2\t"), f"an archived-only name gets its suffix: {out} {err}")
 
         # unattended git preferences: per repo, in the main checkout's gitignored kit.local.json.
         # Every run gets the test HOME, so the user's real ~/.claude/settings.json never counts.
@@ -955,7 +1220,9 @@ def main():
         check(code == 2, f"an unknown records verb is refused: {err}")
         code, out, _ = run(repo, "records", "set", "GitHub issue: status label off, closing comment",
                            "  plans/progress.json:   the item's state ", env=env)
-        check(code == 0 and out.splitlines() == [f"RECORDS (from {local.resolve()}):", "- GitHub issue: status label off, closing comment",
+        header = (f"RECORDS: this project's record places (from {local.resolve()} lead.records). Update the ones this "
+                  "item touches, then tell the owner it is done:")
+        check(code == 0 and out.splitlines() == [header, "- GitHub issue: status label off, closing comment",
                                                  "- plans/progress.json: the item's state"], f"records set saves and prints: {out}")
         saved = json.loads(local.read_text())
         check({k: v for k, v in saved.items() if k != "lead"} == {k: v for k, v in before.items() if k != "lead"}
@@ -963,7 +1230,8 @@ def main():
               f"records set keeps the file's other settings: {saved}")
         run(repo, "new", "Records item two", env=env)
         code, out, _ = run(repo, "done", "records-item-two", env=env)
-        check(code == 0 and out.splitlines()[1:] == ["- [ ] GitHub issue: status label off, closing comment",
+        check(code == 0 and out.splitlines()[0] == "items: records-item-two done (archived). " + header
+              and out.splitlines()[1:] == ["- [ ] GitHub issue: status label off, closing comment",
                                                      "- [ ] plans/progress.json: the item's state"],
               f"done lists the records as a checklist: {out}")
         code, out, _ = run(repo, "records", "set", "only one", env=env)
@@ -980,7 +1248,7 @@ def main():
         code, out, _ = run(wt, "unattended", env=env)
         check("push=allow rebase=allow merge=ask" in out and str(local) in out, f"a worktree reads the main checkout's: {out}")
         code, out, _ = run(wt, "records", env=env)
-        check(out == f"RECORDS (from {local.resolve()}):\n- only one", f"a worktree reads the main checkout's records: {out}")
+        check(out == f"{header}\n- only one", f"a worktree reads the main checkout's records: {out}")
 
     with tempfile.TemporaryDirectory() as tmp:
         snapshot_checks(Path(tmp), check)
@@ -996,6 +1264,19 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmp:
         fresh_project_checks(Path(os.path.realpath(tmp)), check)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        missing_config_checks(Path(os.path.realpath(tmp)), check)
+    with tempfile.TemporaryDirectory() as tmp:
+        forget_checks(Path(os.path.realpath(tmp)), check)
+    with tempfile.TemporaryDirectory() as tmp:
+        pr_source_checks(Path(os.path.realpath(tmp)), check)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        stale_checks(Path(os.path.realpath(tmp)), check)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        race_checks(Path(os.path.realpath(tmp)), check)
 
     print("items: all checks passed" if not failed else f"items: {failed} failures")
     return 1 if failed else 0
