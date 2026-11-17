@@ -1,6 +1,6 @@
 ---
 name: extras
-description: Offers one of the kit's domain plugins when a task needs it and this project does not have it - kit-ui for UI or frontend design, a visual direction or a mock-up from scratch, a redesign, polish, a design or accessibility audit, or a brand; kit-llm for code that calls an LLM (an SDK or a provider's HTTP API), prompts, tool schemas, evals, prompt tuning or model choice. Use only when the matching kit-ui:* or kit-llm:* skills are missing from your skill list.
+description: Offers a kit domain plugin when a task needs one this project lacks - kit-ui for UI or frontend design, a redesign, polish, a design or accessibility audit, or a brand; kit-llm for code that calls an LLM, prompts, tool schemas, evals, prompt tuning or model choice; kit-desktop for a native desktop app to see or operate headless, in a thread too (Electron, Tauri, Swift builds included) - computer use, desktop automation. Use only when kit-ui:*, kit-llm:* or kit-desktop:* skills are missing from your skill list.
 ---
 
 # Offer a kit domain plugin
@@ -12,9 +12,10 @@ never need them don't carry their descriptions:
 |---|---|---|
 | `kit-ui` | screens, pages, visual directions and mock-ups from scratch, redesigns, polish, design audits, brands | `kit-ui:ui`, `kit-ui:direction`, `kit-ui:brand` |
 | `kit-llm` | code that calls an LLM, prompts, tools, evals, model choice | `kit-llm:llm-build`, `kit-llm:llm-evals`, a hook that spots LLM code on edit |
+| `kit-desktop` | a native desktop app to see or operate (macOS, Windows, Linux), headless, from a thread too; a desktop build to check in the app itself | `kit-desktop:desktop` over Vercel Labs' agent-desktop CLI (installed separately, pinned in CATALOG.md) |
 
-1. **Ask once** with AskUserQuestion, header "Kit plugin": "This looks like <UI | LLM> work. Use
-   Kit <UI | LLM> for it?"
+1. **Ask once** with AskUserQuestion, header "Kit plugin": "This looks like <UI | LLM | Desktop> work. Use
+   Kit <UI | LLM | Desktop> for it?"
    - **Yes, for this project (Recommended):** install it for the project and use it now.
    - **Just this time:** use it now without installing.
    - **No:** go on without it, and don't offer it again in this conversation.

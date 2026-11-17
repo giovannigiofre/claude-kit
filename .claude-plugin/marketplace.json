@@ -21,6 +21,11 @@
       "description": "Code that calls LLMs: build checklist, evals, prompt optimization, model choice, LLM-code detector. Project scope: the kit offers it when a task needs it."
     },
     {
+      "name": "kit-desktop",
+      "source": "./plugins/kit-desktop",
+      "description": "Native desktop apps through their accessibility tree with Vercel Labs' agent-desktop CLI (installed separately, pinned to 1.3.1): headless, from a thread too, evidence as values read back. Project scope: the kit offers it when a task needs it. TRIAL - see CATALOG.md."
+    },
+    {
       "name": "ponytail",
       "source": {
         "source": "github",
