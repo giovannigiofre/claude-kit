@@ -1,6 +1,6 @@
 ---
 name: extras
-description: Offers one of the kit's domain plugins when a task needs it and this project does not have it - kit-ui for UI or frontend design, a visual direction or a mock-up from scratch, a redesign, polish, a design or accessibility audit, or a brand; kit-llm for code that calls an LLM (an SDK or a provider's HTTP API), prompts, tool schemas, evals, prompt tuning or model choice. Use only when the matching kit-ui:* or kit-llm:* skills are missing from your skill list.
+description: Offers one of the kit's domain plugins when a task needs it and this project lacks it - kit-ui for UI or frontend design, a visual direction or mock-up, a redesign, polish, a design or accessibility audit, or a brand; kit-llm for code that calls an LLM, prompts, tool schemas, evals, prompt tuning or model choice; kit-web-ops for a site's Cloudflare, Search Console, Google Cloud keys or Bing Webmaster. Use only when the matching plugin's skills are missing from your skill list.
 ---
 
 # Offer a kit domain plugin
@@ -12,9 +12,14 @@ never need them don't carry their descriptions:
 |---|---|---|
 | `kit-ui` | screens, pages, visual directions and mock-ups from scratch, redesigns, polish, design audits, brands | `kit-ui:ui`, `kit-ui:direction`, `kit-ui:brand` |
 | `kit-llm` | code that calls an LLM, prompts, tools, evals, model choice | `kit-llm:llm-build`, `kit-llm:llm-evals`, a hook that spots LLM code on edit |
+| `kit-web-ops` | a site's Cloudflare (DNS, tokens, Workers secrets, analytics), Search Console, Google Cloud keys, Bing Webmaster, IndexNow | `kit-web-ops:web-ops` with a doctor for logins and accounts |
 
-1. **Ask once** with AskUserQuestion, header "Kit plugin": "This looks like <UI | LLM> work. Use
-   Kit <UI | LLM> for it?"
+Signs a project uses the web-ops services: a `wrangler.toml`/`wrangler.jsonc`, `CLOUDFLARE_*`,
+`GSC_*`, `CRUX_*` or `BING_*` names in its workflows or env files, or a search-engine setup step in
+its docs.
+
+1. **Ask once** with AskUserQuestion, header "Kit plugin": "This looks like <UI | LLM | web ops>
+   work. Use Kit <UI | LLM | Web Ops> for it?"
    - **Yes, for this project (Recommended):** install it for the project and use it now.
    - **Just this time:** use it now without installing.
    - **No:** go on without it, and don't offer it again in this conversation.

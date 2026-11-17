@@ -985,6 +985,7 @@ python3 plugins/kit/skills/investigate/tests/test_compact_logs.py
 python3 plugins/kit/skills/overnight/tests/test_overnight.py
 python3 plugins/kit-llm/hooks/tests/test_llm_detect.py
 python3 plugins/kit-ui/skills/direction/tests/test_refs.py
+python3 plugins/kit-web-ops/skills/web-ops/tests/test_doctor.py
 claude plugin test plugins/kit               # the mod (modes, safety, status line, watchdog) against the engine
 ```
 
@@ -1015,6 +1016,7 @@ same model.
 | kit | `offers-domain-plugin` | a UI request in a project without kit-ui reaches `kit:extras` |
 | kit-llm | `picks-llm-skill`, `optimize-needs-evals` | answer-quality and prompt-tuning requests measure first |
 | kit-llm | `builds-llm-tool`, `llm-edit-detected`, `injection-aware` | build discipline, the edit hook, the lethal trifecta |
+| kit-web-ops | `skills/web-ops/evals/evals.json` (skill-creator format, 3 prompts) | doctor and account check first, owner logins with `!`, no secret in chat, least-privilege tokens, read-back |
 
 ```bash
 cd plugins/kit

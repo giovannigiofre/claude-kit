@@ -93,8 +93,10 @@ and its CI actually run, not guesses.
     earlier; pipe the draft to `python3 $S --preview -` and show the user its full output (the
     exact lines, origin and paths included). Only on approval pipe the same draft to
     `python3 $S --set -`; `--remove` forgets the repo.
-13. **Domain plugins**: if the repo has a frontend, or code that calls an LLM, offer `kit-ui` or
-    `kit-llm` for this project now (`kit:extras` explains the install).
+13. **Domain plugins**: if the repo has a frontend, code that calls an LLM, or a site it runs on
+    Cloudflare or registers with search engines (a wrangler config, `CLOUDFLARE_*`/`GSC_*`/`BING_*`
+    names in its workflows), offer `kit-ui`, `kit-llm` or `kit-web-ops` for this project now
+    (`kit:extras` explains the install).
 14. Write `.claude/kit.json` and show it. It is personal by default (the kit is the user's, for
     their own work on the project): keep it out of Git through the repo's own
     `.git/info/exclude`, never `.gitignore`, which is shared. Add the line `/.claude/kit.json` to
