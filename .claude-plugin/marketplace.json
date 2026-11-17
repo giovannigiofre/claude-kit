@@ -21,6 +21,11 @@
       "description": "Code that calls LLMs: build checklist, evals, prompt optimization, model choice, LLM-code detector. Project scope: the kit offers it when a task needs it."
     },
     {
+      "name": "kit-web-ops",
+      "source": "./plugins/kit-web-ops",
+      "description": "A website's outside services from the terminal: Cloudflare, Google Search Console and Cloud keys, Bing Webmaster, IndexNow; doctor for logins and accounts, CLI and REST first. Project scope: the kit offers it when a task needs it."
+    },
+    {
       "name": "ponytail",
       "source": {
         "source": "github",
