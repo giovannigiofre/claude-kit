@@ -50,6 +50,14 @@ Platform guides:
 
 ---
 
+## Desktop app (native, Electron, Tauri, Swift)
+
+**Yourself:** with `kit-desktop:desktop` (offered by `kit:extras` if this project lacks it): `agent-desktop status`, then a headless `snapshot -i --compact` of the failing window and the values behind the symptom (`get`, `is`), in a `session` so the trace records the run; for a Chromium app, `launch --cdp` and read its console through a CDP client. Snapshots are private desktop content: keep them in `.debug/`.
+**Ask:** the app version and OS, the exact steps, whether it reproduces on a fresh profile or user account, the app's own log (macOS: Console.app filtered by process, or `log show --predicate 'process == "App"' --last 30m`; Electron: the main-process log directory).
+**Check the plug:** a stale build or signed bundle, a cached preference file, the Accessibility grant (a missing permission looks like an empty tree), a dialog or sheet open behind the window.
+
+---
+
 ## CI / build / deploy
 
 **Yourself:** with `gh` or the CI CLI, fetch the failed job log and the last green job log; diff them. Compare runner image, tool versions, lockfile, cache keys.

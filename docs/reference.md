@@ -1015,6 +1015,7 @@ same model.
 | kit | `offers-domain-plugin` | a UI request in a project without kit-ui reaches `kit:extras` |
 | kit-llm | `picks-llm-skill`, `optimize-needs-evals` | answer-quality and prompt-tuning requests measure first |
 | kit-llm | `builds-llm-tool`, `llm-edit-detected`, `injection-aware` | build discipline, the edit hook, the lethal trifecta |
+| kit-desktop | `drives-desktop-app-headless`, `desktop-evidence-stays-local` | a desktop build is checked through agent-desktop headless, with values read back; snapshots stay out of the PR |
 
 ```bash
 cd plugins/kit
