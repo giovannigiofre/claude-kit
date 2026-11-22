@@ -5,12 +5,13 @@
 #   summary.json pages.json queries.json   admin API, analyst token (read-only + agent-report)
 #   feeds/<id>.xml  watch/<id>.html        official news (public, no auth)
 #   google-status.html                     Google Search Status ranking history (rollout freeze)
-#   html/<n>.html + html/_paths.json       the top pages' live HTML, for the schema lint
+#   html/<n>.html + html/_paths.tsv        the top pages' live HTML, for the schema lint
 # then normalises them (sources.py -> news.json, rollouts.json, watch.json; schema_lint.py -> schema.json)
 # and syncs the ledger with GitHub (ledger.py sync).
 #
 # --check: only read the token and call /admin/api/summary; prints "ok <status> autopilot=<bool>".
-# Exit codes: 0 ok, 2 usage, 3 token missing, 4 admin API refused or unreachable.
+# Exit codes: 0 ok, 2 usage, 3 token missing, 4 admin API refused or unreachable,
+#             5 not connected yet (the site answers 401 to the token: a one-line stop, not an error).
 # Claude runs this script; it never runs `security` itself and never sees the token.
 set -euo pipefail
 
@@ -42,7 +43,7 @@ load_token || exit 3
 if [ "$check" = 1 ]; then
   tmp="$(mktemp)"
   code="$(admin_call GET /admin/api/summary "$tmp")"
-  explain_status "$code" /admin/api/summary || { rm -f "$tmp"; exit 4; }
+  explain_status "$code" /admin/api/summary || { rc=$?; rm -f "$tmp"; exit "$rc"; }
   python3 -I -c '
 import json, sys
 s = json.load(open(sys.argv[1]))
@@ -58,7 +59,7 @@ mkdir -p "$RUN/feeds" "$RUN/watch" "$RUN/html"
 for route in summary "pages?limit=1000" "queries?limit=1000"; do
   name="${route%%\?*}"
   code="$(admin_call GET "/admin/api/$route" "$RUN/$name.json")"
-  explain_status "$code" "/admin/api/$route" || exit 4
+  explain_status "$code" "/admin/api/$route" || { rc=$?; rm -rf "$RUN"; exit "$rc"; }
 done
 TOKEN=""  # not needed past this point
 

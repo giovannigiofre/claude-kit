@@ -36,7 +36,9 @@ prompt: |
 
   Method
   1. Pull: `bash AGENT_DIR/scripts/pull.sh PROJECT`. Exit 3 (token
-     missing) or 4 (API refused): stop, report the script's one line.
+     missing), 4 (API refused or unreachable) or 5 (not connected yet:
+     the site answers 401, e.g. nettoswiss before its next deploy): stop
+     with the script's one line as STOPPED, post nothing.
   2. Score: `python3 -I AGENT_DIR/scripts/score.py RUN --project PROJECT`.
      If `decision.action` is `stop` (pre-launch, autopilot paused, no data,
      cap of open PRs reached), go to step 7 with that one line.

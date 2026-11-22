@@ -376,6 +376,14 @@ class PullToken(Case):
         self.assertIn("security add-generic-password -U -s seo-growth-test-item-that-does-not-exist", p.stderr)
         self.assertFalse(list((self.tmp / "state").rglob("summary.json")), "nothing pulled without a token")
 
+    def test_401_is_not_connected_yet(self):
+        sh = f'. "{SCRIPTS}/_token.sh"; ORIGIN=https://nettoswiss.ch; explain_status 401 /admin/api/summary; echo "rc=$?"'
+        p = subprocess.run(["bash", "-c", sh], capture_output=True, text=True)
+        self.assertIn("rc=5", p.stdout)
+        self.assertIn("not connected yet: https://nettoswiss.ch answers 401", p.stderr)
+        other = subprocess.run(["bash", "-c", sh.replace("401", "500")], capture_output=True, text=True)
+        self.assertIn("rc=4", other.stdout)
+
     def test_unknown_project(self):
         p = subprocess.run(["bash", str(SCRIPTS / "pull.sh"), "nope", "--check"], capture_output=True, text=True, env=self.env)
         self.assertEqual(p.returncode, 2)

@@ -35,4 +35,4 @@ code="$(admin_call POST /admin/api/agent-report "$out" "$body")"
 TOKEN=""
 echo "HTTP $code $(head -c 500 "$out")"
 rm -f "$out"
-explain_status "$code" /admin/api/agent-report || exit 4
+explain_status "$code" /admin/api/agent-report || exit $?

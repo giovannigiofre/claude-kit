@@ -48,7 +48,7 @@ admin_call() {
 explain_status() {
   case "$1" in
     2??) return 0 ;;
-    401) echo "token rejected (401) on $2: the Worker's ANALYST_TOKEN_SHA256 does not match the Keychain token (nettoswiss needs a deploy after the GitHub secret changes)." >&2 ;;
+    401) echo "not connected yet: $ORIGIN answers 401 to the analyst token on $2 (its Worker's ANALYST_TOKEN_SHA256 does not match yet; nettoswiss picks the GitHub secret up at its next production deploy)." >&2; return 5 ;;
     403) echo "forbidden (403) on $2: the analyst token cannot call this endpoint." >&2 ;;
     429) echo "rate limited (429) on $2: 60 requests a minute per Worker; try the next run." >&2 ;;
     000) echo "network error on $2: could not reach $ORIGIN." >&2 ;;

@@ -119,7 +119,9 @@ What `score.py` enforces before Claude sees a candidate:
    digest as the GitHub secret `ANALYST_TOKEN_SHA256` (live at the next deploy). Then
    `security add-generic-password -U -s seo-growth-analyst -a "$USER" -w` and paste the token at the
    prompt. Check: `bash omnigent/agents/seo-growth/scripts/pull.sh fiscometro --check` prints
-   `ok ok autopilot=true site=https://fiscometro.it`. Only `pull.sh` and `report.sh` read the item; the kit's guard blocks
+   `ok ok autopilot=true site=https://fiscometro.it`. A site that answers 401 (nettoswiss until its next
+   production deploy picks up the secret) gives exit 5, `not connected yet: ...`: the run stops with that
+   one line. Only `pull.sh` and `report.sh` read the item; the kit's guard blocks
    `security find-generic-password` in Claude's own shell.
 2. Read `data/calendar.json` once: check each date against its source, then set
    `owner_reviewed_on`. Until then no seasonal candidate is made, and an entry counts only when its
