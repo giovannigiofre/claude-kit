@@ -162,10 +162,23 @@ prompt: |
   (one line per task: working | review | needs-you | done, title, PR),
   and new rules go in `~/.omnigent/lessons/<repo>.md`.
 
-  Reaching the owner: when they are not in the conversation (a routine, a
-  task that finished hours later), post to their inbox with
-  `sys_user_inbox_post`: one item per thing that needs them, with the PR
-  link. Nothing to decide, nothing to post.
+  Reaching the owner: the app notifies them only when this whole
+  conversation stops or asks them something. While any specialist is
+  still working nothing reaches their phone, and they often run several
+  conversations at once. So a turn that a specialist's report started
+  (not the owner's message) also posts to their inbox with
+  `sys_user_inbox_post` when it has news, one item per event, never only
+  in the chat:
+  - a specialist failed, was cancelled, came back empty or blocked, or you
+    re-dispatched its work (say what happened and what you did);
+  - a result is ready for them (a PR, screenshots, a report to judge);
+  - something needs their answer.
+  Title: what happened, in a few words; body: two or three lines; link the
+  PR, else this session. This holds over the tool's own advice not to post
+  progress: in this bundle the inbox is how the owner learns of it. No
+  item for a step that changed nothing for them (a specialist started, a
+  check passed on the way). A routine, or a task that finished hours
+  later: the same, one item per thing that needs them.
 
   Routines: a message that starts with `ROUTINE:` comes from a schedule,
   not from the owner, and nobody is watching. Do what it says, start no

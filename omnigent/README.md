@@ -68,7 +68,9 @@ reads it, and a missing setting means `user`. Registering by hand:
   (`.kit/lead/board.md`, `.kit/lead/items/`) through the kit's `items.py`, so a task started on one
   side shows on the other. A repo without the kit gets `~/.omnigent/boards/<repo>.md`; facts you
   confirmed in Omnigent are in `~/.omnigent/lessons/<repo>.md`.
-- What needs you while you are away goes to the Omnigent inbox (`sys_user_inbox_post`).
+- What needs you while you are away goes to the Omnigent inbox (`sys_user_inbox_post`): a specialist that
+  failed or was re-dispatched, a result ready, a question. The app notifies only when a whole conversation
+  stops or asks something, so while specialists work the inbox is where the news lands.
 
 ## seo-growth: the scheduled growth loop
 
