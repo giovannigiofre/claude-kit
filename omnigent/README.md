@@ -94,18 +94,20 @@ scored pass, real screenshots at 390/768/1440px and a live preview on the tailne
 copied from Open Design, their tag and the update rule are in
 `agents/designer/skills/design-craft/references/open-design/UPSTREAM.md`.
 
-## Cloudflare without signing in
+## Cloudflare with one sign-in
 
-Agents use one scoped Cloudflare API token kept in the login Keychain; no OAuth that expires,
-nothing in a repo or config file.
+Two pieces, each signed in once, both refreshing on their own:
 
-1. In the Cloudflare dashboard, My Profile, API Tokens, Create Token, template "Edit Cloudflare
-   Workers", then add D1 Edit, Zone Read, DNS Edit and Account Analytics Read. Account
-   Resources: only the accounts the projects deploy to; Zone Resources: only their zones.
-2. Store it (the prompt keeps it out of the shell history):
-   `security add-generic-password -a "$USER" -s cloudflare-api-token -w`
-3. wrangler reads `CLOUDFLARE_API_TOKEN`: export it from the Keychain in `~/.zshenv`
-   (`security find-generic-password -s cloudflare-api-token -w`).
-4. The Cloudflare MCP server, user scope, with a `headersHelper` that prints
-   `{"Authorization":"Bearer <token>"}` from the Keychain, so the token is read per request.
-5. Check from a headless worker: `wrangler whoami`, then a preview deploy.
+- **The Cloudflare MCP tools** come from claude.ai connectors, so they reach every Claude Code
+  session on the account: the terminal, `lead` and every specialist. "Cloudflare Developer
+  Platform" (Workers, KV, R2, D1) is already on the account and only needs Connect in claude.ai,
+  Settings, Connectors. For DNS, zones and the rest of the API, add the custom connector
+  `https://mcp.cloudflare.com/mcp` there. claude.ai holds and refreshes the tokens; nothing is on
+  this Mac or in a repo.
+- **wrangler** (deploys) is signed in with OAuth on this Mac (`wrangler login`, with
+  `offline_access`, so it refreshes itself); `npx wrangler whoami` shows the account and scopes.
+  Another Cloudflare account needs its own `wrangler login`.
+
+Omnigent also has a server-side MCP registry (`OMNIGENT_MCP_REGISTRY`), but it needs an
+encrypted credential store and an OAuth client of our own: worth it on a shared server, not
+here.
