@@ -46,3 +46,12 @@ curl -s -X POST http://127.0.0.1:6767/v1/projects -H 'Content-Type: application/
 - Worktrees live in `~/.omnigent/worktrees/<repo>/<slug>`, never the main checkout.
 - `reviewer` checks every non-trivial PR before you hear it is ready; you merge.
 - A short board per repo at `~/.omnigent/boards/<repo>.md` carries state between conversations.
+
+## Evals
+
+`evals/` measures `engineer` and `reviewer` on real tasks from the owner's projects. Each task is
+graded on its outcome: for the engineer, the reference PR's hidden tests plus a rubric; for the
+reviewer, seeded and real defects it must catch and clean PRs it must pass. Each task runs 3 times
+and reports pass@1 and pass^3. The cases come from private repos, so they live outside this public
+repo (`~/Documents/omnigent-research/evals/`). A prompt change is kept only if it wins an A/B run
+on the suite and the owner approves it. See [evals/README.md](evals/README.md).
