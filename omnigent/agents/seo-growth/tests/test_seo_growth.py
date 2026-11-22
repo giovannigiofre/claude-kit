@@ -14,6 +14,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -660,6 +661,33 @@ class Ship(Case):
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertIn("tracked files changed while the gate ran", p.stderr)
         self.assertFalse(self.remote_has_branch())
+
+    def test_body_file_inside_the_repo_refuses(self):
+        # a body written in the worktree would dirty the tree or be committed: refuse it by path, clearly
+        for rel in ("pr-body.md", "sub/pr-body.md"):
+            inside = self.wt / rel
+            inside.parent.mkdir(exist_ok=True)
+            inside.write_text("Intent: x\n")
+            self.body = inside
+            p = self.ship("true")
+            self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+            self.assertIn("is inside the repo", p.stderr)
+            self.assertNotIn("gate:", p.stdout)
+            self.assertFalse(self.remote_has_branch())
+            inside.unlink()
+        # the same body outside the repo ships
+        self.body = self.tmp / "body.md"
+        self.assertEqual(self.ship("true").returncode, 0)
+
+    def test_prompt_handles_every_ship_exit_code(self):
+        # the unattended agent must know where the body goes and what to do on each refusal
+        prompt = (AGENT / "config.yaml").read_text()
+        self.assertIn("OUTSIDE WORKTREE", prompt)
+        self.assertIn("mktemp", prompt)
+        codes = set(re.findall(r"\bexit ([1-9])\b", (SCRIPTS / "ship.sh").read_text()))
+        self.assertEqual(codes, {"2", "6", "7", "8"})
+        for code in sorted(codes):
+            self.assertRegex(prompt, rf"\b{code} \(", f"ship.sh exit {code} has no instruction in the prompt")
 
     def test_refuses_the_default_branch_and_dirty_trees(self):
         (self.wt / "page.md").write_text("dirty\n")

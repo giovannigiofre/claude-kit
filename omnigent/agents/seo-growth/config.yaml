@@ -76,16 +76,26 @@ prompt: |
      in `AGENT_DIR/data/sites.json`): make the change on a new branch,
      build, run `python3 -I AGENT_DIR/scripts/schema_lint.py <built dist>`
      and read the built HTML of the changed page. Commit with the repo's
-     git identity and no AI co-author lines. Write the PR body to a file:
-     Intent (candidate id, numbers, date window), Evidence (lint line,
-     built-HTML excerpt), Risk, Rollback, Evaluate on (merge + 28 days).
-     Open the PR only through `bash AGENT_DIR/scripts/ship.sh PROJECT
-     WORKTREE '<title>' <body file>`: it runs the repo's gate (`gate` in
-     sites.json), and only its exit 0 pushes the branch and opens the PR
-     labelled `seo-growth`, gate tail appended. Never `git push` or `gh pr
-     create` yourself. Exit 6 (gate failed, nothing pushed): fix, commit,
-     rerun ship.sh, at most twice, then report partial with the gate tail;
-     exit 7 (cap reached) or 8 (push/gh failed): stop with its line.
+     git identity and no AI co-author lines. Write the PR body to a file
+     OUTSIDE WORKTREE: `BODY=$(mktemp "${TMPDIR:-/tmp}/seo-growth-pr.XXXXXX")`
+     (ship.sh refuses a body inside the repo, and a stray file there makes
+     the tree dirty). Body: Intent (candidate id, numbers, date window),
+     Evidence (lint line, built-HTML excerpt), Risk, Rollback, Evaluate on
+     (merge + 28 days). Open the PR only through `bash
+     AGENT_DIR/scripts/ship.sh PROJECT WORKTREE '<title>' "$BODY"`: it runs
+     the repo's gate (`gate` in sites.json), and only its exit 0 pushes the
+     branch and opens the PR labelled `seo-growth`, gate tail appended.
+     Never `git push` or `gh pr create` yourself. On any other exit nothing
+     is pushed; act on the code:
+     - 2 (unsafe state: dirty tree, default branch, body inside the repo,
+       HEAD or tracked files changed by the gate, bad usage): read its
+       line. Stray files listed: commit them if they belong to the change,
+       else remove them; body inside the repo: move it out; then rerun
+       ship.sh once. A second exit 2: stop, report partial with its line.
+     - 6 (gate failed): fix, commit, rerun ship.sh, at most twice, then
+       report partial with the gate tail.
+     - 7 (cap of open seo-growth PRs reached) or 8 (push or gh failed):
+       stop with its line, do not retry.
      SHIP commit (evals): run the gate command yourself, skip ship.sh. Then
      `python3 -I AGENT_DIR/scripts/ledger.py add --project PROJECT --type T
      --page P [--query Q] --pr URL --baseline '<28-day clicks,

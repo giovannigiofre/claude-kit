@@ -7,7 +7,8 @@
 # branch, never forced) and opens the PR labelled `seo-growth`, with the gate's tail appended to the body.
 # Prints the PR URL on the last line.
 #
-# Exit codes: 0 PR opened, 2 usage or unsafe state (default branch, uncommitted or untracked changes),
+# Exit codes: 0 PR opened, 2 usage or unsafe state (default branch, uncommitted or untracked changes,
+#             body file inside the repo),
 #             6 gate failed (no PR), 7 cap of open seo-growth PRs reached, 8 push or gh failed.
 set -euo pipefail
 
@@ -26,6 +27,13 @@ max_open="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["
   "${SEO_GROWTH_DATA:-$AGENT_DIR/data}/thresholds.json")"
 
 cd "$wt"
+# The body must live outside the repo: inside it, it would dirty the tree (and refuse below) or be committed.
+top="$(git rev-parse --show-toplevel)"
+top="$(cd "$top" && pwd -P)"
+body_real="$(cd "$(dirname "$body")" && pwd -P)/$(basename "$body")"
+case "$body_real" in
+  "$top"/*) echo "body file $body is inside the repo ($top): write it outside, e.g. mktemp \"\${TMPDIR:-/tmp}/seo-growth-pr.XXXXXX\"" >&2; exit 2 ;;
+esac
 branch="$(git rev-parse --abbrev-ref HEAD)"
 default="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
 case "$branch" in
