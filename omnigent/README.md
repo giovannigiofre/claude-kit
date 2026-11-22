@@ -197,10 +197,14 @@ here.
 Omnigent wakes `lead` only for a specialist turn that `lead` started. When a specialist runs a
 sub-agent in the background and ends its turn, the turn Claude Code starts later to collect the
 result reaches nobody. Prompts alone did not stop it, so the host's LaunchAgent
-(`~/Library/LaunchAgents/ai.omnigent.host.plist`) sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` in
-`EnvironmentVariables`: every Claude Code that Omnigent launches runs sub-agents in the foreground
-and gets no `run_in_background`. The terminal is unaffected. `omnigent host enable` rewrites the
-plist, so add the variable again after it.
+(`~/Library/LaunchAgents/ai.omnigent.host.plist`) sets two keys in `EnvironmentVariables`:
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, and
+`OMNIGENT_RUNNER_ENV_PASSTHROUGH=CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`. The host passes only an
+allowlist of variables to the sessions it launches; without the second key the first stays in the
+host process and never reaches Claude Code. With both, every Claude Code that Omnigent launches runs
+sub-agents in the foreground and gets no `run_in_background`. Check it on a running specialist with
+`ps eww -p <pid> | tr ' ' '\n' | grep DISABLE_BACKGROUND`. The terminal is unaffected.
+`omnigent host enable` rewrites the plist, so add both keys again after it.
 
 ## Old screenshots
 
