@@ -811,7 +811,9 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
   compaction) prints one line that makes the session the coordinator: every message is handled with
   `kit:lead`, which answers a question in place, makes a small change itself and starts background
   threads for the rest. It is a hook, not the mod, so it works in a cloud session and over Remote
-  Control as well. Not printed in a headless run (`KIT_HEADLESS`), in a subagent, or when
+  Control as well. Not printed in a headless run (`KIT_HEADLESS`), in a subagent, in a session an
+  Omnigent runner launched (`OMNIGENT_RUNNER_ID`: Omnigent's `lead` agent coordinates, see
+  [omnigent/](../omnigent/README.md); gates and project rules stay on), or when
   `~/.claude/kit.json` says `{"mode": "light"}` (the personal off switch: a normal session, with
   `/kit:lead <work>` when you want the coordinator). Until 2026-11 the mod added this line per
   prompt in a "loop" mode and had light and ask modes beside it; they were removed because the

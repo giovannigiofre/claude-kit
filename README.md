@@ -131,6 +131,11 @@ what you say fits it; one listed with a slash runs only when typed):
 | `kit-llm` | `kit-llm:llm-build` (build checklist A-H for code that calls an LLM), `kit-llm:llm-evals` (error analysis, calibrated judges, then prompt optimization or model choice), and a hook that spots LLM code on edit |
 | `kit-desktop` | `kit-desktop:desktop` (a native desktop app seen and operated through its accessibility tree with Vercel Labs' agent-desktop CLI: headless, from a thread too, evidence as values read back; the review is in CATALOG.md) |
 
+**Omnigent bundle** ([`omnigent/`](omnigent/README.md)): the same way of working on
+[Omnigent](https://omnigent.ai), for the phone and an always-on host: an orchestrator `lead` and
+specialists (engineer, reviewer, researcher, designer, seo), each a Claude Code session with this
+kit's gates. The kit stays the same from the terminal; under Omnigent its coordinator line is off.
+
 **Native features the kit uses instead of its own copies:** `/code-review`, `/simplify`,
 `/goal`, `/loop`, `/autofix-pr`, agent view (`claude agents`), background agents with per-call
 `effort` and `isolation: "worktree"`, SendMessage to resume a thread with its context, Monitor

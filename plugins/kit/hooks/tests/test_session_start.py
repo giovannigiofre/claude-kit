@@ -205,6 +205,8 @@ def main():
         assert coordinator in run({"cwd": str(repo), "source": "resume"}).splitlines()
         assert "coordinates" not in run({"cwd": str(repo), "source": "startup"}, KIT_HEADLESS="1"), "not headless"
         assert "coordinates" not in run({"cwd": str(repo), "source": "startup", "agent_id": "a1"}), "not a subagent"
+        omni = run({"cwd": str(repo), "source": "startup"}, OMNIGENT_RUNNER_ID="runner_1")
+        assert "coordinates" not in omni and "kit harness active" in omni, "Omnigent's orchestrator coordinates"
         light = Path(tmp) / "light-home"
         (light / ".claude").mkdir(parents=True)
         (light / ".claude" / "kit.json").write_text(json.dumps({"machineSetup": "declined", "mode": "Light"}))
