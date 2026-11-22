@@ -133,7 +133,7 @@ what you say fits it; one listed with a slash runs only when typed):
 
 **Omnigent bundle** ([`omnigent/`](omnigent/README.md)): the same way of working on
 [Omnigent](https://omnigent.ai), for the phone and an always-on host: an orchestrator `lead` and
-specialists (engineer, reviewer, researcher, designer, seo), each a Claude Code session with this
+specialists (engineer, reviewer, researcher, designer, seo, seo-growth), each a Claude Code session with this
 kit's gates. The kit stays the same from the terminal; under Omnigent its coordinator line is off.
 
 **Native features the kit uses instead of its own copies:** `/code-review`, `/simplify`,

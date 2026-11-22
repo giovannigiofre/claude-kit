@@ -1,0 +1,54 @@
+{
+ "site": "https://fiscometro.it",
+ "generatedAt": "2026-10-20T05:17:00.000Z",
+ "status": "ok",
+ "hasData": true,
+ "autopilot": {
+  "enabled": true,
+  "changedAt": null,
+  "lastRun": null
+ },
+ "sources": [],
+ "kpis": {
+  "gsc": {
+   "28d": {
+    "clicks": {
+     "value": 1813,
+     "previous": null,
+     "change": null
+    },
+    "impressions": {
+     "value": 62280,
+     "previous": null,
+     "change": null
+    },
+    "ctr": {
+     "value": 0.029,
+     "previous": null,
+     "change": null
+    },
+    "position": {
+     "value": 6.1,
+     "previous": null,
+     "change": null
+    }
+   }
+  },
+  "cloudflare": {
+   "28d": {
+    "aiReferrals": {
+     "value": 41,
+     "previous": null,
+     "change": null
+    },
+    "aiCrawls": {
+     "value": 1260,
+     "previous": null,
+     "change": null
+    }
+   }
+  }
+ },
+ "indexing": {},
+ "annotations": []
+}
