@@ -13,6 +13,7 @@ omnigent/
   agents/designer/       UI work with Open Design's craft rules, screenshots, a live preview
     skills/              design-brief, design-system, design-craft, design-review
   agents/seo/            search and content: audit, or a PR
+  skills/                lead's: new-project, onboard-repo (with omni_project.py), new-agent
 ```
 
 Every specialist is a `claude-native` session: the real Claude Code CLI, with your plugins,
@@ -29,16 +30,28 @@ omnigent agent add ~/Documents/repositories/claude-kit/omnigent
 Re-running it replaces the installed copy. The agent is stored on the server, so it shows in the
 new-session picker on the Mac and on the phone.
 
-## Projects
+## Projects and Studio
 
-A project in Omnigent is a folder with `lead` as its default agent. Create one in the app
-(New project, Folder) or with the API:
+A project in Omnigent is a folder with `lead` as its default agent. **Studio**
+(`~/Documents/studio`, local git only) is the project for everything that is not one project's
+work yet: ideas (`ideas/<slug>/`), agents being onboarded (`agents/<name>/`), repos to start on.
+From Studio, `lead` follows its skills:
 
-```sh
-curl -s -X POST http://127.0.0.1:6767/v1/projects -H 'Content-Type: application/json' \
-  -H 'Origin: omnigent://internal' \
-  -d '{"name":"<name>","config":{"agent_id":"<lead id from omnigent agent list>","workspace":"<abs path>"}}'
-```
+- `new-project`: questions, research by `researcher` and `seo` into the idea folder, a brief, then
+  one approval message with the name, where the repo goes (your account or an org: always asked)
+  and its visibility (always asked). It creates the repo with only a README and hands off.
+- `onboard-repo`: an existing repo, or the one `new-project` just made. It writes a handoff to
+  `~/Documents/studio/handoffs/<repo>.md` and runs
+  `skills/onboard-repo/scripts/omni_project.py register <name> <path> --handoff <file>`, which
+  registers the project and opens its first conversation on this Mac with the handoff as its
+  first message. That conversation sets up the kit (and the scaffold, for a new repo) in one PR,
+  brings the Studio notes into `docs/`, writes the project card, board and lessons, and adds the
+  morning check if you asked for it.
+- `new-agent`: role, research, a draft in this repo with eval cases, a live trial, a PR.
+
+Who merges is per project, in `.claude/kit.json` (`lead.merge`: `user` or `agent`); `lead`
+reads it, and a missing setting means `user`. Registering by hand:
+`python3 omnigent/skills/onboard-repo/scripts/omni_project.py register <name> <abs path>`.
 
 ## How lead works
 

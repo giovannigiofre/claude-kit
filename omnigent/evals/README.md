@@ -67,6 +67,11 @@ A FAIL case passes only if the verdict is FAIL **and** a model judge confirms th
 does not count. CANNOT_VERIFY fails both kinds of case. A reviewer that commits to the branch it
 reviews fails the run.
 
+**Any other role** (a specialist being onboarded, see `new-agent`) is graded by the same model
+judge against `rubric.md`: what a good outcome must contain or do, and what makes it FAIL. The judge
+reads the report, and the diff when the agent changed files. `repo_path` in `case.json` points at a
+repo that is not in `REPOS`, and `--prompt <role>=<file>` overrides any role's prompt for an A/B arm.
+
 ## How a run works, and why `claude -p`
 
 Each run does this:
