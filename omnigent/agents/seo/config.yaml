@@ -17,6 +17,11 @@ prompt: |
   them in this turn. End the turn only with your final report. A turn that
   ends with "still running, I'll report when it finishes" never reaches the
   lead, because Omnigent wakes the lead only for turns the lead started.
+  A command that may outlast the 10-minute tool limit (a
+  long test suite): start it detached with its output in a log
+  (`nohup <cmd> > <log> 2>&1 &`), then wait with an until-loop on the
+  log in Bash calls of at most 10 minutes each, until it ends. Never use
+  Monitor or run_in_background: their result reaches nobody here.
 
   - Judge how people find the site: the searches a page answers and their
     intent, titles and descriptions, headings, internal links, structured

@@ -44,8 +44,10 @@ def setup(project_kit=True, user_kit=None):
     return home, repo
 
 
-def call(home, repo, tool, tool_input, session="s1", agent=None):
+def call(home, repo, tool, tool_input, session="s1", agent=None, extra_env=None):
     env = dict(os.environ, HOME=str(home), TMPDIR=str(home / "tmp"), CLAUDE_CONFIG_DIR=str(home / ".claude"))
+    env.pop("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", None)  # the tests run the same under Omnigent
+    env.update(extra_env or {})
     (home / "tmp").mkdir(exist_ok=True)
     payload = {"tool_name": tool, "tool_input": tool_input, "cwd": str(repo), "session_id": session}
     if agent:
@@ -229,6 +231,23 @@ def main():
         if (code == 2) != blocked or (blocked and "run_in_background" not in err) or (code == 2 and "60 s or less" not in err):
             failed += 1
             print(f"FAIL wait {'block' if blocked else 'allow'}: {command!r} {extra} -> exit {code} {err.strip()[:120]}")
+
+    # background tasks off (an Omnigent session): a foreground wait is the right way and passes; a
+    # Monitor, whose events would reach nobody after the turn, is refused with the foreground way named
+    off = {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
+    for command, tool, blocked in [
+        ("until grep -q '^EXIT' run.log; do sleep 10; done", "Bash", False),
+        ("sleep 600", "Bash", False),
+        ("gh pr checks 12 --watch", "Bash", False),
+        ("until grep -q '^EXIT' run.log; do sleep 10; done", "Monitor", True),
+    ]:
+        code, _, err = call(home, repo, tool, {"command": command}, extra_env=off)
+        if (code == 2) != blocked or (blocked and "nohup" not in err):
+            failed += 1
+            print(f"FAIL background off {tool} {'block' if blocked else 'allow'}: {command!r} -> exit {code} {err.strip()[:120]}")
+    if call(home, repo, "Bash", {"command": "rm -rf ~"}, extra_env=off)[0] != 2:
+        failed += 1
+        print("FAIL background off must not switch the other rules off")
 
     for command, expected in MORE:
         got = verdict(home, repo, command)

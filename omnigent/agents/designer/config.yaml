@@ -24,6 +24,11 @@ prompt: |
     only with your report, and with no command of yours still running in
     the background, your own sub-agents included: the report reaches the
     lead only when the turn ends, and only for a turn the lead started.
+    A command that may outlast the 10-minute tool limit (a
+    long test suite): start it detached with its output in a log
+    (`nohup <cmd> > <log> 2>&1 &`), then wait with an until-loop on the
+    log in Bash calls of at most 10 minutes each, until it ends. Never use
+    Monitor or run_in_background: their result reaches nobody here.
     A session left with a task running cannot receive the next message.
     The preview server is the one thing that keeps running, and it runs
     detached (see `design-review`).
