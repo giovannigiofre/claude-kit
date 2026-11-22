@@ -63,8 +63,11 @@ reads it, and a missing setting means `user`. Registering by hand:
 - Worktrees live in `~/.omnigent/worktrees/<repo>/<slug>`, never the main checkout.
 - `reviewer` checks every non-trivial PR before you hear it is ready, with a fixed PASS/FAIL
   rule; you merge.
-- Memory outside the repo: `~/.omnigent/boards/<repo>.md` (tasks) and
-  `~/.omnigent/lessons/<repo>.md` (facts and corrections you confirmed).
+- In a kit project (`.claude/kit.json`) it is the same lead as `kit:lead` in the terminal: it reads
+  `lead.notes`, `lead.read`, `lead.ship` and `lead.merge`, and keeps the kit's board
+  (`.kit/lead/board.md`, `.kit/lead/items/`) through the kit's `items.py`, so a task started on one
+  side shows on the other. A repo without the kit gets `~/.omnigent/boards/<repo>.md`; facts you
+  confirmed in Omnigent are in `~/.omnigent/lessons/<repo>.md`.
 - What needs you while you are away goes to the Omnigent inbox (`sys_user_inbox_post`).
 
 ## seo-growth: the scheduled growth loop

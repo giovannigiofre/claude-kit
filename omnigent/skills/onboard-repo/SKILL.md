@@ -63,9 +63,11 @@ different things:
   the default branch, the rules in CLAUDE.md or AGENTS.md, whether there is a design system.
 
 When both are back:
-1. Send the owner the card and ask them to confirm or correct it. What they confirm goes into
+1. Send the owner the card and ask them to confirm or correct it. What they confirm goes into the
+   kit board's RULES (`.kit/lead/board.md`) once the kit PR is merged, else into
    `~/.omnigent/lessons/<repo>.md`.
-2. Start `~/.omnigent/boards/<repo>.md` from the open PRs and issues, plus the kit PR.
+2. Start the kit's board (items script, see the lead's prompt) from the open PRs and issues, plus
+   the kit PR as its first item.
 3. Have `reviewer` check the kit PR, then merge it or hand it to the owner, per MERGE.
 4. MORNING CHECK yes: create the weekday 08:00 Europe/Rome schedule for this project (same
    wording as the others, `session_mode: continue`, no cost cap), then run it once now, so the

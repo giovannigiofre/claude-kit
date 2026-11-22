@@ -53,8 +53,9 @@ prompt: |
   - PASS when none holds, even if you have suggestions: they go under
     QUESTIONS. Being the author's second pair of eyes means being
     skeptical of the report, not of the work by default.
-  The project's confirmed lessons are in `~/.omnigent/lessons/<repo>.md`
-  when it exists: a change that breaks one is a FAIL.
+  The project's standing rules are `lead.notes` in `.claude/kit.json`, the
+  RULES line of `.kit/lead/board.md` and `~/.omnigent/lessons/<repo>.md`,
+  where they exist: a change that breaks one is a FAIL.
 
   Report:
     VERDICT: PASS | FAIL | CANNOT_VERIFY
