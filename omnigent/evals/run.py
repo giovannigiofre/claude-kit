@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Outcome evals for the Omnigent bundle's specialists (engineer, reviewer).
+"""Outcome evals for the Omnigent bundle's specialists.
+
+engineer and reviewer have their own graders; any other role (a new specialist being
+onboarded) is graded by a judge against the case's rubric.md.
 
 Each case is a real task from a project's history: a brief in the bundle's
 format, the commit it starts from, and a grader on the outcome. A run clones
@@ -95,7 +98,7 @@ def role_prompt(role: str, override: str | None) -> str:
 
 def clone(case: dict, root: Path) -> Path:
     """A throwaway clone at the case's base, with no way to push or fetch."""
-    src = REPOS[case["repo"]]
+    src = Path(case["repo_path"]).expanduser() if case.get("repo_path") else REPOS[case["repo"]]
     wt = root / "repo"
     sh(["git", "clone", "-q", "--shared", "--no-checkout", str(src), str(wt)], check=True)
     g = lambda *a: sh(["git", *a], cwd=wt, check=True)  # noqa: E731
@@ -279,6 +282,28 @@ def grade_reviewer(case: dict, wt: Path, run: dict, out: Path) -> dict:
             "judge_cost": j.get("cost_usd", 0.0)}
 
 
+def grade_rubric(case: dict, wt: Path, run: dict, out: Path) -> dict:
+    """Any other role: a judge reads the report (and the diff, if it changed files) against rubric.md,
+    which says what a good outcome must contain or do and what makes it fail."""
+    if not case["rubric"].strip():
+        raise RuntimeError(f"{case['id']}: a {case['role']} case needs a rubric.md")
+    diff = worktree_diff(case, wt)
+    (out / "agent.diff").write_text(diff)
+    task = (f"The agent was a {case['role']} specialist given this brief:\n<brief>\n" + case["brief"]
+            + "\n</brief>\n\nGrading rubric:\n<rubric>\n" + case["rubric"] + "\n</rubric>\n\n"
+            "PASS only if the outcome meets every point the rubric requires and none of its FAIL "
+            "conditions, the agent stayed in the brief's SCOPE, and its report claims nothing it did "
+            "not do or cite.")
+    material = f"<agent_report>\n{run['report'][:30000]}\n</agent_report>"
+    if diff.strip():
+        material += f"\n\n<agent_diff>\n{diff[:90000]}\n</agent_diff>"
+    j = judge(task, material)
+    return {"pass": j["verdict"] == "PASS", "judge": j, "judge_cost": j.get("cost_usd", 0.0)}
+
+
+GRADERS = {"engineer": grade_engineer, "reviewer": grade_reviewer}
+
+
 # ---------------------------------------------------------------- run
 
 def one_run(case: dict, n: int, prompt: str, outdir: Path, args) -> dict:
@@ -293,7 +318,7 @@ def one_run(case: dict, n: int, prompt: str, outdir: Path, args) -> dict:
         log(f"{case['id']}#{n}: agent")
         run = run_agent(case, prompt, wt, root, out, args.model)
         log(f"{case['id']}#{n}: grade ({run['seconds']}s, ${run['cost_usd']:.2f})")
-        g = (grade_engineer if case["role"] == "engineer" else grade_reviewer)(case, wt, run, out)
+        g = GRADERS.get(case["role"], grade_rubric)(case, wt, run, out)
         rec.update(run=n, seconds=run["seconds"], cost_usd=run["cost_usd"], turns=run["turns"],
                    rc=run["rc"], grade=g, passed=g["pass"])
         (out / "report.md").write_text(run["report"] or "")
@@ -353,7 +378,9 @@ def cmd_run(args) -> None:
     variant = args.variant or "baseline"
     outdir = args.home / "results" / f"{stamp}-{variant}"
     outdir.mkdir(parents=True, exist_ok=True)
-    prompts = {role: role_prompt(role, getattr(args, f"{role}_prompt")) for role in {c["role"] for c in cases}}
+    overrides = dict(o.split("=", 1) for o in args.prompt)
+    prompts = {role: role_prompt(role, overrides.get(role) or getattr(args, f"{role}_prompt", None))
+               for role in {c["role"] for c in cases}}
     for role, p in prompts.items():
         (outdir / f"prompt-{role}.md").write_text(p)
     t0 = time.time()
@@ -394,7 +421,9 @@ def cmd_validate(args) -> None:
 
 def cmd_list(args) -> None:
     for c in load_cases(args.home, args.cases):
-        extra = c.get("expect", "") if c["role"] == "reviewer" else f"{len(c.get('hidden_tests', []))} hidden test files"
+        extra = (c.get("expect", "") if c["role"] == "reviewer"
+                 else f"{len(c.get('hidden_tests', []))} hidden test files" if c["role"] == "engineer"
+                 else "rubric")
         print(f"{c['role']:9} {c['id']:40} {c.get('source', ''):16} {extra}  {c.get('pr', '')}")
 
 
@@ -413,6 +442,8 @@ def main() -> None:
             sp.add_argument("--variant", default=None, help="label for an A/B arm")
             sp.add_argument("--engineer-prompt", default=None, help="config.yaml or .md to use instead of the bundle's")
             sp.add_argument("--reviewer-prompt", default=None)
+            sp.add_argument("--prompt", action="append", default=[], metavar="ROLE=PATH",
+                            help="prompt override for any role, e.g. seo=variants/x/config.yaml")
             sp.add_argument("--keep", action="store_true", help="keep the throwaway clones")
     rp = sub.add_parser("report")
     rp.add_argument("dir", type=Path)
