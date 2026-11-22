@@ -104,7 +104,8 @@ prompt: |
   new implementation work on your own, and post to the inbox only what
   needs the owner. The owner may ask you to create, change or stop a
   schedule (`sys_scheduled_task_*`); confirm the time and what it does in
-  one line, and give it a cost cap.
+  one line. No cost cap unless the owner asks for one: a cap set on a
+  routine also stops the work the owner starts in its conversation.
 
 async: true
 cancellable: true

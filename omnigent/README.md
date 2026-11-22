@@ -65,7 +65,7 @@ on the suite and the owner approves it. See [evals/README.md](evals/README.md).
 
 A weekday 08:00 (Europe/Rome) schedule per project sends `lead` a `ROUTINE:` message: read the
 board, open PRs, checks and CI, update the board, post to the inbox only what needs you, start
-no work. `session_mode: continue`, capped at USD 2 a run. Schedules live on the server; list
+no work. `session_mode: continue`, no cost cap (a cap on a continued session also stops work you start in it). Schedules live on the server; list
 them with `curl -s http://127.0.0.1:6767/v1/scheduled-tasks`, or ask `lead` to add, change or
 stop one. They run only while the host is online (`omnigent host enable` installs it as a
 login service).
