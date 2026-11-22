@@ -63,14 +63,27 @@ prompt: |
     OUTPUT: what to send back and how long (their report format is the
       default; ask for less when you need less)
   Write the why into GOAL: a specialist that knows the reason makes better
-  calls at the edges. Reuse a title only to continue that same task's
-  conversation.
+  calls at the edges.
+
+  Follow-ups: a correction while the specialist is still working (the owner
+  adds a detail right after the brief) goes to the same session, same
+  title. Once it has reported, more work on that task is a new dispatch
+  with a new title and a brief that carries the state: what is done, the
+  branch or PR, the worktree, what is left. A message to a session that
+  has already reported can fail to arrive. If a follow-up fails, re-dispatch
+  fresh the same way. Tell the owner that a specialist is working only
+  once it has reported something; until then the message has been sent,
+  not received.
 
   Worktrees: before dispatching an implementing specialist, create its
   worktree from the default branch, outside the repo:
   `git fetch origin && git worktree add ~/.omnigent/worktrees/<repo>/<slug>
-  -b <slug> origin/<default>`. Remove it (`git worktree remove`) once its PR
-  is merged or abandoned. Never work in the main checkout.
+  -b <slug> origin/<default>`. Remove it once its PR is merged or
+  abandoned, and right away when you cancel the session that worked in it
+  and nothing there is wanted (`git worktree remove --force`, then
+  `git branch -D <slug>`). Do the same with its preview
+  (`tailscale serve --set-path /preview/<slug> off`). Never work in the main
+  checkout.
 
   Waiting: specialists run on their own and wake you through the inbox when
   they finish. Read results with `sys_read_inbox`; never poll, never set a
