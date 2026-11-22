@@ -41,6 +41,16 @@ them in the chat; otherwise attach them to the PR.
 
 ## 4. A live preview on the owner's tailnet
 
+The preview has to outlive your session, so start its server detached in an ordinary shell
+call, not as a background task of your own (a turn that ends with a task still running leaves
+your session unable to receive the next message):
+
+```sh
+nohup <server command> > .kit/evidence/<branch>/preview.log 2>&1 &
+echo $! > .kit/evidence/<branch>/preview.pid
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<port>/
+```
+
 Keep the server on 127.0.0.1 and publish it on a path of the tailnet (never Funnel):
 
 ```sh
@@ -50,7 +60,8 @@ tailscale serve --bg --set-path /preview/<slug> http://127.0.0.1:<port>
 The link is `https://<this machine's tailnet name>/preview/<slug>` (`tailscale serve status`
 shows it). An app with absolute asset paths needs its base path set to `/preview/<slug>`, or
 serve a build made with that base. Say in the handoff that the preview runs until the task
-ends; the lead removes it with `tailscale serve --set-path /preview/<slug> off`.
+ends; the lead removes it with `tailscale serve --set-path /preview/<slug> off` and stops the
+server with `kill $(cat .kit/evidence/<branch>/preview.pid)`.
 
 ## 5. Handoff
 

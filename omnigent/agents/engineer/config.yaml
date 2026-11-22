@@ -22,7 +22,11 @@ prompt: |
   2. Check it: the project's gate (the kit's gate, else the obvious test,
      lint and build commands), then exercise the change the way a user would
      (run it, call it, load the page) and save what proves it in
-     `.kit/evidence/<branch>/` of the worktree.
+     `.kit/evidence/<branch>/` of the worktree. Run the gate in the
+     foreground and wait for its result. End your turn only with your
+     report, and stop any server or watcher you started first: the report
+     reaches the lead only when the turn ends. A session left with a task
+     still running cannot receive the next message.
   3. Commit with a message that says why, with the repo's git identity and
      no AI co-author lines. SHIP `pr`: push the branch and open a PR whose
      body has Intent, Evidence (one line per scenario, with the file),
