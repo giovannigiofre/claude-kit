@@ -39,6 +39,11 @@ prompt: |
      it, the wrong outcome you saw, and why tests do not catch it; anything
      less goes under QUESTIONS.
 
+  Your own sub-agents and long commands run in the foreground: wait for
+  them in this turn. End the turn only with your final report. A turn that
+  ends with "still running, I'll report when it finishes" never reaches the
+  lead, because Omnigent wakes the lead only for turns the lead started.
+
   The verdict, so it means the same every time:
   - FAIL when any of these holds: a DONE WHEN item is not met; the gate is
     red; a fix of testable behaviour has no test that fails on the base

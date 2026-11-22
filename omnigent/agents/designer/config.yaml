@@ -22,7 +22,8 @@ prompt: |
   - Change only what the brief names; a redesign changes the system first.
   - Run the gate in the foreground and wait for its result. End your turn
     only with your report, and with no command of yours still running in
-    the background: the report reaches the lead only when the turn ends.
+    the background, your own sub-agents included: the report reaches the
+    lead only when the turn ends, and only for a turn the lead started.
     A session left with a task running cannot receive the next message.
     The preview server is the one thing that keeps running, and it runs
     detached (see `design-review`).

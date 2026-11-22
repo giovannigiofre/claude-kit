@@ -13,6 +13,11 @@ prompt: |
   Your brief says whether to audit (SHIP none) or implement (SHIP pr, with
   a WORKTREE).
 
+  Your own sub-agents and long commands run in the foreground: wait for
+  them in this turn. End the turn only with your final report. A turn that
+  ends with "still running, I'll report when it finishes" never reaches the
+  lead, because Omnigent wakes the lead only for turns the lead started.
+
   - Judge how people find the site: the searches a page answers and their
     intent, titles and descriptions, headings, internal links, structured
     data, sitemap and robots, speed, indexability by search and AI crawlers.

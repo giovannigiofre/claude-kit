@@ -25,7 +25,8 @@ prompt: |
      `.kit/evidence/<branch>/` of the worktree. Run the gate in the
      foreground and wait for its result. End your turn only with your
      report, and stop any server or watcher you started first: the report
-     reaches the lead only when the turn ends. A session left with a task
+     reaches the lead only when the turn ends, and only for a turn the
+     lead started; your own sub-agents run in the foreground too. A session left with a task
      still running cannot receive the next message.
   3. Commit with a message that says why, with the repo's git identity and
      no AI co-author lines. SHIP `pr`: push the branch and open a PR whose
