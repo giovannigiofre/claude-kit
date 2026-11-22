@@ -40,7 +40,8 @@ class Case(unittest.TestCase):
         shutil.copytree(FIX / "fiscometro-run", self.run)
         self.state = self.tmp / "state" / "fiscometro"
         self.state.mkdir(parents=True)
-        self.env = {**os.environ, "SEO_GROWTH_HOME": str(self.tmp / "state")}
+        self.env = {**os.environ, "SEO_GROWTH_HOME": str(self.tmp / "state"), "SEO_GROWTH_REPOS": str(FIX / "repos")}
+        self.env.pop("SEO_GROWTH_SITE", None)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -69,14 +70,14 @@ class Case(unittest.TestCase):
     def dropped(self, out, prefix):
         return [d["reason"] for d in out["dropped"] if d["id"].startswith(prefix)]
 
-    def data_dir(self, calendar_fn):
-        """A copy of data/ with calendar.json changed (the real file stays as the owner left it)."""
-        data = self.tmp / "data"
-        shutil.copytree(AGENT / "data", data)
-        cal = json.loads((data / "calendar.json").read_text())
+    def data_dir(self, calendar_fn, project="fiscometro"):
+        """A copy of the fixture site's data with calendar.json changed."""
+        site = self.tmp / "site"
+        shutil.copytree(FIX / "repos" / project / ".claude" / "seo-growth", site)
+        cal = json.loads((site / "calendar.json").read_text())
         calendar_fn(cal)
-        (data / "calendar.json").write_text(json.dumps(cal))
-        return {**self.env, "SEO_GROWTH_DATA": str(data)}
+        (site / "calendar.json").write_text(json.dumps(cal))
+        return {**self.env, "SEO_GROWTH_SITE": str(site)}
 
 
 class Ranking(Case):
@@ -226,7 +227,9 @@ class Seasonal(Case):
              "queries": ["forfettario"], "source_url": "https://www.agenziaentrate.gov.it/x"}
 
     def test_calendar_unread_by_owner_gives_nothing(self):
-        out = self.score()
+        env = self.data_dir(lambda c: (c.update(owner_reviewed_on=None),
+                                       c["entries"].append({**self.ENTRY, "status": "checked", "checked_for_year": 2026})))
+        out = self.score(env=env)
         self.assertFalse([c for c in out["candidates"] if c["type"] in ("seasonal", "new-guide")])
         self.assertTrue(any("not read by the owner" in n for n in out["notes"]))
 
@@ -559,7 +562,7 @@ class TokenStubs(Case):
     def test_unknown_project(self):
         p = self.sh("bash", str(SCRIPTS / "pull.sh"), "nope", "--check")
         self.assertEqual(p.returncode, 2)
-        self.assertIn("unknown project", p.stderr)
+        self.assertIn("no site data for 'nope'", p.stderr)
 
 
 class Ship(Case):
@@ -593,13 +596,13 @@ class Ship(Case):
         self.body.write_text("Intent: low-ctr:/x/\n")
 
     def ship(self, gate, **extra):
-        data = self.tmp / "data"
-        if not data.exists():
-            shutil.copytree(AGENT / "data", data)
-        sites = json.loads((data / "sites.json").read_text())
-        sites["fiscometro"]["gate"] = gate
-        (data / "sites.json").write_text(json.dumps(sites))
-        env = {**self.env, "PATH": f"{self.bin}:{os.environ['PATH']}", "SEO_GROWTH_DATA": str(data), **extra}
+        site = self.tmp / "site"
+        if not site.exists():
+            shutil.copytree(FIX / "repos" / "fiscometro" / ".claude" / "seo-growth", site)
+        data = json.loads((site / "site.json").read_text())
+        data["gate"] = gate
+        (site / "site.json").write_text(json.dumps(data))
+        env = {**self.env, "PATH": f"{self.bin}:{os.environ['PATH']}", "SEO_GROWTH_SITE": str(site), **extra}
         return subprocess.run(["bash", str(SCRIPTS / "ship.sh"), "fiscometro", str(self.wt), "seo-growth: test", str(self.body)],
                               capture_output=True, text=True, env=env, timeout=60)
 
@@ -620,9 +623,8 @@ class Ship(Case):
 
     def test_site_gates_cannot_hide_a_failure(self):
         # a `cmd; cleanup` or `cmd || true` gate would exit 0 after a failure: each gate is one plain command
-        for name, site in json.loads((AGENT / "data" / "sites.json").read_text()).items():
-            if not name.startswith("_"):
-                self.assertRegex(site["gate"], r"^pnpm [\w:-]+$", name)
+        for path in sorted((FIX / "repos").glob("*/.claude/seo-growth/site.json")):
+            self.assertRegex(json.loads(path.read_text())["gate"], r"^pnpm [\w:-]+$", str(path))
 
     def test_passing_gate_opens_a_labelled_pr(self):
         p = self.ship("echo all green")

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ship.sh <project> <worktree> <title> <body.md>
 #
-# The only way seo-growth opens a PR. Runs the site's gate (`gate` in data/sites.json) in the worktree
+# The only way seo-growth opens a PR. Runs the site's gate (`gate` in the site's .claude/seo-growth/site.json) in the worktree
 # on the committed branch; the gate's exit status alone decides: non-zero, nothing is pushed and no PR
 # is opened. On exit 0: re-checks the open-PR cap on GitHub, pushes the branch (never the default
 # branch, never forced) and opens the PR labelled `seo-growth`, with the gate's tail appended to the body.

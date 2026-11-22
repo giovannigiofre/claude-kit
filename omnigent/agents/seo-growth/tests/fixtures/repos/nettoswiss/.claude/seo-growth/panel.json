@@ -1,0 +1,45 @@
+{
+  "_comment": "Fixed AI-citation panel, run every routine with Claude's own web search. It proxies 'can a search-grounded LLM find and cite our page'; it is not Google AI Overviews or ChatGPT. Act only after runs_that_agree (thresholds.json) consecutive runs agree. Prompts never change between runs, or the trend breaks: the owner adds or retires prompts.",
+  "prompts": [
+    {
+      "id": "ns-net-100k-zh",
+      "prompt": "What is the net salary for CHF 100,000 gross in Zurich?",
+      "page": "/en/"
+    },
+    {
+      "id": "ns-tariff-code",
+      "prompt": "What does withholding tax code B1Y mean in Switzerland?",
+      "page": "/en/guide/withholding-tax-code/"
+    },
+    {
+      "id": "ns-codice-tariffale",
+      "prompt": "Cosa significa il codice tariffale C2N per l'imposta alla fonte?",
+      "page": "/it/guida/codice-tariffale/"
+    },
+    {
+      "id": "ns-quellensteuer-de",
+      "prompt": "Was bedeutet der Quellensteuer-Tarifcode A0N?",
+      "page": "/de/ratgeber/quellensteuer-tarifcode/"
+    },
+    {
+      "id": "ns-bareme-fr",
+      "prompt": "Que signifie le code de barème B1Y de l'impôt à la source ?",
+      "page": "/fr/guide/code-bareme-impot-a-la-source/"
+    },
+    {
+      "id": "ns-frontaliere",
+      "prompt": "Quanto guadagna netto un frontaliere in Ticino con 80.000 franchi lordi?",
+      "page": "/it/"
+    },
+    {
+      "id": "ns-3a",
+      "prompt": "How much can I pay into pillar 3a in 2026?",
+      "page": null
+    },
+    {
+      "id": "ns-netto-geneve",
+      "prompt": "Quel est le salaire net pour 90 000 CHF brut à Genève ?",
+      "page": "/fr/"
+    }
+  ]
+}

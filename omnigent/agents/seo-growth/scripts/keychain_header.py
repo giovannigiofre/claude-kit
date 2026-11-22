@@ -19,9 +19,8 @@ import tempfile
 
 HELP = """token missing: Keychain item '{item}' not found (or Keychain is locked).
 Owner, once, in a terminal (never in a chat):
-  1. in the fiscometro checkout: pnpm admin:token --analyst   (prints the token and its SHA-256)
-  2. fiscometro: put ANALYST_TOKEN_SHA256=<digest> in .admin-secrets.env, then pnpm admin:secrets
-     nettoswiss: set the GitHub secret ANALYST_TOKEN_SHA256 to the same digest (it reaches the Worker at the next deploy)
+  1. make an analyst token and its SHA-256 with the site's own tool (its README or RUNBOOK says how)
+  2. store the SHA-256 as the site's ANALYST_TOKEN_SHA256 secret, the way that repo deploys secrets
   3. security add-generic-password -U -s {item} -a "$USER" -w     (paste the token at the prompt)"""
 
 

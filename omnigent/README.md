@@ -69,20 +69,15 @@ reads it, and a missing setting means `user`. Registering by hand:
 
 ## seo-growth: the scheduled growth loop
 
-`seo` works on demand; `seo-growth` runs on a schedule, once per site every 2 days (fiscometro and
-nettoswiss, an hour apart). Each run reads the site's admin API, official news, Google's update
+`seo` works on demand; `seo-growth` runs on a schedule, once per site every 2 days, as a routine in
+that site's project. Each run reads the site's admin API, official news, Google's update
 history and a fixed AI-citation panel, and opens at most **one** PR, or nothing (the usual outcome
-while traffic is small). The owner merges every PR it opens, whatever `lead.merge` says: the sites
-carry tax figures. It never merges, pushes to main or deploys.
+while traffic is small). The owner merges every PR it opens, whatever `lead.merge` says. It never merges, pushes to main or deploys.
 
 ```
 agents/seo-growth/
   config.yaml            the prompt: pull, score, panel, verdicts, decide, ship, report
-  data/                  owner-edited, never by the agent
-    sites.json           per site: origin, repo, gate, rules, allowed action types, pre-launch date, feeds
-    thresholds.json      floors and caps (20 extra clicks / 28 days, 2 open PRs, 28-day cool-down, ...)
-    calendar.json        IT/CH demand peaks with official sources (one-time owner read, see below)
-    panel.json           the fixed AI-citation prompts per site
+  data/thresholds.json   floors and caps (20 extra clicks / 28 days, 2 open PRs, 28-day cool-down, ...)
   scripts/
     pull.sh              admin API (summary, pages, queries) + feeds + Google status + top pages' HTML
     score.py             the pull -> ranked candidates.json, with every guardrail applied
@@ -96,10 +91,25 @@ agents/seo-growth/
   tests/                 the deterministic scenarios on a fixture pull (run by tests/run_all.py)
 ```
 
+The agent keeps nothing about a site. Each site's data lives in its own repo, in
+`.claude/seo-growth/`, owner-edited and never touched by the agent:
+
+```
+<repo>/.claude/seo-growth/
+  site.json              origin, repo, gate, rules for content changes, allowed action types,
+                         pre-launch date, related map, feeds, watched pages, guide cap
+  calendar.json          demand peaks, each with an official source and the year it was checked for
+  panel.json             the fixed AI-citation prompts
+```
+
+The agent reads it from its worktree (`SEO_GROWTH_SITE`), so a change there counts once it is merged.
+Outside a run the scripts look in `~/Documents/repositories/<project>/.claude/seo-growth`
+(`SEO_GROWTH_REPOS` changes the root).
+
 What `score.py` enforces before Claude sees a candidate:
 
-- **Stops:** autopilot paused in the admin; no data (NettoSwiss is pre-launch until 15 Dec 2026,
-  so its runs end with one line); 2 open `seo-growth` PRs, counted on GitHub
+- **Stops:** autopilot paused in the admin; no data (a site before its `prelaunch_until` date ends
+  each run with one line); 2 open `seo-growth` PRs, counted on GitHub
   (`gh pr list --label seo-growth --state open`, which also feeds the open-PR-on-a-page rule; if gh
   cannot answer, the run stops).
 - **Floors:** a candidate needs about 20 extra clicks over 28 days, estimated against the site's own
@@ -118,28 +128,24 @@ What `score.py` enforces before Claude sees a candidate:
 
 **Owner steps, once.**
 
-1. The analyst token, shared by both sites, lives in one Keychain item. In the fiscometro checkout:
-   `pnpm admin:token --analyst` (prints the token and its SHA-256). fiscometro: the digest goes in
-   `.admin-secrets.env` as `ANALYST_TOKEN_SHA256`, then `pnpm admin:secrets`. nettoswiss: the same
-   digest as the GitHub secret `ANALYST_TOKEN_SHA256` (live at the next deploy). Then
+1. The analyst token, one for every site, lives in one Keychain item. Make it and its SHA-256 with
+   the site's own tool, and store the SHA-256 as the site's `ANALYST_TOKEN_SHA256` secret the way that
+   repo deploys secrets (its README or RUNBOOK). Then
    `security add-generic-password -U -s seo-growth-analyst -a "$USER" -w` and paste the token at the
-   prompt. Check: `bash omnigent/agents/seo-growth/scripts/pull.sh fiscometro --check` prints
-   `ok ok autopilot=true site=https://fiscometro.it`. A site that answers 401 (nettoswiss until its next
-   production deploy picks up the secret) gives exit 5, `not connected yet: ...`: the run stops with that
+   prompt. Check: `bash omnigent/agents/seo-growth/scripts/pull.sh <project> --check` prints
+   `ok ok autopilot=true site=<origin>`. A site that answers 401 (a secret that a production deploy has
+   not picked up yet) gives exit 5, `not connected yet: ...`: the run stops with that
    one line. Only `pull.sh` and `report.sh` read the item, and the token never reaches a shell
    variable, the environment, argv or an xtrace: a Python helper reads it (20 s timeout, so a locked
    Keychain fails with one line) into a mode-600 header file that curl reads and the scripts delete on
    exit. The kit's guard, where its hooks load, denies a Claude command that itself runs
    `security find-/dump-…-password` or `dump-keychain`, or reads `~/Library/Keychains`; it does not
    look inside the scripts Claude runs, so `bash pull.sh` passes and the scripts carry the protection.
-2. Read `data/calendar.json` once: check each date against its source, then set
-   `owner_reviewed_on`. Until then no seasonal candidate is made, and an entry counts only when its
+2. Read the site's `.claude/seo-growth/calendar.json` once: check each date against its source, then
+   set `owner_reviewed_on`. Until then no seasonal candidate is made, and an entry counts only when its
    `status` is `checked` for the year of the coming peak.
-3. After this bundle is installed, ask `lead` for the two routines (every 2 days, e.g.
-   `17 6 */2 * *` and `17 7 */2 * *` Europe/Rome).
-
-Not part of this agent: wiring IndexNow into fiscometro's deploys (nettoswiss already does it) is a
-separate one-off PR in fiscometro.
+3. After this bundle is installed, ask `lead` for the site's routine (every 2 days, e.g.
+   `17 6 */2 * *` Europe/Rome; an hour apart between sites).
 
 Tests: `python3 omnigent/agents/seo-growth/tests/test_seo_growth.py` (the deterministic half). The
 model-judged cases (picking, refusing an injected instruction, unsourced numbers) live with the other
