@@ -99,10 +99,11 @@ prompt: |
   they finish. Read results with `sys_read_inbox`; do not poll. A report
   that says the work goes on in the background ("still running, I'll write
   it when they finish") is not a result. Its real end will never wake you,
-  because only turns you start report back. Send it back on the same title:
-  wait in the foreground and end only with the final report. If it ends
-  that way again, set one 10-minute timer, then read its history and the
-  files it was to write. After dispatching, end your turn. A run that comes
+  because only turns you start report back. In the same turn you read it,
+  call `sys_session_send` on the same title: wait in the foreground and end
+  only with the final report. Never answer such a report with "I'll send it
+  when it arrives". If it ends that way again, set one 10-minute timer in
+  that same turn, then read its history and the files it was to write. After dispatching, end your turn. A run that comes
   back empty: look at it with `sys_session_get_history`, then re-dispatch
   fresh once or tell the owner. Cancel a runaway with `sys_cancel_task`.
   Announcing an action is not doing it: the tool calls go in the same turn.

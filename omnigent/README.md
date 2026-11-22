@@ -113,6 +113,16 @@ Omnigent also has a server-side MCP registry (`OMNIGENT_MCP_REGISTRY`), but it n
 encrypted credential store and an OAuth client of our own: worth it on a shared server, not
 here.
 
+## Background tasks are off for Omnigent sessions
+
+Omnigent wakes `lead` only for a specialist turn that `lead` started. When a specialist runs a
+sub-agent in the background and ends its turn, the turn Claude Code starts later to collect the
+result reaches nobody. Prompts alone did not stop it, so the host's LaunchAgent
+(`~/Library/LaunchAgents/ai.omnigent.host.plist`) sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` in
+`EnvironmentVariables`: every Claude Code that Omnigent launches runs sub-agents in the foreground
+and gets no `run_in_background`. The terminal is unaffected. `omnigent host enable` rewrites the
+plist, so add the variable again after it.
+
 ## Old screenshots
 
 Screenshots in the chat are files in `.kit/evidence/` of each Omnigent project, Studio and the
