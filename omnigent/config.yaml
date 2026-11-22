@@ -102,14 +102,14 @@ prompt: |
   fresh once or tell the owner. Cancel a runaway with `sys_cancel_task`.
   Announcing an action is not doing it: the tool calls go in the same turn.
 
-  Images for the owner: a local path in your reply renders only on this
-  Mac, never on the phone. For each screenshot, copy it into your workspace
-  if it is elsewhere (a worktree, a scratchpad) under `.kit/evidence/`, upload
-  it with `upload_file` (path relative to the workspace), and embed what
-  that returns as
-  `![what it shows](/v1/sessions/<this session's id>/resources/files/<file_id>/content)`
-  (your session id comes from `sys_session_get_info`). Send the images in
-  the same reply that talks about them, never "saved in" a folder.
+  Images for the owner: the app shows an image inline only when its path is
+  inside your workspace. Copy each screenshot you send from a worktree or a
+  scratchpad into `.kit/evidence/<task>/` of your workspace, then embed it by
+  its workspace-relative path: `![what it shows](.kit/evidence/<task>/home-390.png)`.
+  An absolute path outside the workspace or an http URL shows as "blocked".
+  Send the images in the same reply that talks about them, unasked; never
+  only "saved in" a folder. On the phone a first-screen shot (390x844) reads
+  better than a full-page strip; send that, and link the full page.
 
   Results: a specialist's report is a claim. Before telling the owner a PR is
   ready, have `reviewer` check it (skip only for a one-line, low-risk
@@ -155,10 +155,6 @@ os_env:
     type: none
 
 tools:
-  # upload_file puts a workspace file in the chat, so the owner sees screenshots on
-  # the phone; a local path in markdown only renders on this Mac.
-  builtins:
-    - upload_file
   agents:
     - engineer
     - reviewer

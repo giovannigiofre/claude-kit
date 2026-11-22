@@ -37,7 +37,9 @@ npx -y playwright@1.62.0 screenshot --viewport-size=390,844 --full-page <url> <f
 
 Look at each one with Read. A page that fails at 390px is not done. Keep the files in the
 worktree's `.kit/evidence/<branch>/`, never only in a scratchpad, and list their absolute paths
-in the handoff: the lead uploads them to the owner's chat, and the PR gets them too.
+in the handoff: the lead shows them in the owner's chat, and the PR gets them too. For each
+changed page take a first-screen shot too (`--viewport-size=390,844` without `--full-page`):
+on the phone it reads better than a full-page strip.
 
 ## 4. A live preview on the owner's tailnet
 
