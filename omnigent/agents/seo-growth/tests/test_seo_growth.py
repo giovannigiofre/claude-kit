@@ -475,6 +475,40 @@ class TokenStubs(Case):
         self.assertNotIn(FAKE_TOKEN, p.stdout + p.stderr)
         self.assertEqual(list(self.tmpdir.glob("seo-growth-auth.*")), [])
 
+    def test_header_dir_is_private_and_takes_no_output_path(self):
+        p = self.sh(sys.executable, "-I", str(SCRIPTS / "keychain_header.py"), "seo-growth-analyst")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = Path(p.stdout.strip())
+        self.assertNotIn(FAKE_TOKEN, p.stdout + p.stderr)
+        self.assertEqual(out.parent.parent, self.tmpdir)
+        self.assertTrue(out.parent.name.startswith("seo-growth-auth."))
+        self.assertEqual(oct(out.parent.stat().st_mode & 0o777), "0o700")
+        self.assertEqual(oct(out.stat().st_mode & 0o777), "0o600")
+        shutil.rmtree(out.parent)
+        existing = self.tmp / "existing"
+        existing.write_text("keep\n")
+        for target in ("/dev/stdout", "/dev/stderr", "-", str(existing)):
+            q = self.sh(sys.executable, "-I", str(SCRIPTS / "keychain_header.py"), "seo-growth-analyst", target)
+            self.assertEqual(q.returncode, 2, target)
+            self.assertNotIn(FAKE_TOKEN, q.stdout + q.stderr, target)
+        self.assertEqual(existing.read_text(), "keep\n")
+        self.assertEqual(list(self.tmpdir.iterdir()), [])
+
+    def test_load_token_sweeps_stale_headers(self):
+        stale, fresh = self.tmpdir / "seo-growth-auth.stale1", self.tmpdir / "seo-growth-auth.fresh1"
+        for d in (stale, fresh):
+            d.mkdir(mode=0o700)
+            (d / "header").write_text("Authorization: Bearer old\n")
+        (self.tmpdir / "seo-growth-auth.oldfile").write_text("x")
+        old = 1_700_000_000
+        for f in (stale / "header", stale, self.tmpdir / "seo-growth-auth.oldfile"):
+            os.utime(f, (old, old))
+        code = f'HERE="{SCRIPTS}"; AGENT_DIR="{AGENT}"; . "$HERE/_token.sh"; load_token || exit 9; drop_token'
+        p = self.sh("bash", "-c", code)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(sorted(x.name for x in self.tmpdir.iterdir()), ["seo-growth-auth.fresh1"],
+                         "stale headers swept, a live run's header (under an hour old) kept")
+
     def test_missing_token_fails_cleanly(self):
         self.stub("security", "#!/bin/sh\nexit 44\n")
         p = self.sh("bash", str(SCRIPTS / "pull.sh"), "fiscometro", "--check")
@@ -601,6 +635,30 @@ class Ship(Case):
     def test_cap_reached_on_github(self):
         p = self.ship("true", STUB_OPEN="2")
         self.assertEqual(p.returncode, 7, p.stderr)
+        self.assertFalse(self.remote_has_branch())
+
+    def test_untracked_file_the_gate_relies_on_refuses(self):
+        # the gate passes only thanks to a file the commit does not carry: shipping it would claim a pass
+        # for content that differs from what is pushed
+        (self.wt / "fix.md").write_text("never committed\n")
+        p = self.ship("test -f fix.md")
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("uncommitted or untracked changes", p.stderr)
+        self.assertIn("fix.md", p.stderr)
+        self.assertNotIn("gate:", p.stdout, "the gate never runs on a dirty tree")
+        self.assertNotIn("pr create", self.gh_calls())
+        self.assertFalse(self.remote_has_branch())
+        # ignored files (node_modules, build output) do not count
+        (self.wt / "fix.md").unlink()
+        (self.wt / ".git" / "info" / "exclude").write_text("dist/\n")
+        (self.wt / "dist").mkdir()
+        (self.wt / "dist" / "out.js").write_text("x\n")
+        self.assertEqual(self.ship("true").returncode, 0)
+
+    def test_gate_that_edits_a_tracked_file_refuses(self):
+        p = self.ship("echo formatted > page.md")
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("tracked files changed while the gate ran", p.stderr)
         self.assertFalse(self.remote_has_branch())
 
     def test_refuses_the_default_branch_and_dirty_trees(self):

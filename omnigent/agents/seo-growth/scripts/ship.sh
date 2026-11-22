@@ -7,7 +7,7 @@
 # branch, never forced) and opens the PR labelled `seo-growth`, with the gate's tail appended to the body.
 # Prints the PR URL on the last line.
 #
-# Exit codes: 0 PR opened, 2 usage or unsafe state (default branch, uncommitted changes),
+# Exit codes: 0 PR opened, 2 usage or unsafe state (default branch, uncommitted or untracked changes),
 #             6 gate failed (no PR), 7 cap of open seo-growth PRs reached, 8 push or gh failed.
 set -euo pipefail
 
@@ -31,8 +31,14 @@ default="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null
 case "$branch" in
   HEAD|main|master|"${default:-main}") echo "refusing to ship from '$branch': work on a seo-growth branch" >&2; exit 2 ;;
 esac
-if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-  echo "uncommitted changes in $wt: commit first, the gate runs on what the PR will carry" >&2; exit 2
+# Any change not in HEAD, untracked files included (ignored ones excepted), would let the gate pass on
+# content the PR never carries. Refuse before the gate. After it, a changed tracked file also refuses
+# (the gate may have checked edited content); new untracked build output does not, HEAD is unchanged.
+dirty() { [ -n "$(git status --porcelain --untracked-files="${1:-all}")" ]; }
+if dirty; then
+  echo "uncommitted or untracked changes in $wt: commit or remove them first, the gate runs only on what the PR will carry" >&2
+  git status --short --untracked-files=all | head -n 10 >&2
+  exit 2
 fi
 sha="$(git rev-parse HEAD)"
 
@@ -50,6 +56,11 @@ if [ "$rc" != 0 ]; then
 fi
 if [ "$(git rev-parse HEAD)" != "$sha" ]; then
   echo "HEAD moved while the gate ran: no PR opened" >&2; exit 2
+fi
+if dirty no; then
+  echo "tracked files changed while the gate ran (the tree no longer matches $sha): no PR opened" >&2
+  git status --short --untracked-files=no | head -n 10 >&2
+  exit 2
 fi
 
 open="$(gh pr list --repo "$repo" --label seo-growth --state open --limit 100 --json number --jq length)" \

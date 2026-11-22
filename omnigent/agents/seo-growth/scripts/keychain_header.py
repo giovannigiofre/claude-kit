@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""keychain_header.py ITEM OUTFILE: read the analyst token from macOS Keychain and write one curl header
-line, `Authorization: Bearer <token>`, to OUTFILE (mode 600, made by the caller). Prints nothing on success.
+"""keychain_header.py ITEM: read the analyst token from macOS Keychain and write one curl header line,
+`Authorization: Bearer <token>`, to a file it creates itself: `header` (mode 600, O_EXCL) inside a fresh
+`$TMPDIR/seo-growth-auth.XXXXXX` directory (mode 700). Prints that file's path, never the token.
+It takes no output path, so it cannot be pointed at /dev/*, stdout or an existing file. The caller deletes
+the directory (rm -rf on the path's parent).
 
 The token lives only in this process and in OUTFILE, never in the calling shell. A locked Keychain that
 would prompt or hang fails after SEO_GROWTH_KEYCHAIN_TIMEOUT seconds (default 20) with one line.
-Exit 0 ok, 3 token missing, unreadable or unusable.
+Exit 0 ok, 2 usage, 3 token missing, unreadable or unusable.
 """
 
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 HELP = """token missing: Keychain item '{item}' not found (or Keychain is locked).
 Owner, once, in a terminal (never in a chat):
@@ -21,7 +26,10 @@ Owner, once, in a terminal (never in a chat):
 
 
 def main() -> int:
-    item, out = sys.argv[1], sys.argv[2]
+    if len(sys.argv) != 2 or not sys.argv[1]:
+        print("usage: keychain_header.py ITEM (it picks the output path itself and prints it)", file=sys.stderr)
+        return 2
+    item = sys.argv[1]
     timeout = float(os.environ.get("SEO_GROWTH_KEYCHAIN_TIMEOUT") or 20)
     try:
         p = subprocess.run(["security", "find-generic-password", "-s", item, "-w"],
@@ -40,10 +48,16 @@ def main() -> int:
     if not re.fullmatch(r"[A-Za-z0-9._~+/=-]+", token):
         print(f"token unusable: Keychain item '{item}' holds characters a bearer token cannot have.", file=sys.stderr)
         return 3
-    fd = os.open(out, os.O_WRONLY | os.O_TRUNC | os.O_CREAT, 0o600)
-    os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(f"Authorization: Bearer {token}\n")
+    d = tempfile.mkdtemp(prefix="seo-growth-auth.")  # mode 700, in $TMPDIR, a name nobody else holds
+    try:
+        out = os.path.join(d, "header")
+        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(f"Authorization: Bearer {token}\n")
+    except BaseException:
+        shutil.rmtree(d, ignore_errors=True)
+        raise
+    print(out)
     return 0
 
 

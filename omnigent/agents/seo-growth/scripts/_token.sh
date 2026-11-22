@@ -1,7 +1,7 @@
 # Sourced by pull.sh and report.sh. The analyst token never enters this shell: keychain_header.py reads
-# the Keychain item (20 s timeout), checks it and writes the curl header line to AUTH_FILE (mode 600,
-# deleted by the EXIT trap below). curl reads it with -H @file, so the token is never in argv, in a shell
-# variable, in the environment, in the output or in an xtrace (`bash -x`) trace. Nothing here prints it.
+# the Keychain item (20 s timeout), checks it and writes the curl header line to AUTH_FILE (mode 600, in a
+# mode-700 directory keychain_header.py creates itself; both deleted by the EXIT trap below). curl reads it
+# with -H @file, so the token is never in argv, in a shell variable, in the environment, in the output or in an xtrace (`bash -x`) trace. Nothing here prints it.
 #
 # One token for both sites (research-2.md, change a): Keychain item `seo-growth-analyst`, fixed on purpose.
 
@@ -9,8 +9,18 @@ KEYCHAIN_ITEM="seo-growth-analyst"
 AUTH_FILE=""
 
 _auth_cleanup() {
-  [ -n "$AUTH_FILE" ] && rm -f "$AUTH_FILE"
+  if [ -n "$AUTH_FILE" ]; then
+    rm -f "$AUTH_FILE"
+    rmdir "$(dirname "$AUTH_FILE")" 2>/dev/null || true
+  fi
   AUTH_FILE=""
+}
+
+# A SIGKILL skips the traps and leaves a header behind. Runs last minutes, so anything of ours older than
+# an hour is stale: one non-recursive find in $TMPDIR, no matter how many entries it has.
+_auth_sweep() {
+  find "${TMPDIR:-/tmp}" -maxdepth 1 -mindepth 1 -name 'seo-growth-auth.*' -user "$(id -u)" -mmin +60 \
+    -exec rm -rf {} + 2>/dev/null || true
 }
 trap _auth_cleanup EXIT
 trap '_auth_cleanup; exit 130' INT TERM HUP
@@ -23,10 +33,9 @@ load_token() {
   { _xtrace_off; } 2>/dev/null
   local rc=0
   _auth_cleanup
-  AUTH_FILE="$(mktemp "${TMPDIR:-/tmp}/seo-growth-auth.XXXXXX")" && chmod 600 "$AUTH_FILE" || rc=3
-  if [ "$rc" = 0 ]; then
-    python3 -I "$HERE/keychain_header.py" "$KEYCHAIN_ITEM" "$AUTH_FILE" || rc=$?
-  fi
+  _auth_sweep
+  AUTH_FILE="$(python3 -I "$HERE/keychain_header.py" "$KEYCHAIN_ITEM")" || rc=$?
+  case "$AUTH_FILE" in */seo-growth-auth.*/header) ;; *) [ "$rc" = 0 ] && rc=3; AUTH_FILE="" ;; esac
   [ "$rc" = 0 ] || _auth_cleanup
   { _xtrace_restore; } 2>/dev/null
   return "$rc"
