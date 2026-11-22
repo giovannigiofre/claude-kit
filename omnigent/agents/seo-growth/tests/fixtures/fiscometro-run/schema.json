@@ -1,0 +1,16 @@
+{
+ "pages_with_issues": 1,
+ "errors": 1,
+ "pages": [
+  {
+   "path": "/quattordicesima/",
+   "issues": [
+    {
+     "code": "date-mismatch",
+     "severity": "error",
+     "detail": "dateModified 2026-11-16 is not the visible date (2026-11-18)"
+    }
+   ]
+  }
+ ]
+}

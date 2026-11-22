@@ -1,0 +1,23 @@
+{
+ "parsed": true,
+ "rollouts": [
+  {
+   "name": "September 2026 spam update",
+   "kind": "spam",
+   "start": "2026-09-24",
+   "end": "2026-10-08"
+  },
+  {
+   "name": "August 2026 spam update",
+   "kind": "spam",
+   "start": "2026-08-18",
+   "end": "2026-08-21"
+  },
+  {
+   "name": "May 2026 core update",
+   "kind": "core",
+   "start": "2026-05-21",
+   "end": "2026-06-02"
+  }
+ ]
+}

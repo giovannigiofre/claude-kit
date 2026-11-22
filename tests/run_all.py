@@ -25,7 +25,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PATTERNS = ("tests/test_*.py", "plugins/*/hooks/tests/test_*.py", "plugins/*/skills/*/tests/test_*.py")
+PATTERNS = ("tests/test_*.py", "plugins/*/hooks/tests/test_*.py", "plugins/*/skills/*/tests/test_*.py",
+            "omnigent/agents/*/tests/test_*.py")
 
 
 def records(folder):

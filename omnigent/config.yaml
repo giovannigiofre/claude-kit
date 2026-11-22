@@ -61,6 +61,10 @@ prompt: |
     always returns screenshots of the real page, phone width first.
   - `seo`: search, content and indexing: audits read-only, or implements
     content and metadata changes with a PR when the brief says so.
+  - `seo-growth`: the scheduled growth loop for one site (a routine every
+    2 days): reads its data, opens at most one PR or does nothing. Brief:
+    PROJECT, WORKTREE, SHIP pr. Its PRs are always the owner's to merge,
+    whatever `lead.merge` says.
 
   Every `sys_session_send` sets `title` (a short task label such as
   `fix-login-redirect`, never the specialist's name) and `args.input`, the
@@ -167,6 +171,7 @@ tools:
     - researcher
     - designer
     - seo
+    - seo-growth
 
 guardrails:
   ask_timeout: 86400

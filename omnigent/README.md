@@ -13,6 +13,7 @@ omnigent/
   agents/designer/       UI work with Open Design's craft rules, screenshots, a live preview
     skills/              design-brief, design-system, design-craft, design-review
   agents/seo/            search and content: audit, or a PR
+  agents/seo-growth/     the scheduled growth loop: data, one PR or nothing, a ledger of verdicts
   scripts/               clean_evidence.py: daily cleanup of old screenshots
   skills/                lead's: new-project, onboard-repo (with omni_project.py), new-agent
 ```
@@ -65,6 +66,73 @@ reads it, and a missing setting means `user`. Registering by hand:
 - Memory outside the repo: `~/.omnigent/boards/<repo>.md` (tasks) and
   `~/.omnigent/lessons/<repo>.md` (facts and corrections you confirmed).
 - What needs you while you are away goes to the Omnigent inbox (`sys_user_inbox_post`).
+
+## seo-growth: the scheduled growth loop
+
+`seo` works on demand; `seo-growth` runs on a schedule, once per site every 2 days (fiscometro and
+nettoswiss, an hour apart). Each run reads the site's admin API, official news, Google's update
+history and a fixed AI-citation panel, and opens at most **one** PR, or nothing (the usual outcome
+while traffic is small). The owner merges every PR it opens, whatever `lead.merge` says: the sites
+carry tax figures. It never merges, pushes to main or deploys.
+
+```
+agents/seo-growth/
+  config.yaml            the prompt: pull, score, panel, verdicts, decide, ship, report
+  data/                  owner-edited, never by the agent
+    sites.json           per site: origin, repo, gate, rules, allowed action types, pre-launch date, feeds
+    thresholds.json      floors and caps (20 extra clicks / 28 days, 2 open PRs, 28-day cool-down, ...)
+    calendar.json        IT/CH demand peaks with official sources (one-time owner read, see below)
+    panel.json           the fixed AI-citation prompts per site
+  scripts/
+    pull.sh              admin API (summary, pages, queries) + feeds + Google status + top pages' HTML
+    score.py             the pull -> ranked candidates.json, with every guardrail applied
+    ledger.py            per-page experiment ledger (~/.omnigent/seo-growth/<site>/ledger.jsonl)
+    sources.py           RSS/Atom -> news.json, Google status -> rollouts.json, watched pages -> watch.json
+    schema_lint.py       JSON-LD consistency (dateModified = visible date, complete WebApplication)
+    report.sh            POST /admin/api/agent-report
+  tests/                 the deterministic scenarios on a fixture pull (run by tests/run_all.py)
+```
+
+What `score.py` enforces before Claude sees a candidate:
+
+- **Stops:** autopilot paused in the admin; no data (NettoSwiss is pre-launch until 15 Dec 2026,
+  so its runs end with one line); 2 open `seo-growth` PRs.
+- **Floors:** a candidate needs about 20 extra clicks over 28 days, estimated against the site's own
+  CTR curve (low CTR for the position, striking distance in positions 5-20, internal links from GSC
+  co-occurrence at most 3 per PR, decay, schema errors, official news on a cluster with impressions,
+  calendar peaks 4-8 weeks ahead, AI-panel gaps).
+- **Ledger rules:** no change on a page in its 28-day cool-down or with an open PR; nothing the owner
+  closed in the last 90 days; never repeat a change that regressed; leave a page alone when it is
+  above the curve or its last title change was kept.
+- **Freeze:** a verdict whose windows overlap a Google core or spam rollout (or the 28 days after
+  it) is `confounded` and waits; decay is not acted on while a rollout runs. An unreadable status
+  page counts as a rollout (fail closed).
+- **AI panel:** Claude runs the fixed prompts with its own web search and logs who is cited. It is
+  a proxy, not Google AI Overviews; a candidate needs 3 runs in a row that agree. Cloudflare
+  `aiReferrals` and `aiCrawls` from the admin are the ground truth beside it.
+
+**Owner steps, once.**
+
+1. The analyst token, shared by both sites, lives in one Keychain item. In the fiscometro checkout:
+   `pnpm admin:token --analyst` (prints the token and its SHA-256). fiscometro: the digest goes in
+   `.admin-secrets.env` as `ANALYST_TOKEN_SHA256`, then `pnpm admin:secrets`. nettoswiss: the same
+   digest as the GitHub secret `ANALYST_TOKEN_SHA256` (live at the next deploy). Then
+   `security add-generic-password -U -s seo-growth-analyst -a "$USER" -w` and paste the token at the
+   prompt. Check: `bash omnigent/agents/seo-growth/scripts/pull.sh fiscometro --check` prints
+   `ok ok autopilot=true site=https://fiscometro.it`. Only `pull.sh` and `report.sh` read the item; the kit's guard blocks
+   `security find-generic-password` in Claude's own shell.
+2. Read `data/calendar.json` once: check each date against its source, then set
+   `owner_reviewed_on`. Until then no seasonal candidate is made, and an entry counts only when its
+   `status` is `checked` for the year of the coming peak.
+3. After this bundle is installed, ask `lead` for the two routines (every 2 days, e.g.
+   `17 6 */2 * *` and `17 7 */2 * *` Europe/Rome).
+
+Not part of this agent: wiring IndexNow into fiscometro's deploys (nettoswiss already does it) is a
+separate one-off PR in fiscometro.
+
+Tests: `python3 omnigent/agents/seo-growth/tests/test_seo_growth.py` (the deterministic half). The
+model-judged cases (picking, refusing an injected instruction, unsourced numbers) live with the other
+eval cases outside this repo, in `cases/seo-growth/`.
 
 ## Evals
 
