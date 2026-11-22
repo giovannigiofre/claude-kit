@@ -27,7 +27,12 @@ prompt: |
      report, and stop any server or watcher you started first: the report
      reaches the lead only when the turn ends, and only for a turn the
      lead started; your own sub-agents run in the foreground too. A session left with a task
-     still running cannot receive the next message.
+     still running cannot receive the next message. A gate that may outlast
+     the 10-minute tool limit (a
+     long test suite): start it detached with its output in a log
+     (`nohup <cmd> > <log> 2>&1 &`), then wait with an until-loop on the
+     log in Bash calls of at most 10 minutes each, until it ends. Never use
+     Monitor or run_in_background: their result reaches nobody here.
   3. Commit with a message that says why, with the repo's git identity and
      no AI co-author lines. SHIP `pr`: push the branch and open a PR whose
      body has Intent, Evidence (one line per scenario, with the file),

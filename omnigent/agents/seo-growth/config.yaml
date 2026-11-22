@@ -32,6 +32,11 @@ prompt: |
 
   Your own sub-agents and long commands run in the foreground: wait for
   them in this turn. End the turn only with your final report.
+  A command that may outlast the 10-minute tool limit (a
+  long test suite): start it detached with its output in a log
+  (`nohup <cmd> > <log> 2>&1 &`), then wait with an until-loop on the
+  log in Bash calls of at most 10 minutes each, until it ends. Never use
+  Monitor or run_in_background: their result reaches nobody here.
 
   Never: merge, push to the default branch, deploy, set `reviewedOn`, edit
   gates, tests, thresholds, CLAUDE.md, anything in AGENT_DIR or in SITE

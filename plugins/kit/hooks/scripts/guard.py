@@ -1549,12 +1549,30 @@ def sleep_limit(opts):
     return limit if isinstance(limit, (int, float)) and not isinstance(limit, bool) and limit >= 0 else SLEEP_MAX_SEC
 
 
+def background_off():
+    """CLAUDE_CODE_DISABLE_BACKGROUND_TASKS is set (the kit's Omnigent host sets it): there is no
+    run_in_background to move a wait to, and a turn that ends to wait for a Monitor or a background
+    task reports to nobody, since Omnigent wakes its lead only for turns the lead started. Waiting
+    in the foreground is then the right thing, and a Monitor the wrong one."""
+    return os.environ.get("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "").strip().lower() in ("1", "true", "yes")
+
+
+NO_BACKGROUND_MONITOR = (
+    "kit guard (wait): background tasks are off in this session (Omnigent), so a Monitor's events "
+    "reach nobody once your turn ends, and the session that started you is never told. Wait in the "
+    "foreground instead: run the command itself with a timeout of up to 600000 ms; if it can outlast "
+    "10 minutes, start it detached with its output in a log (`nohup <cmd> > <log> 2>&1 &`), then wait "
+    "with an until-loop on the log in Bash calls of at most 10 minutes each, until it ends.")
+
+
 def check_wait(command, tool_input, opts=None):
     """A foreground wait: the turn blocks on it, the caller sees no progress, and nothing tells
     anyone when it hangs. In the background the same wait costs nothing. A long Bash `timeout` is
     not a wait: most calls that set one end in seconds."""
     opts = opts or {}
     if tool_input.get("run_in_background") or opts.get("waits") is False or allowed(command, opts):
+        return None
+    if background_off():  # the foreground is the only place a wait can be, and the right one
         return None
     limit = sleep_limit(opts)
     code = "\n".join(logical_lines(command.replace("\\\n", " ")))
@@ -1801,6 +1819,9 @@ def main():
         # 2.1.317: once the matcher names Monitor the hook runs once, as tool_name "Monitor"
         # with its timeout_ms, so hooks.json names Monitor and the tool name is the discriminator.
         monitor = tool == "Monitor"
+        if monitor and background_off() and opts.get("waits") is not False:
+            print(NO_BACKGROUND_MONITOR, file=sys.stderr)
+            return 2
         try:
             found = None if monitor else check_wait(str(tool_input.get("command") or ""), tool_input, opts)
         except Exception:  # the wait rule never stops a command on its own failure
