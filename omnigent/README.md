@@ -89,14 +89,19 @@ agents/seo-growth/
     ledger.py            per-page experiment ledger (~/.omnigent/seo-growth/<site>/ledger.jsonl)
     sources.py           RSS/Atom -> news.json, Google status -> rollouts.json, watched pages -> watch.json
     schema_lint.py       JSON-LD consistency (dateModified = visible date, complete WebApplication)
-    report.sh            POST /admin/api/agent-report
+    report.sh            POST /admin/api/agent-report (never retried: a report is posted at most once)
+    ship.sh              the only way it opens a PR: runs the site's gate; exit 0 pushes and opens it,
+                         labelled `seo-growth`; a failing gate pushes nothing
+    _token.sh, keychain_header.py   the Keychain read (20 s timeout) into a mode-600 curl header file
   tests/                 the deterministic scenarios on a fixture pull (run by tests/run_all.py)
 ```
 
 What `score.py` enforces before Claude sees a candidate:
 
 - **Stops:** autopilot paused in the admin; no data (NettoSwiss is pre-launch until 15 Dec 2026,
-  so its runs end with one line); 2 open `seo-growth` PRs.
+  so its runs end with one line); 2 open `seo-growth` PRs, counted on GitHub
+  (`gh pr list --label seo-growth --state open`, which also feeds the open-PR-on-a-page rule; if gh
+  cannot answer, the run stops).
 - **Floors:** a candidate needs about 20 extra clicks over 28 days, estimated against the site's own
   CTR curve (low CTR for the position, striking distance in positions 5-20, internal links from GSC
   co-occurrence at most 3 per PR, decay, schema errors, official news on a cluster with impressions,
@@ -121,8 +126,12 @@ What `score.py` enforces before Claude sees a candidate:
    prompt. Check: `bash omnigent/agents/seo-growth/scripts/pull.sh fiscometro --check` prints
    `ok ok autopilot=true site=https://fiscometro.it`. A site that answers 401 (nettoswiss until its next
    production deploy picks up the secret) gives exit 5, `not connected yet: ...`: the run stops with that
-   one line. Only `pull.sh` and `report.sh` read the item; the kit's guard blocks
-   `security find-generic-password` in Claude's own shell.
+   one line. Only `pull.sh` and `report.sh` read the item, and the token never reaches a shell
+   variable, the environment, argv or an xtrace: a Python helper reads it (20 s timeout, so a locked
+   Keychain fails with one line) into a mode-600 header file that curl reads and the scripts delete on
+   exit. The kit's guard, where its hooks load, denies a Claude command that itself runs
+   `security find-/dump-…-password` or `dump-keychain`, or reads `~/Library/Keychains`; it does not
+   look inside the scripts Claude runs, so `bash pull.sh` passes and the scripts carry the protection.
 2. Read `data/calendar.json` once: check each date against its source, then set
    `owner_reviewed_on`. Until then no seasonal candidate is made, and an entry counts only when its
    `status` is `checked` for the year of the coming peak.

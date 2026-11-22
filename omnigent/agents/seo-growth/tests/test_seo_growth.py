@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """seo-growth's deterministic half: score.py's guardrails, the ledger, the sources parser, the schema lint
-and pull.sh's missing-token path. Standard library only, no network, no Keychain secret read.
+pull.sh/report.sh token handling (stubbed `security` and
+curl) and ship.sh's gate rule. Standard library only, no network, no Keychain secret read.
 
 Each scenario starts from tests/fixtures/fiscometro-run (a pull shaped like the live admin API) and changes one
 thing. The model-judged half (does Claude pick well, refuse an injected instruction, keep numbers sourced)
@@ -10,6 +11,7 @@ Run: python3 omnigent/agents/seo-growth/tests/test_seo_growth.py
 """
 
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -158,6 +160,36 @@ class Stops(Case):
         self.assertEqual(out["candidates"], [], "a stop leaves nothing to pick")
 
 
+class OpenPrsFromGitHub(Case):
+    def gh(self, *prs, ok=True):
+        (self.run / "open_prs.json").write_text(json.dumps({"ok": ok, "prs": list(prs)}))
+
+    def test_cap_counts_github_not_the_ledger(self):
+        self.gh({"number": 11, "url": "https://github.com/x/y/pull/11", "title": "seo-growth: a", "body": ""},
+                {"number": 12, "url": "https://github.com/x/y/pull/12", "title": "seo-growth: b", "body": ""})
+        out = self.score()
+        self.assertEqual(out["decision"]["action"], "stop")
+        self.assertIn("cap reached: 2 open", out["decision"]["reason"])
+
+    def test_ledger_open_entry_closed_on_github_does_not_count(self):
+        self.ledger({"id": "a", "type": "low-ctr", "pages": ["/addizionali/"], "state": "open", "opened_on": "2026-08-01", "pr": "https://github.com/x/y/pull/1"},
+                    {"id": "b", "type": "decay", "pages": ["/ral/30000/"], "state": "open", "opened_on": "2026-08-01", "pr": "https://github.com/x/y/pull/2"})
+        self.gh()
+        out = self.score()
+        self.assertNotEqual(out["decision"]["action"], "stop", out["decision"])
+
+    def test_untracked_open_pr_blocks_its_page(self):
+        self.gh({"number": 9, "url": "https://github.com/x/y/pull/9", "title": "Title for /tredicesima/", "body": "Intent: low-ctr"})
+        out = self.score()
+        self.assertTrue(any("open PR on /tredicesima/" in r for r in self.dropped(out, "low-ctr:/tredicesima/")))
+
+    def test_gh_unavailable_stops(self):
+        self.gh(ok=False)
+        out = self.score()
+        self.assertEqual(out["decision"]["action"], "stop")
+        self.assertIn("gh pr list failed", out["decision"]["reason"])
+
+
 class Guardrails(Case):
     def test_page_in_cool_down(self):
         self.ledger({"id": "2026-10-10-1", "type": "internal-links", "pages": ["/tredicesima/"], "state": "merged",
@@ -212,6 +244,18 @@ class Seasonal(Case):
         self.assertEqual(c["evidence"]["peak"], "2026-12-01")
         self.assertEqual(c["page"], "/guide/forfettario-2027/")
         self.assertEqual(c["evidence"]["source_url"], "https://www.agenziaentrate.gov.it/x")
+
+    def test_page_comes_from_the_query_with_the_impressions(self):
+        # the first matching query has no topPage; the biggest one does: its page is the target
+        self.edit("queries.json", lambda d: d["rows"].insert(0, {"query": "forfettario regime", "type": "guide", "topPage": None,
+                                                                 "pages": 0, "clicks": 0, "impressions": 30, "ctr": 0,
+                                                                 "position": 40, "previous": None}))
+        env = self.data_dir(lambda c: (c.update(owner_reviewed_on="2026-10-01"),
+                                       c["entries"].append({**self.ENTRY, "status": "checked", "checked_for_year": 2026})))
+        out = self.score(env=env)
+        c = next(c for c in out["candidates"] + out["below_floor"] if c["id"].startswith(("seasonal:", "new-guide:")))
+        self.assertEqual(c["type"], "seasonal")
+        self.assertEqual(c["page"], "/guide/forfettario-2027/")
 
     def test_last_years_check_does_not_cover_this_year(self):
         env = self.data_dir(lambda c: (c.update(owner_reviewed_on="2026-10-01"),
@@ -367,14 +411,96 @@ class Ledger(Case):
         self.assertEqual(len(lines), 2, "append-only: one line per event")
 
 
-class PullToken(Case):
+FAKE_TOKEN = "fAkE-T0KEN.for-tests-ONLY_9f8e7d"
+
+STUB_CURL = r"""#!/usr/bin/env python3
+import hashlib, json, os, sys
+a = sys.argv[1:]
+log = os.environ["STUB_LOG"]
+with open(log, "a") as f:
+    f.write(json.dumps(a) + "\n")
+hdr = next(a[i + 1][1:] for i, x in enumerate(a) if x == "-H" and a[i + 1].startswith("@"))
+ok = hashlib.sha256(open(hdr).read().strip().encode()).hexdigest() == os.environ["STUB_EXPECT_SHA"]
+out = a[a.index("-o") + 1]
+code = os.environ.get("STUB_CODE", "200") if ok else "401"
+open(out, "w").write(json.dumps({"status": "ok", "site": "https://fiscometro.it", "autopilot": {"enabled": True}}))
+sys.stdout.write(code)
+"""
+
+
+class TokenStubs(Case):
+    """pull.sh / report.sh with a stubbed `security` and `curl` on PATH: no Keychain, no network."""
+
+    def setUp(self):
+        super().setUp()
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.tmpdir = self.tmp / "t"
+        self.tmpdir.mkdir()
+        self.log = self.tmp / "curl.log"
+        self.stub("security", f'#!/bin/sh\n[ "$1" = find-generic-password ] && [ "$3" = seo-growth-analyst ] || exit 44\n'
+                              f'${{STUB_SLEEP:+sleep $STUB_SLEEP}}\necho "{FAKE_TOKEN}"\n')
+        self.stub("curl", STUB_CURL.replace("#!/usr/bin/env python3", f"#!{sys.executable}"))
+        self.env = {**self.env, "PATH": f"{self.bin}:{os.environ['PATH']}", "TMPDIR": str(self.tmpdir),
+                    "STUB_LOG": str(self.log),
+                    "STUB_EXPECT_SHA": hashlib.sha256(f"Authorization: Bearer {FAKE_TOKEN}".encode()).hexdigest()}
+
+    def stub(self, name, text):
+        f = self.bin / name
+        f.write_text(text)
+        f.chmod(0o755)
+
+    def sh(self, *argv, env=None):
+        return subprocess.run(list(argv), capture_output=True, text=True, env=env or self.env, timeout=60)
+
+    def calls(self):
+        return [json.loads(l) for l in self.log.read_text().splitlines()] if self.log.exists() else []
+
+    def test_bash_x_check_prints_ok_and_never_the_token(self):
+        p = self.sh("bash", "-x", str(SCRIPTS / "pull.sh"), "fiscometro", "--check")
+        self.assertEqual(p.returncode, 0, p.stderr[-2000:])
+        self.assertTrue(p.stdout.startswith("ok ok autopilot=true"), p.stdout)
+        self.assertNotIn(FAKE_TOKEN, p.stdout + p.stderr)
+        self.assertIn("+ ", p.stderr, "xtrace was on for the rest of the script")
+        self.assertEqual(list(self.tmpdir.glob("seo-growth-auth.*")), [], "header file deleted on exit")
+        self.assertTrue(all(FAKE_TOKEN not in " ".join(c) for c in self.calls()), "token not in curl argv")
+
+    def test_sourced_load_token_leaves_no_readable_token(self):
+        code = (f'HERE="{SCRIPTS}"; AGENT_DIR="{AGENT}"; . "$HERE/_token.sh"; load_token || exit 9; '
+                'echo "T=${TOKEN:-}"; stat -f %Lp "$AUTH_FILE"; set; env; drop_token; echo "left=${AUTH_FILE:-none}"')
+        p = self.sh("bash", "-x", "-c", code)
+        self.assertEqual(p.returncode, 0, p.stderr[-2000:])
+        self.assertIn("T=\n600\n", p.stdout)
+        self.assertIn("left=none", p.stdout)
+        self.assertNotIn(FAKE_TOKEN, p.stdout + p.stderr)
+        self.assertEqual(list(self.tmpdir.glob("seo-growth-auth.*")), [])
+
     def test_missing_token_fails_cleanly(self):
-        env = {**self.env, "SEO_GROWTH_KEYCHAIN_ITEM": "seo-growth-test-item-that-does-not-exist"}
-        p = subprocess.run(["bash", str(SCRIPTS / "pull.sh"), "fiscometro", "--check"], capture_output=True, text=True, env=env)
+        self.stub("security", "#!/bin/sh\nexit 44\n")
+        p = self.sh("bash", str(SCRIPTS / "pull.sh"), "fiscometro", "--check")
         self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
         self.assertIn("token missing", p.stderr)
-        self.assertIn("security add-generic-password -U -s seo-growth-test-item-that-does-not-exist", p.stderr)
+        self.assertIn("security add-generic-password -U -s seo-growth-analyst", p.stderr)
+        self.assertEqual(self.calls(), [], "no API call without a token")
         self.assertFalse(list((self.tmp / "state").rglob("summary.json")), "nothing pulled without a token")
+
+    def test_item_name_cannot_be_overridden(self):
+        p = self.sh("bash", str(SCRIPTS / "pull.sh"), "fiscometro", "--check",
+                    env={**self.env, "SEO_GROWTH_KEYCHAIN_ITEM": "something-else"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_locked_keychain_times_out_with_one_line(self):
+        env = {**self.env, "STUB_SLEEP": "10", "SEO_GROWTH_KEYCHAIN_TIMEOUT": "1"}
+        p = self.sh("bash", str(SCRIPTS / "pull.sh"), "fiscometro", "--check", env=env)
+        self.assertEqual(p.returncode, 3)
+        self.assertEqual(len(p.stderr.strip().splitlines()), 1, p.stderr)
+        self.assertIn("timed out after 1s", p.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_401_check_stops_with_exit_5(self):
+        p = self.sh("bash", str(SCRIPTS / "pull.sh"), "nettoswiss", "--check", env={**self.env, "STUB_CODE": "401"})
+        self.assertEqual(p.returncode, 5, p.stderr)
+        self.assertIn("not connected yet: https://nettoswiss.ch answers 401", p.stderr)
 
     def test_401_is_not_connected_yet(self):
         sh = f'. "{SCRIPTS}/_token.sh"; ORIGIN=https://nettoswiss.ch; explain_status 401 /admin/api/summary; echo "rc=$?"'
@@ -384,10 +510,106 @@ class PullToken(Case):
         other = subprocess.run(["bash", "-c", sh.replace("401", "500")], capture_output=True, text=True)
         self.assertIn("rc=4", other.stdout)
 
+    def test_report_post_is_never_retried(self):
+        body = self.tmp / "report.json"
+        body.write_text(json.dumps({"runId": "r", "mode": "pulse", "status": "ok", "summary": "s"}))
+        p = self.sh("bash", str(SCRIPTS / "report.sh"), "fiscometro", str(body))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.calls()
+        self.assertEqual(len(calls), 1)
+        self.assertIn("POST", calls[0])
+        self.assertNotIn("--retry", calls[0])
+        self.assertNotIn(FAKE_TOKEN, p.stdout + p.stderr)
+
     def test_unknown_project(self):
-        p = subprocess.run(["bash", str(SCRIPTS / "pull.sh"), "nope", "--check"], capture_output=True, text=True, env=self.env)
+        p = self.sh("bash", str(SCRIPTS / "pull.sh"), "nope", "--check")
         self.assertEqual(p.returncode, 2)
         self.assertIn("unknown project", p.stderr)
+
+
+class Ship(Case):
+    """ship.sh on a throwaway repo with a bare origin and a stubbed gh: the gate's exit status decides."""
+
+    def setUp(self):
+        super().setUp()
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.gh_log = self.tmp / "gh.log"
+        gh = self.bin / "gh"
+        gh.write_text(f'#!/bin/sh\necho "$*" >> "{self.gh_log}"\n'
+                      'case "$1 $2" in "pr list") echo "${STUB_OPEN:-0}" ;; "pr create") echo https://github.com/x/y/pull/77 ;; esac\n')
+        gh.chmod(0o755)
+        origin, self.wt = self.tmp / "origin.git", self.tmp / "wt"
+        git = lambda *a, cwd=None: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True)
+        git("init", "--bare", "-b", "main", str(origin))
+        git("init", "-b", "main", str(self.wt))
+        for k, v in (("user.name", "t"), ("user.email", "t@example.invalid"), ("commit.gpgsign", "false")):
+            git("config", k, v, cwd=self.wt)
+        (self.wt / "page.md").write_text("x\n")
+        git("add", ".", cwd=self.wt)
+        git("commit", "-m", "base", cwd=self.wt)
+        git("remote", "add", "origin", str(origin), cwd=self.wt)
+        git("push", "-u", "origin", "main", cwd=self.wt)
+        git("checkout", "-b", "seo-growth/test", cwd=self.wt)
+        (self.wt / "page.md").write_text("y\n")
+        git("commit", "-am", "change", cwd=self.wt)
+        self.origin = origin
+        self.body = self.tmp / "body.md"
+        self.body.write_text("Intent: low-ctr:/x/\n")
+
+    def ship(self, gate, **extra):
+        data = self.tmp / "data"
+        if not data.exists():
+            shutil.copytree(AGENT / "data", data)
+        sites = json.loads((data / "sites.json").read_text())
+        sites["fiscometro"]["gate"] = gate
+        (data / "sites.json").write_text(json.dumps(sites))
+        env = {**self.env, "PATH": f"{self.bin}:{os.environ['PATH']}", "SEO_GROWTH_DATA": str(data), **extra}
+        return subprocess.run(["bash", str(SCRIPTS / "ship.sh"), "fiscometro", str(self.wt), "seo-growth: test", str(self.body)],
+                              capture_output=True, text=True, env=env, timeout=60)
+
+    def remote_has_branch(self):
+        p = subprocess.run(["git", "--git-dir", str(self.origin), "branch", "--list", "seo-growth/test"], capture_output=True, text=True)
+        return bool(p.stdout.strip())
+
+    def gh_calls(self):
+        return self.gh_log.read_text() if self.gh_log.exists() else ""
+
+    def test_failing_gate_stops_the_pr(self):
+        p = self.ship("echo 'lint: 3 errors'; exit 3")
+        self.assertEqual(p.returncode, 6, p.stdout + p.stderr)
+        self.assertIn("gate failed (exit 3): no PR opened", p.stderr)
+        self.assertIn("lint: 3 errors", p.stdout)
+        self.assertNotIn("pr create", self.gh_calls())
+        self.assertFalse(self.remote_has_branch(), "nothing pushed when the gate fails")
+
+    def test_site_gates_cannot_hide_a_failure(self):
+        # a `cmd; cleanup` or `cmd || true` gate would exit 0 after a failure: each gate is one plain command
+        for name, site in json.loads((AGENT / "data" / "sites.json").read_text()).items():
+            if not name.startswith("_"):
+                self.assertRegex(site["gate"], r"^pnpm [\w:-]+$", name)
+
+    def test_passing_gate_opens_a_labelled_pr(self):
+        p = self.ship("echo all green")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(p.stdout.strip().endswith("https://github.com/x/y/pull/77"))
+        create = [l for l in self.gh_calls().splitlines() if l.startswith("pr create")]
+        self.assertEqual(len(create), 1)
+        self.assertIn("--label seo-growth", create[0])
+        self.assertTrue(self.remote_has_branch())
+
+    def test_cap_reached_on_github(self):
+        p = self.ship("true", STUB_OPEN="2")
+        self.assertEqual(p.returncode, 7, p.stderr)
+        self.assertFalse(self.remote_has_branch())
+
+    def test_refuses_the_default_branch_and_dirty_trees(self):
+        (self.wt / "page.md").write_text("dirty\n")
+        self.assertEqual(self.ship("true").returncode, 2)
+        subprocess.run(["git", "checkout", "-f", "main"], cwd=self.wt, check=True, capture_output=True)
+        p = self.ship("true")
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("refusing to ship from 'main'", p.stderr)
 
 
 if __name__ == "__main__":

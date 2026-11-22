@@ -21,6 +21,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import statistics
 import sys
 from pathlib import Path
@@ -94,6 +95,18 @@ class Scorer:
         self.by_path = {r["path"]: r for r in self.page_rows}
         self.dropped: list[dict] = []
         self.notes: list[str] = []
+        # GitHub's open seo-growth PRs (pull.sh: gh pr list --label seo-growth --state open). Without the
+        # file (a fixture run) the ledger's open entries stand in; with ok=false the run stops.
+        self.gh_open = read(run / "open_prs.json")
+        if self.gh_open is not None and self.gh_open.get("ok"):
+            urls = {pr.get("url") for pr in self.gh_open.get("prs") or []}
+            for e in self.ledger:  # GitHub decides which ledger entries are still open
+                if e.get("pr") and e.get("state") in ("open", None) and e["pr"] not in urls:
+                    # gone from GitHub's open list but not synced yet: treat as merged (cool-down from opened_on)
+                    e["state"] = "merged"
+                    self.notes.append(f"{e['id']}: PR no longer open on GitHub, ledger not synced; treated as merged")
+                elif e.get("pr") in urls:
+                    e["state"] = "open"
 
     # ------------------------------------------------------------ gates
     def stop_reason(self) -> str | None:
@@ -105,6 +118,8 @@ class Scorer:
             return "autopilot switch unreadable in the admin: treated as paused"
         if ap.get("enabled") is False:
             return "autopilot paused in the admin (Attività agente)"
+        if self.gh_open is not None and not self.gh_open.get("ok"):
+            return "open seo-growth PRs unknown (gh pr list failed): cannot check the cap"
         if s.get("status") == "no-data" or s.get("hasData") is False or self.pages.get("hasData") is False:
             pre = d(self.site.get("prelaunch_until"))
             if pre and self.today < pre:
@@ -113,7 +128,13 @@ class Scorer:
         return None
 
     def open_prs(self) -> list[dict]:
-        return [e for e in self.ledger if e.get("state") == "open"]
+        """Open seo-growth PRs: GitHub's list when pull.sh wrote it, else the ledger's open entries."""
+        if self.gh_open is None or not self.gh_open.get("ok"):
+            return [e for e in self.ledger if e.get("state") == "open"]
+        by_url = {e.get("pr"): e for e in self.ledger if e.get("pr")}
+        return [by_url.get(pr.get("url")) or {"id": f"#{pr.get('number')}", "pr": pr.get("url"), "state": "open",
+                                              "untracked": f"{pr.get('title') or ''}\n{pr.get('body') or ''}"}
+                for pr in self.gh_open.get("prs") or []]
 
     # ------------------------------------------------------------ freeze
     def freeze(self) -> dict:
@@ -152,6 +173,11 @@ class Scorer:
         winner = dt.timedelta(days=self.th["winner_protect_days"])
         if ctype not in self.site["allowed_types"] and not (ctype == "new-guide" and "seasonal" in self.site["allowed_types"]):
             return f"type {ctype} not allowed on {self.project}"
+        for e in self.open_prs():  # an open PR GitHub has but the ledger lacks: match the page in its title/body
+            if "untracked" in e:
+                hit = [p for p in pages if p and re.search(r"(?<![\w/-])" + re.escape(p) + r"(?![\w-])", e["untracked"])]
+                if hit:
+                    return f"open PR on {hit[0]}: {e['pr']}"
         for e in self.ledger:
             touched = set(e.get("pages") or [])
             hit = touched & set(pages)
@@ -321,7 +347,7 @@ class Scorer:
                 continue
             qs = self.matching_queries(e.get("queries", []))
             impr = sum(q["impressions"] for q in qs)
-            page = max(qs, key=lambda q: q["impressions"])["topPage"] if qs and qs[0].get("topPage") else None
+            page = max(qs, key=lambda q: q["impressions"]).get("topPage") if qs else None
             score = max(t["min_score"], impr * curve["1-3"]["ctr"] * t["query_share"])
             ctype = "seasonal" if page else "new-guide"
             c = self.cand(ctype, [page or f"(new) {e['id']}"], score,

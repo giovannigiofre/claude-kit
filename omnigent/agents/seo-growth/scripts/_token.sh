@@ -1,47 +1,57 @@
-# Sourced by pull.sh and report.sh. The analyst token is read from macOS Keychain inside this
-# process and handed to curl on stdin (-K -), so it never appears in argv, in a file, in the
-# output or in Claude's transcript. Nothing here prints the token.
+# Sourced by pull.sh and report.sh. The analyst token never enters this shell: keychain_header.py reads
+# the Keychain item (20 s timeout), checks it and writes the curl header line to AUTH_FILE (mode 600,
+# deleted by the EXIT trap below). curl reads it with -H @file, so the token is never in argv, in a shell
+# variable, in the environment, in the output or in an xtrace (`bash -x`) trace. Nothing here prints it.
 #
-# One token for both sites (research-2.md, change a): Keychain item `seo-growth-analyst`.
+# One token for both sites (research-2.md, change a): Keychain item `seo-growth-analyst`, fixed on purpose.
 
-KEYCHAIN_ITEM="${SEO_GROWTH_KEYCHAIN_ITEM:-seo-growth-analyst}"
-TOKEN=""
+KEYCHAIN_ITEM="seo-growth-analyst"
+AUTH_FILE=""
 
-token_help() {
-  cat >&2 <<EOF
-token missing: Keychain item '$KEYCHAIN_ITEM' not found (or Keychain is locked).
-Owner, once, in a terminal (never in a chat):
-  1. in the fiscometro checkout: pnpm admin:token --analyst   (prints the token and its SHA-256)
-  2. fiscometro: put ANALYST_TOKEN_SHA256=<digest> in .admin-secrets.env, then pnpm admin:secrets
-     nettoswiss: set the GitHub secret ANALYST_TOKEN_SHA256 to the same digest (it reaches the Worker at the next deploy)
-  3. security add-generic-password -U -s $KEYCHAIN_ITEM -a "\$USER" -w     (paste the token at the prompt)
-EOF
+_auth_cleanup() {
+  [ -n "$AUTH_FILE" ] && rm -f "$AUTH_FILE"
+  AUTH_FILE=""
 }
+trap _auth_cleanup EXIT
+trap '_auth_cleanup; exit 130' INT TERM HUP
+
+# xtrace off around the token code, back on after if it was on. `{ ...; } 2>/dev/null` hides the toggle.
+_xtrace_off() { case $- in *x*) _XTRACE_WAS=1 ;; *) _XTRACE_WAS=0 ;; esac; set +x; }
+_xtrace_restore() { [ "${_XTRACE_WAS:-0}" = 1 ] && set -x; return 0; }
 
 load_token() {
-  if ! command -v security >/dev/null 2>&1; then
-    echo "token missing: the 'security' command is not available (macOS Keychain is required)." >&2
-    return 3
+  { _xtrace_off; } 2>/dev/null
+  local rc=0
+  _auth_cleanup
+  AUTH_FILE="$(mktemp "${TMPDIR:-/tmp}/seo-growth-auth.XXXXXX")" && chmod 600 "$AUTH_FILE" || rc=3
+  if [ "$rc" = 0 ]; then
+    python3 -I "$HERE/keychain_header.py" "$KEYCHAIN_ITEM" "$AUTH_FILE" || rc=$?
   fi
-  TOKEN="$(security find-generic-password -s "$KEYCHAIN_ITEM" -w 2>/dev/null || true)"
-  if [ -z "$TOKEN" ]; then
-    token_help
-    return 3
-  fi
-  case "$TOKEN" in
-    *[!A-Za-z0-9._~+/=-]*) TOKEN=""; echo "token unusable: Keychain item '$KEYCHAIN_ITEM' holds characters a bearer token cannot have." >&2; return 3 ;;
-  esac
-  return 0
+  [ "$rc" = 0 ] || _auth_cleanup
+  { _xtrace_restore; } 2>/dev/null
+  return "$rc"
 }
 
-# admin_call METHOD PATH OUTFILE [BODYFILE] -> prints the HTTP status code (000 on a network error)
+drop_token() { { _xtrace_off; _auth_cleanup; _xtrace_restore; } 2>/dev/null; }
+
+# admin_call METHOD PATH OUTFILE [BODYFILE] -> prints the HTTP status code (000 on a network error).
+# GETs retry twice; a POST never retries, so a report cannot be posted twice.
 admin_call() {
+  { _xtrace_off; } 2>/dev/null
   local method="$1" path="$2" out="$3" body="${4:-}"
-  local args=(-sS -X "$method" -K - -o "$out" -w '%{http_code}' --max-time 45 --retry 2 --retry-delay 3)
+  local args=(-sS -X "$method" -H "@$AUTH_FILE" -o "$out" -w '%{http_code}' --max-time 45)
+  if [ "$method" = GET ]; then
+    args+=(--retry 2 --retry-delay 3)
+  fi
   if [ -n "$body" ]; then
     args+=(-H 'Content-Type: application/json' --data-binary "@$body")
   fi
-  printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" | curl "${args[@]}" "$ORIGIN$path" 2>/dev/null || true
+  if [ -z "$AUTH_FILE" ] || [ ! -s "$AUTH_FILE" ]; then
+    printf '000'
+  else
+    curl "${args[@]}" "$ORIGIN$path" </dev/null 2>/dev/null || true
+  fi
+  { _xtrace_restore; } 2>/dev/null
 }
 
 # explain_status CODE ROUTE -> a one-line reason on stderr; returns non-zero unless 2xx
@@ -66,5 +76,5 @@ if site is None:
     sys.exit(f"unknown project {sys.argv[2]!r}: one of {sorted(k for k in sites if not k.startswith(chr(95)))}")
 v = site.get(sys.argv[3])
 print(v if isinstance(v, str) else json.dumps(v))
-' "$AGENT_DIR/data/sites.json" "$1" "$2"
+' "${SEO_GROWTH_DATA:-$AGENT_DIR/data}/sites.json" "$1" "$2"
 }

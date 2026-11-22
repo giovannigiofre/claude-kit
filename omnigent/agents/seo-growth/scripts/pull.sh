@@ -12,7 +12,8 @@
 # --check: only read the token and call /admin/api/summary; prints "ok <status> autopilot=<bool>".
 # Exit codes: 0 ok, 2 usage, 3 token missing, 4 admin API refused or unreachable,
 #             5 not connected yet (the site answers 401 to the token: a one-line stop, not an error).
-# Claude runs this script; it never runs `security` itself and never sees the token.
+# Claude runs this script; it never runs `security` itself and never sees the token (see _token.sh:
+# not in a variable, not exported, not traced under `bash -x`).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -61,7 +62,7 @@ for route in summary "pages?limit=1000" "queries?limit=1000"; do
   code="$(admin_call GET "/admin/api/$route" "$RUN/$name.json")"
   explain_status "$code" "/admin/api/$route" || { rc=$?; rm -rf "$RUN"; exit "$rc"; }
 done
-TOKEN=""  # not needed past this point
+drop_token  # not needed past this point
 
 fetch_public() {  # fetch_public URL OUT
   curl -sSfL --max-time 30 -A 'seo-growth/1 (+site owner monitoring)' -o "$2" "$1" 2>>"$RUN/fetch-errors.txt" \
@@ -96,8 +97,22 @@ done > "$RUN/html/_paths.tsv"
 
 python3 -I "$HERE/sources.py" "$RUN" --state "$STATE"
 python3 -I "$HERE/schema_lint.py" "$RUN/html" --out "$RUN/schema.json" >/dev/null || true
+# Open seo-growth PRs as GitHub has them (the cap and the open-PR-on-a-page rule count these, not the
+# ledger alone). If gh cannot answer, open_prs.json says so and score.py stops the run.
+if gh pr list --repo "$(site_field "$project" repo)" --label seo-growth --state open --limit 100 \
+     --json number,url,title,body,headRefName >"$RUN/open_prs.raw" 2>>"$RUN/fetch-errors.txt"; then
+  python3 -I -c '
+import json, sys
+json.dump({"ok": True, "prs": json.load(open(sys.argv[1]))}, open(sys.argv[2], "w"))
+' "$RUN/open_prs.raw" "$RUN/open_prs.json"
+else
+  echo '{"ok": false, "prs": []}' > "$RUN/open_prs.json"
+  echo "gh pr list failed: open seo-growth PRs unknown, the run will stop" >>"$RUN/fetch-errors.txt"
+fi
+rm -f "$RUN/open_prs.raw"
+
 python3 -I "$HERE/ledger.py" sync --project "$project" >/dev/null 2>>"$RUN/fetch-errors.txt" \
-  || echo "ledger sync failed (gh?): open-PR counts come from the ledger as last recorded" >>"$RUN/fetch-errors.txt"
+  || echo "ledger sync failed (gh?): merged/closed states in the ledger may be stale" >>"$RUN/fetch-errors.txt"
 
 echo "pulled $project into $RUN"
 [ -s "$RUN/fetch-errors.txt" ] && echo "with fetch notes: $RUN/fetch-errors.txt"

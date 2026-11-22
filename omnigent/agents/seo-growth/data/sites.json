@@ -29,7 +29,7 @@
     "repo": "giovannigiofre/nettoswiss",
     "languages": ["en", "it", "de", "fr"],
     "prelaunch_until": "2026-12-15",
-    "gate": "mkdir .kit/gate.lock && pnpm gate; rmdir .kit/gate.lock",
+    "gate": "pnpm gate",
     "allowed_types": ["schema-fix", "news-freshness", "seasonal", "low-ctr", "striking-distance", "internal-links", "decay", "ai-citation"],
     "guide_cap": {"per_week": 1, "per_language": true},
     "rules": [

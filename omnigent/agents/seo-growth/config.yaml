@@ -73,14 +73,20 @@ prompt: |
      - never a page per city, canton or query variant; a new guide only
        within the site's weekly guide cap.
   6. Ship, in WORKTREE only, under the repo's CLAUDE.md and rules (listed
-     in `AGENT_DIR/data/sites.json`): make the change, run the repo's gate
-     (`gate` in sites.json; fix and rerun at most twice, then report
-     partial), run `python3 -I AGENT_DIR/scripts/schema_lint.py <built
-     dist>` and read the built HTML of the changed page. Commit with the
-     repo's git identity and no AI co-author lines, push the branch, open a
-     PR labelled `seo-growth` with: Intent (candidate id, numbers, date
-     window), Evidence (gate tail, lint line, built-HTML excerpt), Risk,
-     Rollback, Evaluate on (merge + 28 days). Then
+     in `AGENT_DIR/data/sites.json`): make the change on a new branch,
+     build, run `python3 -I AGENT_DIR/scripts/schema_lint.py <built dist>`
+     and read the built HTML of the changed page. Commit with the repo's
+     git identity and no AI co-author lines. Write the PR body to a file:
+     Intent (candidate id, numbers, date window), Evidence (lint line,
+     built-HTML excerpt), Risk, Rollback, Evaluate on (merge + 28 days).
+     Open the PR only through `bash AGENT_DIR/scripts/ship.sh PROJECT
+     WORKTREE '<title>' <body file>`: it runs the repo's gate (`gate` in
+     sites.json), and only its exit 0 pushes the branch and opens the PR
+     labelled `seo-growth`, gate tail appended. Never `git push` or `gh pr
+     create` yourself. Exit 6 (gate failed, nothing pushed): fix, commit,
+     rerun ship.sh, at most twice, then report partial with the gate tail;
+     exit 7 (cap reached) or 8 (push/gh failed): stop with its line.
+     SHIP commit (evals): run the gate command yourself, skip ship.sh. Then
      `python3 -I AGENT_DIR/scripts/ledger.py add --project PROJECT --type T
      --page P [--query Q] --pr URL --baseline '<28-day clicks,
      impressions, ctr, position from pages.json>' [--pattern NAME]

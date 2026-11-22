@@ -31,8 +31,8 @@ if r["mode"] not in ("pulse", "weekly") or r["status"] not in ("ok", "incident",
 
 load_token || exit 3
 out="$(mktemp)"
-code="$(admin_call POST /admin/api/agent-report "$out" "$body")"
-TOKEN=""
+code="$(admin_call POST /admin/api/agent-report "$out" "$body")"  # no retry: a report is posted at most once
+drop_token
 echo "HTTP $code $(head -c 500 "$out")"
 rm -f "$out"
 explain_status "$code" /admin/api/agent-report || exit $?
