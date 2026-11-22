@@ -13,6 +13,7 @@ omnigent/
   agents/designer/       UI work with Open Design's craft rules, screenshots, a live preview
     skills/              design-brief, design-system, design-craft, design-review
   agents/seo/            search and content: audit, or a PR
+  scripts/               clean_evidence.py: daily cleanup of old screenshots
   skills/                lead's: new-project, onboard-repo (with omni_project.py), new-agent
 ```
 
@@ -111,3 +112,19 @@ Two pieces, each signed in once, both refreshing on their own:
 Omnigent also has a server-side MCP registry (`OMNIGENT_MCP_REGISTRY`), but it needs an
 encrypted credential store and an OAuth client of our own: worth it on a shared server, not
 here.
+
+## Old screenshots
+
+Screenshots in the chat are files in `.kit/evidence/` of each Omnigent project, Studio and the
+specialists' worktrees. `scripts/clean_evidence.py` deletes the images and videos there older than
+3 days (notes and logs stay; an old chat then shows "Image not available"). It reads the project
+list from the server, so new projects are covered. Terminal-only repos are not touched. Install:
+
+```sh
+mkdir -p ~/.omnigent/bin && cp omnigent/scripts/clean_evidence.py ~/.omnigent/bin/
+```
+
+and a LaunchAgent `ai.omnigent.evidence-cleanup` at 04:00 that runs it with Omnigent's own Python
+(`~/.local/share/uv/tools/omnigent/bin/python`): that binary already has access to `~/Documents`,
+while `/usr/bin/python3` under launchd does not and finds nothing. The log is
+`~/.omnigent/logs/evidence-cleanup.log`; `--dry-run` shows what would go.
