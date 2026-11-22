@@ -1,36 +1,48 @@
 {
   "_comment": "Recurring IT/CH demand peaks. score.py proposes the related guide or freshness update 4-8 weeks before a peak, and only when (1) owner_reviewed_on is set, (2) the entry's status is 'checked' and (3) checked_for_year equals the year of the coming peak. Every date needs an official source, re-checked every year. The agent never edits this file.",
   "OWNER_READ_REQUIRED": "One-time read by the owner: check each date and source, then set owner_reviewed_on to the date of your read. Until then no seasonal candidate is made.",
-  "owner_reviewed_on": null,
+  "owner_reviewed_on": "2026-11-22",
   "entries": [
     {
       "id": "it-imu-saldo",
       "site": "fiscometro",
       "title": "IMU, saldo",
       "peak": "12-16",
-      "queries": ["imu", "saldo imu", "imu dicembre"],
-      "source_url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:legge:2019-12-27;160",
-      "source_note": "L. 160/2019, art. 1 c. 762: acconto 16 June, saldo 16 December. Seen restated in municipal IMU regulations on finanze.gov.it; the law text itself not re-read.",
-      "status": "unverified",
-      "checked_for_year": null
+      "queries": [
+        "imu",
+        "saldo imu",
+        "imu dicembre"
+      ],
+      "source_url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:legge:2019-12-27;160~art1-com762",
+      "source_note": "L. 160/2019 art. 1 c. 762 (text in force, read 2026-11-22): instalments due 16 June and 16 December. 16 Dec 2026 is a Wednesday, no shift.",
+      "status": "checked",
+      "checked_for_year": 2026
     },
     {
       "id": "it-imu-acconto",
       "site": "fiscometro",
       "title": "IMU, acconto",
       "peak": "06-16",
-      "queries": ["imu", "acconto imu", "imu giugno"],
-      "source_url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:legge:2019-12-27;160",
-      "source_note": "Same as it-imu-saldo.",
-      "status": "unverified",
-      "checked_for_year": null
+      "queries": [
+        "imu",
+        "acconto imu",
+        "imu giugno"
+      ],
+      "source_url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:legge:2019-12-27;160~art1-com762",
+      "source_note": "Same comma 762: first instalment or single payment by 16 June. 16 Jun 2027 is a Wednesday, no shift.",
+      "status": "checked",
+      "checked_for_year": 2027
     },
     {
       "id": "it-730-precompilato-apertura",
       "site": "fiscometro",
       "title": "730 precompilato: consultation opens",
       "peak": "04-30",
-      "queries": ["730 precompilato", "730", "dichiarazione precompilata"],
+      "queries": [
+        "730 precompilato",
+        "730",
+        "dichiarazione precompilata"
+      ],
       "source_url": "https://infoprecompilata.agenziaentrate.gov.it/portale/scadenze",
       "source_note": "2026 campaign: available from 30 April, sending from 14/15 May (the two AdE pages disagree), deadline 30 September. Re-check when AdE publishes the 2027 calendar.",
       "status": "checked",
@@ -41,7 +53,10 @@
       "site": "fiscometro",
       "title": "730: deadline",
       "peak": "09-30",
-      "queries": ["scadenza 730", "730"],
+      "queries": [
+        "scadenza 730",
+        "730"
+      ],
       "source_url": "https://infoprecompilata.agenziaentrate.gov.it/portale/scadenze",
       "source_note": "2026 campaign: 30 September.",
       "status": "checked",
@@ -51,21 +66,28 @@
       "id": "it-redditi-pf",
       "site": "fiscometro",
       "title": "Redditi PF: deadline",
-      "peak": "10-31",
-      "queries": ["redditi pf", "modello redditi scadenza"],
-      "source_url": "https://infoprecompilata.agenziaentrate.gov.it/portale/scadenze",
-      "source_note": "2026: 2 November (31 October fell on a Saturday). The rule behind the date not re-read.",
-      "status": "unverified",
-      "checked_for_year": null
+      "peak": "11-02",
+      "queries": [
+        "redditi pf",
+        "modello redditi scadenza"
+      ],
+      "source_url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:presidente.repubblica:decreto:1998-07-22;322~art2",
+      "source_note": "DPR 322/1998 art. 2 c. 1: online filing by 31 October. 31 Oct 2027 is a Sunday and 1 Nov is Ognissanti (L. 260/1949 art. 2), so DL 70/2011 art. 7 moves it to Tue 2 Nov 2027. The date moves every year: re-check before each campaign.",
+      "status": "checked",
+      "checked_for_year": 2027
     },
     {
       "id": "it-irpef-legge-bilancio",
       "site": "fiscometro",
       "title": "New IRPEF brackets after the budget law",
       "peak": "01-01",
-      "queries": ["scaglioni irpef", "irpef 2027", "legge di bilancio"],
+      "queries": [
+        "scaglioni irpef",
+        "irpef 2027",
+        "legge di bilancio"
+      ],
       "source_url": "https://www.gazzettaufficiale.it/",
-      "source_note": "Only from the law as published in the Gazzetta Ufficiale, never from the DDL. Set checked_for_year once it is published.",
+      "source_note": "Only from the law as published in the Gazzetta Ufficiale, never from the DDL. As of 2026-11-22 (GU Serie Generale up to n. 272 of 21-11-2026) the 2027 budget law is not published; re-check after publication, usually around 30 December.",
       "status": "unverified",
       "checked_for_year": null
     },
@@ -74,9 +96,12 @@
       "site": "fiscometro",
       "title": "Assegno unico: new ISEE by end of February",
       "peak": "02-28",
-      "queries": ["assegno unico", "isee 2027"],
+      "queries": [
+        "assegno unico",
+        "isee 2027"
+      ],
       "source_url": "https://www.inps.it/",
-      "source_note": "Needs the INPS message for the year.",
+      "source_note": "The INPS service page sets no 28 February date: applications from 1 March to 30 June get arrears back to March, and an ISEE from a DSU filed by 30 June also counts. No 2027 INPS message yet (2026-11-22). If re-checked, the official anchors are 03-01 and 06-30, not 02-28.",
       "status": "unverified",
       "checked_for_year": null
     },
@@ -85,20 +110,27 @@
       "site": "fiscometro",
       "title": "Certificazione Unica to employees",
       "peak": "03-16",
-      "queries": ["certificazione unica", "cu 2027"],
-      "source_url": "https://www.agenziaentrate.gov.it/",
-      "source_note": "Needs the AdE page for the year.",
-      "status": "unverified",
-      "checked_for_year": null
+      "queries": [
+        "certificazione unica",
+        "cu 2027"
+      ],
+      "source_url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:presidente.repubblica:decreto:1998-07-22;322~art4",
+      "source_note": "DPR 322/1998 art. 4 c. 6-quater: CU to employees by 16 March of the following year (c. 6-quinquies: also to AdE by 16 March). 16 Mar 2027 is a Tuesday, no shift.",
+      "status": "checked",
+      "checked_for_year": 2027
     },
     {
       "id": "it-tredicesima",
       "site": "fiscometro",
       "title": "Tredicesima (December pay)",
       "peak": "12-15",
-      "queries": ["tredicesima", "tredicesima netta", "busta paga dicembre"],
+      "queries": [
+        "tredicesima",
+        "tredicesima netta",
+        "busta paga dicembre"
+      ],
       "source_url": "https://www.inps.it/",
-      "source_note": "No single legal date: paid in December under the CCNL; pensions with the December instalment (INPS). Needs the INPS payment calendar for the year.",
+      "source_note": "No legal date for employees (CCNL), so 12-15 has no official basis. Pensions: paid on the 1st of the month (L. 190/2014 art. 1 c. 302); no official page read on 2026-11-22 says the tredicesima comes with the December instalment. Candidate anchor 12-01 once the INPS December payslip notice is out.",
       "status": "unverified",
       "checked_for_year": null
     },
@@ -107,7 +139,12 @@
       "site": "nettoswiss",
       "title": "New withholding-tax tables",
       "peak": "01-01",
-      "queries": ["quellensteuer", "quellensteuer tarif", "impôt à la source", "imposta alla fonte"],
+      "queries": [
+        "quellensteuer",
+        "quellensteuer tarif",
+        "impôt à la source",
+        "imposta alla fonte"
+      ],
       "source_url": "https://www.estv.admin.ch/de/rundschreiben-direkten-bundessteuer",
       "source_note": "ESTV circular no. 221 (20 Oct 2026): 2027 tables valid from 1 January 2027; files expected online in December 2026. Cantonal tables only on each canton's site.",
       "status": "checked",
@@ -118,20 +155,59 @@
       "site": "nettoswiss",
       "title": "Pillar 3a: pay in before 31 December",
       "peak": "12-31",
-      "queries": ["säule 3a", "3a maximum", "pilier 3a", "pilastro 3a"],
+      "queries": [
+        "säule 3a",
+        "3a maximum",
+        "pilier 3a",
+        "pilastro 3a"
+      ],
       "source_url": "https://www.admin.ch/de/newnsb/6ck3kzVxBNQ4",
       "source_note": "Federal announcement of 5 Oct 2026: max CHF 7,258 (with 2nd pillar) for 2026, CHF 7,373 from 1 Jan 2027; without 2nd pillar CHF 36,288 / 36,864.",
       "status": "checked",
       "checked_for_year": 2026
     },
     {
-      "id": "ch-steuererklaerung",
       "site": "nettoswiss",
-      "title": "Cantonal tax-return deadlines",
+      "queries": [
+        "steuererklärung frist",
+        "déclaration d'impôt délai",
+        "dichiarazione d'imposta termine"
+      ],
+      "id": "ch-steuererklaerung-0331",
+      "title": "Tax-return deadline 31 March (ZH, BS, GE, AG)",
       "peak": "03-31",
-      "queries": ["steuererklärung frist", "déclaration d'impôt délai", "dichiarazione d'imposta termine"],
-      "source_url": "https://www.estv.admin.ch/",
-      "source_note": "Differs by canton: each canton's own page is the source. One entry per canton once checked.",
+      "source_url": "https://www.zh.ch/de/steuern-finanzen/steuern/treuhaender/steuerbuch/steuerbuch-definition/zstb-133-1.html",
+      "source_note": "ZH: 31.03.2027 stated for the 2026 return (ZStB 133.1, 4.8.2026). BS: 31.03.2027 (Wegleitung 2026, media.bs.ch 15500.a.01.26). GE (ge.ch, 'de l'annee en cours') and AG (employees and retirees; self-employed 30.06) state the same standing rule. 31 Mar 2027 is a Wednesday.",
+      "status": "checked",
+      "checked_for_year": 2027
+    },
+    {
+      "site": "nettoswiss",
+      "queries": [
+        "steuererklärung frist",
+        "déclaration d'impôt délai",
+        "dichiarazione d'imposta termine"
+      ],
+      "id": "ch-steuererklaerung-0315",
+      "title": "Tax-return deadline 15 March (BE, VD)",
+      "peak": "03-15",
+      "source_url": "https://www.taxinfo.sv.fin.be.ch/taxinfo/1cce120a-05da-45e8-8968-b66ae236fee5",
+      "source_note": "BE: 15.03 for employees, 15.05 self-employed; the binding date is on the letter sent with the return. VD: 15.03 legal deadline, tolerance to 30.06 (vd.ch). Both pages name no year: check the 2027 letters before marking checked.",
+      "status": "unverified",
+      "checked_for_year": null
+    },
+    {
+      "site": "nettoswiss",
+      "queries": [
+        "steuererklärung frist",
+        "déclaration d'impôt délai",
+        "dichiarazione d'imposta termine"
+      ],
+      "id": "ch-steuererklaerung-0430",
+      "title": "Tax-return deadline 30 April (ZG, TI)",
+      "peak": "04-30",
+      "source_url": "https://zg.ch/de/steuern-finanzen/steuern/natuerliche-personen/fristerstreckung-steuererklaerung",
+      "source_note": "ZG: 30.04 (generic page, no year). TI: the 2025 return was due 30.04.2026; the 2026 notice usually comes in February. SG and LU have no fixed date (printed on the form): no entry.",
       "status": "unverified",
       "checked_for_year": null
     }

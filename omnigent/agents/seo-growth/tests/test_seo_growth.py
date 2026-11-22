@@ -226,7 +226,8 @@ class Seasonal(Case):
              "queries": ["forfettario"], "source_url": "https://www.agenziaentrate.gov.it/x"}
 
     def test_calendar_unread_by_owner_gives_nothing(self):
-        out = self.score()
+        env = self.data_dir(lambda c: c.update(owner_reviewed_on=None))
+        out = self.score(env=env)
         self.assertFalse([c for c in out["candidates"] if c["type"] in ("seasonal", "new-guide")])
         self.assertTrue(any("not read by the owner" in n for n in out["notes"]))
 
