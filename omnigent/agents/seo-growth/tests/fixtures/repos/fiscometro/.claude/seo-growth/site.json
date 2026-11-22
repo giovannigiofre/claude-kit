@@ -1,0 +1,48 @@
+{
+  "_comment": "seo-growth reads this folder (claude-kit omnigent/agents/seo-growth). Owner-edited: the agent never changes it.",
+  "origin": "https://fiscometro.it",
+  "repo": "giovannigiofre/fiscometro",
+  "languages": [
+    "it"
+  ],
+  "prelaunch_until": null,
+  "gate": "pnpm verify",
+  "allowed_types": [
+    "schema-fix",
+    "news-freshness",
+    "seasonal",
+    "low-ctr",
+    "striking-distance",
+    "internal-links",
+    "decay",
+    "ai-citation"
+  ],
+  "guide_cap": {
+    "per_week": 2,
+    "per_language": false
+  },
+  "rules": [
+    "Every amount comes through <Fact> from data/** with source and verified_on (CLAUDE.md rule 3).",
+    "Primary sources only; a DDL is never presented as law (DDL banner).",
+    "Banned words: commercialista, ufficiale, garantito, ti conviene.",
+    "Title at most 60 characters (src/lib/tool-page.ts), description at most 155 (scripts/lib/content-lint.ts).",
+    "A new guide is registered in RELATED (src/lib/tool-page.ts) and GUIDES (src/lib/sections.ts), tied to a tool.",
+    "Legal pages and default scenarios: PR labelled needs-human."
+  ],
+  "related_map": "src/lib/tool-page.ts (RELATED)",
+  "feeds": [
+    {
+      "id": "ade-news",
+      "url": "https://www.agenziaentrate.gov.it/portale/c/portal/rss/entrate?idrss=79b071d0-a537-4a3d-86cc-7a7d5a36f2a9"
+    },
+    {
+      "id": "ade-normativa",
+      "url": "https://www.agenziaentrate.gov.it/portale/c/portal/rss/entrate?idrss=0753fcb1-1a42-4f8c-f40d-02793c6aefb4"
+    },
+    {
+      "id": "gu-sg",
+      "url": "https://www.gazzettaufficiale.it/rss/SG"
+    }
+  ],
+  "watch_pages": []
+}

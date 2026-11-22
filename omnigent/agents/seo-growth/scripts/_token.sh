@@ -3,7 +3,7 @@
 # mode-700 directory keychain_header.py creates itself; both deleted by the EXIT trap below). curl reads it
 # with -H @file, so the token is never in argv, in a shell variable, in the environment, in the output or in an xtrace (`bash -x`) trace. Nothing here prints it.
 #
-# One token for both sites (research-2.md, change a): Keychain item `seo-growth-analyst`, fixed on purpose.
+# One token for every site: Keychain item `seo-growth-analyst`, fixed on purpose.
 
 KEYCHAIN_ITEM="seo-growth-analyst"
 AUTH_FILE=""
@@ -67,7 +67,7 @@ admin_call() {
 explain_status() {
   case "$1" in
     2??) return 0 ;;
-    401) echo "not connected yet: $ORIGIN answers 401 to the analyst token on $2 (its Worker's ANALYST_TOKEN_SHA256 does not match yet; nettoswiss picks the GitHub secret up at its next production deploy)." >&2; return 5 ;;
+    401) echo "not connected yet: $ORIGIN answers 401 to the analyst token on $2 (its Worker's ANALYST_TOKEN_SHA256 does not match yet, e.g. a secret that a production deploy has not picked up)." >&2; return 5 ;;
     403) echo "forbidden (403) on $2: the analyst token cannot call this endpoint." >&2 ;;
     429) echo "rate limited (429) on $2: 60 requests a minute per Worker; try the next run." >&2 ;;
     000) echo "network error on $2: could not reach $ORIGIN." >&2 ;;
@@ -76,14 +76,21 @@ explain_status() {
   return 4
 }
 
+# The site's own data lives in its repo, not in the kit: <repo>/.claude/seo-growth/ (site.json, calendar.json,
+# panel.json). SEO_GROWTH_SITE names that folder (the agent points it at its worktree); else
+# $SEO_GROWTH_REPOS/<project>/.claude/seo-growth, with SEO_GROWTH_REPOS defaulting to ~/Documents/repositories.
+site_dir() {  # site_dir PROJECT -> the folder with the site's data
+  printf '%s\n' "${SEO_GROWTH_SITE:-${SEO_GROWTH_REPOS:-$HOME/Documents/repositories}/$1/.claude/seo-growth}"
+}
+
 site_field() {  # site_field PROJECT FIELD -> value (JSON for objects/lists, text otherwise)
   python3 -I -c '
 import json, sys
-sites = json.load(open(sys.argv[1]))
-site = sites.get(sys.argv[2])
-if site is None:
-    sys.exit(f"unknown project {sys.argv[2]!r}: one of {sorted(k for k in sites if not k.startswith(chr(95)))}")
+try:
+    site = json.load(open(sys.argv[1]))
+except FileNotFoundError:
+    sys.exit(f"no site data for {sys.argv[2]!r}: {sys.argv[1]} is missing (the repo keeps it in .claude/seo-growth/)")
 v = site.get(sys.argv[3])
 print(v if isinstance(v, str) else json.dumps(v))
-' "${SEO_GROWTH_DATA:-$AGENT_DIR/data}/sites.json" "$1" "$2"
+' "$(site_dir "$1")/site.json" "$1" "$2"
 }

@@ -5,7 +5,7 @@
 
 Reads, from the run dir: summary.json, pages.json, queries.json (admin API), news.json, rollouts.json,
 schema.json (optional). From the project state dir (default $SEO_GROWTH_HOME/<project>): ledger.jsonl and
-panel/<date>.json (the AI-citation panel runs). From ../data: sites.json, thresholds.json, calendar.json, panel.json.
+panel/<date>.json (the AI-citation panel runs). From ../data: thresholds.json. From the site's repo (.claude/seo-growth/, see site_dir): site.json, calendar.json, panel.json.
 
 Writes candidates.json:
   decision     {action: stop | nothing | candidates, reason}
@@ -31,6 +31,14 @@ sys.path.insert(0, str(HERE))
 import ledger as ledger_mod  # noqa: E402
 
 DATA = Path(os.environ.get("SEO_GROWTH_DATA") or HERE.parent / "data")
+
+
+def site_dir(project: str) -> Path:
+    """The site's own data, kept in its repo: same rule as site_dir in _token.sh."""
+    if os.environ.get("SEO_GROWTH_SITE"):
+        return Path(os.environ["SEO_GROWTH_SITE"])
+    repos = Path(os.environ.get("SEO_GROWTH_REPOS") or Path.home() / "Documents" / "repositories")
+    return repos / project / ".claude" / "seo-growth"
 PREFERENCE = {"schema-fix": 1, "news-freshness": 2, "seasonal": 2, "decay": 3, "low-ctr": 3,
               "striking-distance": 4, "internal-links": 4, "ai-citation": 4, "new-guide": 5}
 TITLE_TYPES = {"low-ctr"}
@@ -81,7 +89,11 @@ def ctr_of(r) -> float:
 class Scorer:
     def __init__(self, run: Path, project: str, today: dt.date, state: Path):
         self.run, self.project, self.today, self.state = run, project, today, state
-        self.site = read(DATA / "sites.json")[project]
+        self.site_dir = site_dir(project)
+        self.site = read(self.site_dir / "site.json")
+        if not isinstance(self.site, dict):
+            sys.exit(f"no site data for {project!r}: {self.site_dir / 'site.json'} is missing or not JSON "
+                     "(the repo keeps it in .claude/seo-growth/)")
         self.th = read(DATA / "thresholds.json")
         self.summary = read(run / "summary.json")
         self.pages = read(run / "pages.json", {}) or {}
@@ -321,9 +333,9 @@ class Scorer:
         return [q for q in self.query_rows if any(t in q["query"].lower() for t in terms)]
 
     def seasonal(self, curve) -> list[dict]:
-        cal = read(DATA / "calendar.json", {}) or {}
+        cal = read(self.site_dir / "calendar.json", {}) or {}
         t = self.th["seasonal"]
-        entries = [e for e in cal.get("entries", []) if e.get("site") == self.project]
+        entries = [e for e in cal.get("entries", []) if e.get("site", self.project) == self.project]
         if not entries:
             return []
         if not cal.get("owner_reviewed_on"):
@@ -394,7 +406,8 @@ class Scorer:
 
     def ai_panel(self) -> tuple[list[dict], dict]:
         t = self.th["ai_panel"]
-        panel = (read(DATA / "panel.json", {}) or {}).get(self.project, [])
+        panel = read(self.site_dir / "panel.json", {}) or {}
+        panel = panel.get("prompts", []) if isinstance(panel, dict) else panel
         runs = sorted((self.state / "panel").glob("*.json")) if (self.state / "panel").is_dir() else []
         last = [read(r, {}) for r in runs[-t["runs_that_agree"]:]]
         info = {"runs": len(runs), "needed": t["runs_that_agree"]}
