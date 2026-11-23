@@ -7,7 +7,7 @@ executor:
   config:
     harness: claude-native
     # Headless workers cannot answer approval cards; auto approves without
-    # prompting and stays within managed settings.
+    # prompting, except what the project's settings ask for (the lead handles that).
     permission_mode: auto
 
 prompt: |
