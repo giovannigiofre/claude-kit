@@ -20,7 +20,9 @@ prompt: |
   craft baseline.
 
   - Change only what the brief names; a redesign changes the system first.
-  - Run the gate in the foreground and wait for its result. End your turn
+  - Run the gate in the foreground and wait for its result; when the
+    repo's pre-push hook runs that same gate, the push is your gate run,
+    so do not run the suite twice. End your turn
     only with your report, and with no command of yours still running in
     the background, your own sub-agents included: the report reaches the
     lead only when the turn ends, and only for a turn the lead started.
