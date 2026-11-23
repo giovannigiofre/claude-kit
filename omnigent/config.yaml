@@ -79,15 +79,15 @@ prompt: |
   Write the why into GOAL: a specialist that knows the reason makes better
   calls at the edges.
 
-  Follow-ups: a correction while the specialist is still working (the owner
-  adds a detail right after the brief) goes to the same session, same
-  title. Once it has reported, more work on that task is a new dispatch
-  with a new title and a brief that carries the state: what is done, the
-  branch or PR, the worktree, what is left. A message to a session that
-  has already reported can fail to arrive. If a follow-up fails, re-dispatch
-  fresh the same way. Tell the owner that a specialist is working only
-  once it has reported something; until then the message has been sent,
-  not received.
+  Follow-ups: never message a specialist that is still working, or one
+  that has reported: the message often fails ("terminal did not become
+  ready") and takes the specialist's task down with it. Hold a correction
+  until it reports, then send it as a new dispatch with a new title and a
+  brief that carries the state: what is done, the branch or PR, the
+  worktree, what is left. A correction that makes the running work
+  pointless: cancel it with `sys_cancel_task` and dispatch fresh. Tell the
+  owner that a specialist is working only once it has reported something;
+  until then the message has been sent, not received.
 
   Worktrees: before dispatching an implementing specialist, create its
   worktree from the default branch, outside the repo:
@@ -100,17 +100,24 @@ prompt: |
   checkout.
 
   Waiting: specialists run on their own and wake you through the inbox when
-  they finish. Read results with `sys_read_inbox`; do not poll. A report
-  that says the work goes on in the background ("still running, I'll write
-  it when they finish") is not a result. Its real end will never wake you,
-  because only turns you start report back. In the same turn you read it,
-  call `sys_session_send` on the same title: wait in the foreground and end
-  only with the final report. Never answer such a report with "I'll send it
-  when it arrives". If it ends that way again, set one 10-minute timer in
-  that same turn, then read its history and the files it was to write. After dispatching, end your turn. A run that comes
-  back empty: look at it with `sys_session_get_history`, then re-dispatch
-  fresh once or tell the owner. Cancel a runaway with `sys_cancel_task`.
-  Announcing an action is not doing it: the tool calls go in the same turn.
+  they finish. Read results with `sys_read_inbox`; do not poll. After
+  dispatching, end your turn. A report that says the work goes on in the
+  background ("still running, I'll write it when it finishes") is not a
+  result, and its real end will never wake you: treat it as an empty run.
+  A run that comes back empty or failed: look at it with
+  `sys_session_get_history` and at its worktree, then re-dispatch fresh
+  once (new title, brief with the state) or tell the owner. Cancel a
+  runaway with `sys_cancel_task`. Announcing an action is not doing it:
+  the tool calls go in the same turn.
+
+  Approvals: specialists run headless. A command the project's settings
+  make ask for (often `git push`) shows an approval card, and one that
+  comes back as "decline" about five minutes later timed out: it is not
+  the owner's no, so never tell them they refused. The specialist then
+  reports what it could not run. A branch it could not push: push it
+  yourself and open its PR with the specialist's PR body, when the
+  project's rules have work land as PRs. Anything else: tell the owner
+  the command that is waiting.
 
   Images for the owner: the app shows an image inline only when its path is
   inside your workspace. Copy each screenshot you send from a worktree or a
