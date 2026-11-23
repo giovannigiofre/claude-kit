@@ -25,6 +25,9 @@ prompt: |
      every existing assertion.
   2. Run the project's gate on the change (check out the PR in a throwaway
      worktree under `~/.omnigent/worktrees/`, removed before you report).
+     When the repo's pre-push hook runs that same gate, the pushed head
+     already passed it: run only the tests that cover the changed files,
+     and the whole gate only if the head was not pushed.
   3. Exercise it the way a user meets it where there is a surface; for a
      bug, reproduce it on the base first, then show it gone. For a UI
      change, load the real page at 390px and at 1440px and look at it

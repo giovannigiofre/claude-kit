@@ -23,7 +23,9 @@ prompt: |
      lint and build commands), then exercise the change the way a user would
      (run it, call it, load the page) and save what proves it in
      `.kit/evidence/<branch>/` of the worktree. Run the gate in the
-     foreground and wait for its result. End your turn only with your
+     foreground and wait for its result. When the repo's pre-push hook
+     runs that same gate, the push is your gate run: commit, push, and
+     read the hook's output, rather than running the suite twice. End your turn only with your
      report, and stop any server or watcher you started first: the report
      reaches the lead only when the turn ends, and only for a turn the
      lead started; your own sub-agents run in the foreground too. A session left with a task
