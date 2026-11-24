@@ -26,7 +26,7 @@ whole interface: the coordinator picks the skill, starts the work and tells you 
 | Thinking it through first | "let's think about X first" | the coordinator reads and reasons and changes nothing until you say go, then the conclusion becomes an item; `/kit:handoff` sends it to another open session or a new background session instead |
 | Finding work | "what should we work on?" | `kit:scout`: read-only explorers write deduplicated proposal cards (A mechanical, B needs judgment, C human-only) into `.kit/lead/proposals/`; `next` takes the A cards |
 | Something broke | describe it | `kit:investigate`: evidence (asks you once, with exact export steps), reproduction, hypotheses, a regression-tested fix |
-| UI, LLM or desktop-app work | describe it | the kit asks "Use Kit UI / Kit LLM / Kit Desktop for this?" and installs that plugin for the project on yes |
+| UI, LLM, desktop-app or web-ops work | describe it | the kit asks "Use Kit UI / Kit LLM / Kit Desktop / Kit Web Ops for this?" and installs that plugin for the project on yes |
 | Merging | nothing, or say so | you merge; say "merge green PRs yourself" and the coordinator saves `lead.merge: agent` in `kit.json` |
 | Finishing by hand | "ship it" | `kit:go`: PR with intent, live evidence (the gate run is recorded on the exact tree), what was fixed, risk; keeps CI green; merges if the project allows it |
 | Evening | "tonight keep doing X until Y" | `kit:overnight` starts at once, detached: a fresh session per small step, a commit only when the gate passes, 40 iterations and USD 25 unless you name other caps, the branch pushed once at the end |
@@ -112,7 +112,7 @@ what you say fits it; one listed with a slash runs only when typed):
 | `kit:shape` | A brain-dump into a brief through at most 3 multiple-choice rounds |
 | `kit:investigate` | Root-cause debugging for any failure; `scripts/compact_logs.py` reads big log exports and diffs a failing run against a working one |
 | `kit:overnight` | Launches `scripts/overnight.py`: fresh `claude -p` per step, commit on a green gate, reset otherwise, notes as memory, optional caps, resumes early stops |
-| `kit:extras` | Offers `kit-ui`, `kit-llm` or `kit-desktop` when a task needs one the project lacks |
+| `kit:extras` | Offers `kit-ui`, `kit-llm`, `kit-desktop` or `kit-web-ops` when a task needs one the project lacks |
 | `/kit:handoff` | A discussion's conclusion becomes a brief (an item on disk) sent to the coordinator, an open session, a new background session, or kept as a proposal card |
 | `kit:scout` | Read-only explorers write deduplicated proposal cards; `take <id>` queues one as an item |
 | `kit:go` | Intent → sync → test like a user → `/code-review` → `/simplify` → risk → PR → CI green |
@@ -129,6 +129,7 @@ what you say fits it; one listed with a slash runs only when typed):
 |---|---|
 | `kit-ui` | `kit-ui:ui` (impeccable and taste as one team, one precedence rule, one done-check), `kit-ui:direction` (three visual directions as mixes of pinned public design systems, the owner's pick, a checkable hierarchy spec, an independent review), `kit-ui:brand` (three brand boards, then an applied design system) |
 | `kit-llm` | `kit-llm:llm-build` (build checklist A-H for code that calls an LLM), `kit-llm:llm-evals` (error analysis, calibrated judges, then prompt optimization or model choice), and a hook that spots LLM code on edit |
+| `kit-web-ops` | `kit-web-ops:web-ops` (Cloudflare DNS, tokens, Workers secrets and analytics; Search Console, Site Verification, CrUX and PageSpeed keys; Bing Webmaster and IndexNow; a playbook to connect a site to the search engines; a doctor for logins and active accounts). CLI and REST first; the research behind it is in `plugins/kit-web-ops/docs/research.md` |
 | `kit-desktop` | `kit-desktop:desktop` (a native desktop app seen and operated through its accessibility tree with Vercel Labs' agent-desktop CLI: headless, from a thread too, evidence as values read back; the review is in CATALOG.md) |
 
 **Omnigent bundle** ([`omnigent/`](omnigent/README.md)): the same way of working on
@@ -149,7 +150,7 @@ git clone https://github.com/giovannigiofre/claude-kit.git ~/Documents/repositor
 ~/Documents/repositories/claude-kit/install.sh            # or: install.sh --github
 ```
 
-That registers the marketplace and installs `kit` at user scope. `kit-ui`, `kit-llm` and `kit-desktop` are
+That registers the marketplace and installs `kit` at user scope. `kit-ui`, `kit-llm`, `kit-desktop` and `kit-web-ops` are
 installed per project when the kit offers them, or by hand:
 `claude plugin install kit-llm@claude-kit --scope project`.
 

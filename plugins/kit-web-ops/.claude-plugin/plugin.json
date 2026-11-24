@@ -1,0 +1,8 @@
+{
+  "name": "kit-web-ops",
+  "description": "Operating a website's outside services from the terminal: Cloudflare (DNS, tokens, Workers secrets, analytics), Google Search Console and Google Cloud keys, Bing Webmaster and IndexNow. CLI and REST first, a doctor for logins and active accounts, owner-authorized changes, no secrets in chat",
+  "version": "1.0.0",
+  "author": {
+    "name": "giovannigiofre"
+  }
+}

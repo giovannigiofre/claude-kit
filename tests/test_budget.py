@@ -14,7 +14,7 @@ Checks, over every plugin in plugins/:
   - the lessons the SubagentStart hook hands a thread stay within SUBAGENT_LESSONS chars, and the
     ones SessionStart adds (with the kit's news lines and its coordinator line, itself within
     COORDINATOR_MAX) within SESSION_LESSONS;
-  - every `kit:x`, `kit-ui:x`, `kit-llm:x`, `kit-desktop:x` reference names a skill or agent that exists;
+  - every `kit:x`, `kit-ui:x`, `kit-llm:x`, `kit-desktop:x`, `kit-web-ops:x` reference names a skill or agent that exists;
   - packaging: every script a hooks.json command names under ${CLAUDE_PLUGIN_ROOT} exists; no file
     under plugins/ holds a personal absolute path; no SKILL.md, agent or reference file holds
     invisible or bidirectional-control characters (see packaging() for the precise rules). These
@@ -47,7 +47,9 @@ PLUGINS = ROOT / "plugins"
 # so its 276 chars cost nothing elsewhere.
 # kit 2600 -> 4200 on 2026-11-13: go, learn, intake and scout load on their own now (the owner talks
 # from a phone and does not type slash commands), so their descriptions are always on, about 1500 chars.
-ALWAYS_ON_BUDGET = {"kit": 4200, "kit-ui": 1300, "kit-llm": 1200, "kit-desktop": 1200}
+# kit-web-ops 1200 on 2026-11-17: one skill, loads only in projects that run their own sites.
+# kit 4200 -> 4260 on 2026-11-24: the kit:extras clause that offers kit-web-ops, next to kit-desktop's (4256 chars).
+ALWAYS_ON_BUDGET = {"kit": 4260, "kit-ui": 1300, "kit-llm": 1200, "kit-desktop": 1200, "kit-web-ops": 1200}
 MAX_DESCRIPTION = 1024
 SUBAGENT_LESSONS = 2400  # about 600 tokens, injected into every kit:implementer and kit:verifier
 SESSION_LESSONS = 1600  # about 400 tokens, added to the session start text
@@ -64,7 +66,7 @@ SHOUTED = re.compile(r"\b(MUST|NEVER|CRITICAL|IMPORTANT|ALWAYS)\b")
 # a quoted mention ("think step by step" named as an anti-pattern) is not a request
 REASONING = re.compile(r"(?<![\"'`(])\b(?:(?:show|write|share|explain|print)(?: out| me)? (?:your|its|the) "
                        r"(?:reasoning|thinking|thought process|chain of thought)|think (?:out loud|aloud|step[ -]by[ -]step))\b", re.I)
-REFERENCE = re.compile(r"(?<![\w/.-])(kit(?:-ui|-llm|-desktop)?):([a-z][a-z0-9-]*)")
+REFERENCE = re.compile(r"(?<![\w/.-])(kit(?:-ui|-llm|-desktop|-web-ops)?):([a-z][a-z0-9-]*)")
 # files that describe the past (removed pieces are named there on purpose)
 HISTORY = {"CATALOG.md"}
 
