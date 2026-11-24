@@ -133,7 +133,7 @@ def main():
     assert within(declined, declined / "x", machine_setup.unreadable) is None, "declined: silent"
 
     # a symlinked settings.json (dotfiles): the link stays a link, its target gets the settings
-    linked = Path(tempfile.mkdtemp())
+    linked = Path(os.path.realpath(tempfile.mkdtemp()))
     (linked / "dotfiles").mkdir()
     target = linked / "dotfiles" / "settings.json"
     target.write_text(json.dumps({"model": "opus"}))

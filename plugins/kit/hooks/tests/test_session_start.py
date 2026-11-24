@@ -19,6 +19,14 @@ if not os.environ.get("KIT_OPT_IN_DIR"):
     os.environ["KIT_OPT_IN_DIR"] = tempfile.mkdtemp(prefix="kit-opt-in-")
     atexit.register(shutil.rmtree, os.environ["KIT_OPT_IN_DIR"], True)
 
+# this test may itself run in a cloud container or a session Omnigent launched, where the hooks stay quiet
+for name in ("OMNIGENT_RUNNER_ID", "CLAUDE_CODE_REMOTE", "CLAUDE_CODE_BRIDGE_SESSION_ID", "KIT_HEADLESS"):
+    os.environ.pop(name, None)
+
+# git answers with real paths, so the repositories are made under the temp dir's real path (macOS:
+# /var is /private/var)
+tempfile.tempdir = os.path.realpath(tempfile.gettempdir())
+
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "session_start.py"
 
 

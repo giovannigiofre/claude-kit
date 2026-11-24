@@ -504,9 +504,10 @@ def test_push_sends_the_branch_to_origin_once_at_the_end():
 def test_detach_returns_at_once_and_the_run_goes_on():
     d, fake = repo(["change", "change", "done"])  # a 3 s gate per step keeps it running past the launcher's wait
     started = time.monotonic()
+    plain = {k: v for k, v in env(d).items() if k != "PYTHONUNBUFFERED"}  # set in some containers, it hides a held-back log
     out = subprocess.run([sys.executable, str(SCRIPT), "improve work.txt", "--agent-cmd", f"{sys.executable} {fake}",
                           "--gate", "sleep 3", "--rate-limit-wait", "0", "--detach"],
-                         cwd=d, capture_output=True, text=True, timeout=60, env=env(d))
+                         cwd=d, capture_output=True, text=True, timeout=60, env=plain)
     assert out.returncode == 0 and time.monotonic() - started < 20, out.stdout + out.stderr
     assert "started in the background, pid" in out.stdout and "overnight: branch overnight/" in out.stdout, out.stdout
     logs = list((runs(d) / "launch").iterdir())

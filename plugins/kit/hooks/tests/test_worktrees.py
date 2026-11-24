@@ -61,7 +61,7 @@ def main():
             print("FAIL " + str(msg))
 
     with tempfile.TemporaryDirectory() as tmp:
-        base = Path(tmp)
+        base = Path(os.path.realpath(tmp))  # git lists real paths (macOS: /var is /private/var)
         repo = base / "repo"
         repo.mkdir()
         git(repo, "init", "-q", "-b", "main")

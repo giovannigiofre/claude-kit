@@ -21,6 +21,10 @@ if not os.environ.get("KIT_OPT_IN_DIR"):
     os.environ["KIT_OPT_IN_DIR"] = tempfile.mkdtemp(prefix="kit-opt-in-")
     atexit.register(shutil.rmtree, os.environ["KIT_OPT_IN_DIR"], True)
 
+# this test may itself run in a cloud container or a session Omnigent launched, where the hooks stay quiet
+for name in ("OMNIGENT_RUNNER_ID", "CLAUDE_CODE_REMOTE", "CLAUDE_CODE_BRIDGE_SESSION_ID", "KIT_HEADLESS"):
+    os.environ.pop(name, None)
+
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import items  # noqa: E402
@@ -693,7 +697,12 @@ def lock_checks(tmp, check):
     holder.wait()
 
     # a home folder where ~/.claude cannot be made: the config dir and the project are written all the same
-    ro = dict(env, HOME="/proc/self")
+    # (/proc/self where there is one, since root writes through mode bits; else a folder without the write bit)
+    sealed = Path("/proc/self")
+    if not sealed.is_dir():
+        sealed = tmp / "sealed"
+        sealed.mkdir(mode=0o500)
+    ro = dict(env, HOME=str(sealed))
     code, out, err = run(repo, "away", "on", env=ro)
     check(code == 0 and json.loads(settings.read_text())["permissions"]["denyInsteadOfPrompting"] is True,
           f"read-only home, writable config dir: away on: {out} {err}")

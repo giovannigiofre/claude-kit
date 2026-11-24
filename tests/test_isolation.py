@@ -66,6 +66,9 @@ def main():
         out, leaked = run_all.run_isolated(tmp / "test_isolated.py", env, real)
         check(out.returncode == 0 and leaked == [], f"a file with its own folder passes: {leaked} {out.stderr}")
         check(not (tmp / "set-by-the-caller").exists(), "the caller's KIT_OPT_IN_DIR is not passed down")
+        (tmp / "test_session.py").write_text(f"import os, sys; sys.exit(any(k in os.environ for k in {run_all.SESSION_VARS!r}))")
+        out, _ = run_all.run_isolated(tmp / "test_session.py", dict(env, **{k: "1" for k in run_all.SESSION_VARS}), real)
+        check(out.returncode == 0, f"the caller's session is not passed down: {out.stderr}")
         check(run_all.real_records_dir({"CLAUDE_CONFIG_DIR": "/c"}) == Path("/c/kit-projects")
               and run_all.real_records_dir({"HOME": "/h"}) == Path("/h/.claude/kit-projects"), "the real folder")
 
