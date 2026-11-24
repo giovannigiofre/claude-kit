@@ -1,0 +1,8 @@
+{
+  "name": "kit-desktop",
+  "description": "Native desktop apps seen and operated through their accessibility tree with Vercel Labs' agent-desktop CLI: headless by default, from a background thread too, with values read back as evidence instead of screenshots",
+  "version": "0.1.0",
+  "author": {
+    "name": "giovannigiofre"
+  }
+}

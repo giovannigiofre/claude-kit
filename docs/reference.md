@@ -811,7 +811,9 @@ git diff origin/main... | python3 <kit>/hooks/scripts/lessons.py scrub -
   compaction) prints one line that makes the session the coordinator: every message is handled with
   `kit:lead`, which answers a question in place, makes a small change itself and starts background
   threads for the rest. It is a hook, not the mod, so it works in a cloud session and over Remote
-  Control as well. Not printed in a headless run (`KIT_HEADLESS`), in a subagent, or when
+  Control as well. Not printed in a headless run (`KIT_HEADLESS`), in a subagent, in a session an
+  Omnigent runner launched (`OMNIGENT_RUNNER_ID`: Omnigent's `lead` agent coordinates, see
+  [omnigent/](../omnigent/README.md); gates and project rules stay on), or when
   `~/.claude/kit.json` says `{"mode": "light"}` (the personal off switch: a normal session, with
   `/kit:lead <work>` when you want the coordinator). Until 2026-11 the mod added this line per
   prompt in a "loop" mode and had light and ask modes beside it; they were removed because the
@@ -1016,6 +1018,7 @@ same model.
 | kit | `offers-domain-plugin` | a UI request in a project without kit-ui reaches `kit:extras` |
 | kit-llm | `picks-llm-skill`, `optimize-needs-evals` | answer-quality and prompt-tuning requests measure first |
 | kit-llm | `builds-llm-tool`, `llm-edit-detected`, `injection-aware` | build discipline, the edit hook, the lethal trifecta |
+| kit-desktop | `drives-desktop-app-headless`, `desktop-evidence-stays-local` | a desktop build is checked through agent-desktop headless, with values read back; snapshots stay out of the PR |
 | kit-web-ops | `skills/web-ops/evals/evals.json` (skill-creator format, 3 prompts) | doctor and account check first, owner logins with `!`, no secret in chat, least-privilege tokens, read-back |
 
 ```bash

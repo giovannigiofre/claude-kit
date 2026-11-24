@@ -1,0 +1,15 @@
+{
+ "site": "https://nettoswiss.ch",
+ "generatedAt": "2026-11-22T06:17:00.000Z",
+ "status": "no-data",
+ "hasData": false,
+ "autopilot": {
+  "enabled": true,
+  "changedAt": null,
+  "lastRun": null
+ },
+ "sources": [],
+ "kpis": {},
+ "indexing": {},
+ "annotations": []
+}

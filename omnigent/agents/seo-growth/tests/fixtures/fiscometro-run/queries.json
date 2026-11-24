@@ -1,0 +1,172 @@
+{
+ "source": "gsc",
+ "hasData": true,
+ "current": {
+  "from": "2026-09-20",
+  "to": "2026-10-17"
+ },
+ "previous": {
+  "from": "2026-08-23",
+  "to": "2026-09-19"
+ },
+ "rows": [
+  {
+   "query": "calcolo stipendio netto",
+   "type": "tool",
+   "topPage": "/stipendio-netto/",
+   "pages": 1,
+   "clicks": 500,
+   "impressions": 12000,
+   "ctr": 0.041667,
+   "position": 3.8,
+   "previous": null,
+   "clicksChange": 500
+  },
+  {
+   "query": "tredicesima netta",
+   "type": "tool",
+   "topPage": "/tredicesima/",
+   "pages": 1,
+   "clicks": 50,
+   "impressions": 4000,
+   "ctr": 0.0125,
+   "position": 5.5,
+   "previous": null,
+   "clicksChange": 50
+  },
+  {
+   "query": "forfettario 2027",
+   "type": "guide",
+   "topPage": "/guide/forfettario-2027/",
+   "pages": 1,
+   "clicks": 10,
+   "impressions": 4000,
+   "ctr": 0.0025,
+   "position": 11.5,
+   "previous": null,
+   "clicksChange": 10
+  },
+  {
+   "query": "naspi 2027",
+   "type": "guide",
+   "topPage": "/guide/naspi-2027-importi/",
+   "pages": 1,
+   "clicks": 10,
+   "impressions": 900,
+   "ctr": 0.011111,
+   "position": 9.5,
+   "previous": null,
+   "clicksChange": 10
+  },
+  {
+   "query": "addizionale regionale",
+   "type": "tool",
+   "topPage": "/addizionali/",
+   "pages": 1,
+   "clicks": 20,
+   "impressions": 1500,
+   "ctr": 0.013333,
+   "position": 8.7,
+   "previous": null,
+   "clicksChange": 20
+  },
+  {
+   "query": "cuneo fiscale 2027",
+   "type": "guide",
+   "topPage": "/guide/cuneo-fiscale-2027/",
+   "pages": 1,
+   "clicks": 4,
+   "impressions": 600,
+   "ctr": 0.006667,
+   "position": 14.0,
+   "previous": null,
+   "clicksChange": 4
+  },
+  {
+   "query": "scaglioni irpef 2027",
+   "type": "tool",
+   "topPage": "/stipendio-netto/",
+   "pages": 1,
+   "clicks": 0,
+   "impressions": 300,
+   "ctr": 0.0,
+   "position": 16.0,
+   "previous": null,
+   "clicksChange": 0
+  },
+  {
+   "query": "imu saldo dicembre",
+   "type": "guide",
+   "topPage": "/guide/scadenze-fiscali-dicembre-2026/",
+   "pages": 1,
+   "clicks": 2,
+   "impressions": 60,
+   "ctr": 0.033333,
+   "position": 18.0,
+   "previous": null,
+   "clicksChange": 2
+  }
+ ],
+ "total": 8,
+ "cannibalised": [
+  {
+   "query": "tredicesima dicembre",
+   "impressions": 3000,
+   "pages": [
+    {
+     "path": "/guide/busta-paga-dicembre/",
+     "impressions": 1200,
+     "clicks": 50,
+     "position": 4.0
+    },
+    {
+     "path": "/tredicesima/",
+     "impressions": 1800,
+     "clicks": 5,
+     "position": 9.5
+    }
+   ]
+  },
+  {
+   "query": "partita iva forfettario",
+   "impressions": 2900,
+   "pages": [
+    {
+     "path": "/partita-iva/",
+     "impressions": 900,
+     "clicks": 40,
+     "position": 3.0
+    },
+    {
+     "path": "/guide/forfettario-2027/",
+     "impressions": 2000,
+     "clicks": 4,
+     "position": 12.0
+    }
+   ]
+  },
+  {
+   "query": "calcolo naspi",
+   "impressions": 2100,
+   "pages": [
+    {
+     "path": "/stipendio-netto/",
+     "impressions": 600,
+     "clicks": 20,
+     "position": 6.0
+    },
+    {
+     "path": "/guide/naspi-2027-importi/",
+     "impressions": 1500,
+     "clicks": 8,
+     "position": 10.5
+    }
+   ]
+  }
+ ],
+ "lowCtrRule": {
+  "maxPosition": 10,
+  "minImpressions": 50,
+  "maxCtr": 0.02
+ }
+}

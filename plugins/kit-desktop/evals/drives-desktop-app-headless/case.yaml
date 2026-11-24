@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: drives-desktop-app-headless
+description: A request to check a desktop build in the app itself, without taking the user's screen, must go through kit-desktop:desktop and agent-desktop headless (status and permissions first, snapshot/act/verify with values read back), never --headed without the user's yes.
+tags: [desktop, evidence]
+context:
+  scaffold_script: fixture.sh

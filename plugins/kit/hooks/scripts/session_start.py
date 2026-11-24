@@ -159,9 +159,17 @@ def queued_line(root):
     return f"- {len(queued)} queued item(s) on disk: python3 \"{script}\" list --status queued"
 
 
+def under_omnigent():
+    """A session an Omnigent runner launched: Omnigent's orchestrator (the `lead` agent in
+    omnigent/) coordinates, and this session is one of its specialists or its brain."""
+    return bool(os.environ.get("OMNIGENT_RUNNER_ID"))
+
+
 def coordinator_line(data):
-    """COORDINATOR, or "" in a headless run, a subagent, or with the personal `"mode": "light"`."""
-    if os.environ.get("KIT_HEADLESS") or data.get("agent_id") or kitlib.personal_mode() == "light":
+    """COORDINATOR, or "" in a headless run, a subagent, a session Omnigent launched, or with the
+    personal `"mode": "light"`."""
+    if (os.environ.get("KIT_HEADLESS") or data.get("agent_id") or under_omnigent()
+            or kitlib.personal_mode() == "light"):
         return ""
     return COORDINATOR
 
@@ -272,7 +280,8 @@ def offer_machine_setup():
 def away_back(data):
     """The owner is back: an interactive start (not headless, not a subagent, not a compaction) takes
     away the denyInsteadOfPrompting the kit set when he left (kitlib.away_on)."""
-    if os.environ.get("KIT_HEADLESS") or data.get("agent_id") or data.get("source") not in ("startup", "resume"):
+    if (os.environ.get("KIT_HEADLESS") or data.get("agent_id") or under_omnigent()
+            or data.get("source") not in ("startup", "resume")):
         return None
     try:
         if kitlib.away_state()[0] != "kit":
@@ -288,7 +297,7 @@ def overnight_ended(root, data):
     too) says each run that ended unseen, once (kitlib.overnight_news). A headless run or a
     subagent leaves them for the owner. At most OVERNIGHT_SAY runs, the rest summed up in one line
     and left for status. Before the kit.json check: a run is opt-in enough."""
-    if not root or os.environ.get("KIT_HEADLESS") or data.get("agent_id"):
+    if not root or os.environ.get("KIT_HEADLESS") or data.get("agent_id") or under_omnigent():
         return []
     try:
         news, left = kitlib.overnight_news(root, consume=True, limit=kitlib.OVERNIGHT_SAY)
