@@ -29,6 +29,13 @@ PATTERNS = ("tests/test_*.py", "plugins/*/hooks/tests/test_*.py", "plugins/*/ski
             "omnigent/agents/*/tests/test_*.py")
 
 
+# What a session says about itself: the hooks read these (no coordinator line under Omnigent, no offer
+# in a cloud container), so a run started from such a session would test another kit than a person's.
+SESSION_VARS = ("OMNIGENT_RUNNER_ID", "CLAUDE_CODE_REMOTE", "CLAUDE_CODE_BRIDGE_SESSION_ID", "KIT_HEADLESS",
+                "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
+                "CLAUDE_PROJECT_DIR")
+
+
 def records(folder):
     return {p for p in Path(folder).rglob("*") if p.is_file()} if Path(folder).is_dir() else set()
 
@@ -41,15 +48,15 @@ def real_records_dir(env):
 
 
 def run_isolated(path, env, real):
-    """Run one test file the way a person runs it alone, with nothing set for it: KIT_OPT_IN_DIR
-    and KIT_TEMP_ROOTS unset, HOME and CLAUDE_CONFIG_DIR at an empty temp folder. Running the test
+    """Run one test file the way a person runs it alone, with nothing set for it: KIT_OPT_IN_DIR,
+    KIT_TEMP_ROOTS and SESSION_VARS unset, HOME and CLAUDE_CONFIG_DIR at an empty temp folder. Running the test
     files alone once left 84 opt-in records in the real config dir; any record that appears under
     the fake config dir or the real one fails the file. Returns (process, leaked paths)."""
     # outside the system temp dir, as a person's HOME is: test_guard puts its repositories under
     # HOME to test the rules that differ for temp folders
     user_home = Path(env.get("HOME") or Path.home())
     home = Path(tempfile.mkdtemp(prefix=".kit-test-home-", dir=str(user_home)))
-    env = {k: v for k, v in env.items() if k not in ("KIT_OPT_IN_DIR", "KIT_TEMP_ROOTS")}
+    env = {k: v for k, v in env.items() if k not in ("KIT_OPT_IN_DIR", "KIT_TEMP_ROOTS", *SESSION_VARS)}
     gitconfig = user_home / ".gitconfig"
     if "GIT_CONFIG_GLOBAL" not in env and gitconfig.is_file():
         env["GIT_CONFIG_GLOBAL"] = str(gitconfig)  # git's identity, not the Claude config dir

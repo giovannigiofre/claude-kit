@@ -287,11 +287,12 @@ def main():
     # where the kit's working state lives: .kit for a fresh project, .claude until it is moved,
     # decided on the main checkout so a worktree finds the same board
     with tempfile.TemporaryDirectory() as tmp:
-        repo = Path(tmp) / "repo"
+        tmp = Path(os.path.realpath(tmp))  # git answers with real paths (macOS: /var is /private/var)
+        repo = tmp / "repo"
         repo.mkdir()
         sh(repo, "init", "-q", "-b", "main")
         sh(repo, "commit", "-q", "--allow-empty", "-m", "init")
-        tree = Path(tmp) / "wt"
+        tree = tmp / "wt"
         sh(repo, "worktree", "add", "-q", "-b", "w", str(tree))
         (repo / ".claude").mkdir()
         (repo / ".claude" / "kit.json").write_text("{}")
@@ -311,6 +312,16 @@ def main():
         check(kitlib.board_file(tree, own) == repo / ".kit" / "lead" / "BOARD.md", kitlib.board_file(tree, own))
         absolute = {"lead": {"board": str(repo / ".claude" / "lead" / "sub" / "b.md")}}
         check(kitlib.board_file(repo, absolute) == repo / ".kit" / "lead" / "sub" / "b.md", "an absolute path inside it")
+        # the same folder spelled through a symlink above the repository (a linked dev folder) is inside it too
+        (tmp / "dev").symlink_to(tmp)
+        linked = tmp / "dev" / "repo"
+        spelled = {"lead": {"board": str(linked / ".claude" / "lead" / "board.md")}}
+        check(kitlib.board_file(repo, spelled) == repo / ".kit" / "lead" / "board.md",
+              f"an absolute path through a symlink: {kitlib.board_file(repo, spelled)}")
+        check(kitlib.board_file(linked, own) == repo / ".kit" / "lead" / "BOARD.md",
+              f"a root through a symlink: {kitlib.board_file(linked, own)}")
+        outside = {"lead": {"board": str(tmp / "dev" / "boards" / "b.md")}}
+        check(kitlib.board_file(repo, outside) == tmp / "dev" / "boards" / "b.md", "outside the repository: as written")
         check(kitlib.board_file(repo, {"lead": {"board": ".claude/boards/b.md"}}) == repo / ".claude" / "boards" / "b.md",
               "a path elsewhere in .claude stays as written")
         # lead.state in kit.local.json, the helpers undo uses: set, read from a worktree, removed
@@ -414,6 +425,9 @@ def main():
         tmp = Path(os.path.realpath(tmp))
         home, repo = tmp / "home", tmp / "repo"
         (home / ".claude").mkdir(parents=True)
+        # the machine settings are offered per machine, not per project (test_session_start checks the
+        # offer), so this machine has answered; a cloud container is never asked, which hid this line
+        (home / ".claude" / "kit.json").write_text(json.dumps({"machineSetup": "declined"}))
         repo.mkdir()
         sh(repo, "init", "-q", "-b", "main")
         sh(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init")

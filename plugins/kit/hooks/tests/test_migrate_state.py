@@ -23,6 +23,10 @@ if not os.environ.get("KIT_OPT_IN_DIR"):
     os.environ["KIT_OPT_IN_DIR"] = tempfile.mkdtemp(prefix="kit-opt-in-")
     atexit.register(shutil.rmtree, os.environ["KIT_OPT_IN_DIR"], True)
 
+# git answers with real paths, so the repositories are made under the temp dir's real path (macOS:
+# /var is /private/var)
+tempfile.tempdir = os.path.realpath(tempfile.gettempdir())
+
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 SCRIPT = SCRIPTS / "migrate_state.py"
 sys.path.insert(0, str(SCRIPTS))

@@ -448,7 +448,9 @@ def detach(argv):
     (runs / "launch").mkdir(parents=True, exist_ok=True)
     log_path = runs / "launch" / f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}.log"
     with open(log_path, "w", encoding="utf-8") as log, open(os.devnull) as nothing:
-        child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), *argv], cwd=Path.cwd(),
+        # -u: with its output in a file Python holds lines back by the block, so the log of a run in
+        # progress stayed empty and a killed run left none
+        child = subprocess.Popen([sys.executable, "-u", str(Path(__file__).resolve()), *argv], cwd=Path.cwd(),
                                  stdin=nothing, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
                                  env=dict(os.environ, **{DETACHED_ENV: "1"}))
     try:

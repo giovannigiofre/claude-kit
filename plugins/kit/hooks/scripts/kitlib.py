@@ -1087,6 +1087,20 @@ def overnight_news_line(entry):
             f"USD {f'{cost:.2f}' if ok else '?'}, branch {text('branch')} {pushed}")
 
 
+def path_in(path, base):
+    """`path` relative to the folder `base`, or None when it is not inside. git names a checkout by
+    its real path, while kit.json or a cwd may spell it through a symlink (a linked dev folder,
+    macOS /var for /private/var), so the folders above are compared by identity. Links inside
+    `base` are not followed."""
+    for up in path.parents:
+        try:
+            if up == base or os.path.samefile(up, base):
+                return path.relative_to(up)
+        except OSError:
+            continue
+    return None
+
+
 def board_file(root, config=None):
     """The board: kit.json `lead.board` (relative to `root`), else `<state>/lead/board.md`. A path
     inside the old lead folder (`.claude/lead/board.md`, the default /kit:init wrote, or a name of
@@ -1098,9 +1112,12 @@ def board_file(root, config=None):
         return state_entry(root, "lead", per_checkout=False) / "board.md"
     path = Path(board) if Path(board).is_absolute() else Path(root) / board
     for base in dict.fromkeys(_state_bases(root, False)[:2]):
+        inside = path_in(path, base)
         try:
-            inside = path.relative_to(base / LEGACY_LEAD)
+            inside = inside and inside.relative_to(LEGACY_LEAD)
         except ValueError:
+            continue
+        if inside is None:
             continue
         return state_entry(root, "lead", per_checkout=False) / inside
     return path
