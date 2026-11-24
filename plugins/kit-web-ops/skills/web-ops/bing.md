@@ -15,10 +15,12 @@ Everything after that is the API.
 
 ## The API
 
-JSON endpoint `https://ssl.bing.com/webmaster/api.svc/json/<Method>?apikey=$BING_API_KEY`
+JSON endpoint `https://ssl.bing.com/webmaster/api.svc/json/<Method>?apikey=<key>` (the host in
+Microsoft's API-key samples; its OAuth sample uses `www.bing.com`; docs read 2026-11-24, no call made)
 (GET for reads with query parameters; POST with a JSON body for writes). Errors come back as
 HTTP 400 with `{"ErrorCode": n, "Message": "..."}`; 3 = InvalidApiKey. Keep the key in an
-environment variable or a gh secret; it is part of the URL, so do not log full request URLs.
+environment variable or a gh secret; it is part of the URL (the only
+documented place for it), so pass the URL to curl on stdin and do not log full request URLs.
 
 | Task | Method |
 |---|---|
@@ -33,10 +35,11 @@ environment variable or a gh secret; it is part of the URL, so do not log full r
 `siteUrl` is the URL form Bing shows (`https://example.com/`), even for a site imported from a GSC
 domain property. Check a method's parameters on the interface reference before the first call.
 
-Example, without printing the key:
+Example, without printing the key or putting it in curl's arguments:
 
 ```bash
-curl -s "https://ssl.bing.com/webmaster/api.svc/json/GetUserSites?apikey=$BING_API_KEY" | jq '.d[] | {Url, IsVerified}'
+printf 'url = "https://ssl.bing.com/webmaster/api.svc/json/GetUserSites?apikey=%s"\n' "$BING_API_KEY" \
+  | curl -sS --config - | jq '.d[] | {Url, IsVerified}'
 ```
 
 ## IndexNow

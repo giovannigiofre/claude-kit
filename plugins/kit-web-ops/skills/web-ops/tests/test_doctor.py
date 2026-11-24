@@ -53,7 +53,7 @@ def run_main(argv, table, which=which_all):
 
 class Redaction(unittest.TestCase):
     def test_masks_tokens_and_keys(self):
-        for secret in ("gho_abcdefghijklmnopqrstuvwxyz0123", "ya29.a0AfH6SMBexampletokenvalue",
+        for secret in ("github_pat_11ABCDEFG0abcdefgh", "gho_abcdefghijklmnopqrstuvwxyz0123", "ya29.a0AfH6SMBexampletokenvalue",
                        "AIzaSyA1234567890abcdefghijklmnopq", "Bearer abcdefghijklmnop",
                        "token: s3cr3tvalue", "x" * 50):
             self.assertNotIn(secret.split()[-1], doctor.redact(f"before {secret} after"), secret)
@@ -101,12 +101,26 @@ class Doctor(unittest.TestCase):
         self.assertEqual(code, doctor.NEEDS_OWNER)
         self.assertIn("! gcloud config set account personal@example.com", out)
 
-    def test_missing_cf_with_old_node_names_the_upgrade(self):
+    def test_missing_cf_is_optional(self):
+        # cf is optional, so neither its absence nor a Node below its range needs the owner
         table = {**GOOD, ("node", "--version"): (0, "v24.18.1")}
         code, out = run_main(["--project-dir", self.tmp, "--no-mcp"], table,
                              which=lambda n: None if n in ("cf", "wrangler") else "/usr/bin/" + n)
-        self.assertEqual(code, doctor.NEEDS_OWNER)
+        self.assertEqual(code, 0, out)
+        self.assertIn("installed: cf: not found (optional", out)
         self.assertIn("upgrade Node", out)
+
+    def test_installed_cf_with_old_node_needs_owner(self):
+        table = {**GOOD, ("node", "--version"): (0, "v24.18.1")}
+        code, out = run_main(["--project-dir", self.tmp, "--no-mcp"], table)
+        self.assertEqual(code, doctor.NEEDS_OWNER)
+        self.assertIn("NEED node satisfies cf engines", out)
+
+    def test_expected_cloudflare_account_that_nothing_verified_needs_owner(self):
+        code, out = run_main(["--project-dir", self.tmp, "--no-mcp", "--expect-cloudflare", "site-owner@example.com"], GOOD,
+                             which=lambda n: None if n in ("cf", "wrangler") else "/usr/bin/" + n)
+        self.assertEqual(code, doctor.NEEDS_OWNER)
+        self.assertIn("not verified", out)
 
     def test_wrangler_project_without_login(self):
         Path(self.tmp, "wrangler.jsonc").write_text("{}")

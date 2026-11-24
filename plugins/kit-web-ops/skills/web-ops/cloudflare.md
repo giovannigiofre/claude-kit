@@ -31,18 +31,22 @@ only; it has no DNS or token tools. Use it only when the session already has it 
 
 ```bash
 cf dns records list --zone <zone-id> > dns-before.json
-cf dns records create --zone <zone-id> --type TXT --name example.com --content "google-site-verification=..." --dry-run
-cf dns records create --zone <zone-id> --type TXT --name example.com --content "google-site-verification=..."
+cf schema dns records create
+cf dns records create --zone <zone-id> --body '{"type":"TXT","name":"example.com","content":"google-site-verification=..."}' --dry-run
+cf dns records create --zone <zone-id> --body '{"type":"TXT","name":"example.com","content":"google-site-verification=..."}'
 cf dns records list --zone <zone-id> > dns-after.json
 ```
 
-Check flag names with `cf schema dns records create` before the first use; the CLI is young. A
+Cloudflare's docs give `--body` as the only input of this command (read 2026-11-24; not run here),
+and say to use the zone id, not the domain, in a dry run. The CLI is a release candidate: check `cf
+schema` first, and trust it over this page. A
 record create or delete is owner-authorized (SKILL.md section 5). Deletes ask for confirmation;
 `--force` skips it, so use it only with an explicit go-ahead for that record. Verification TXT
 records stay in place after verification: Google and Bing re-check them.
 
 REST fallback (no `cf`): `GET/POST https://api.cloudflare.com/client/v4/zones/<zone>/dns_records`
-with `Authorization: Bearer` from an environment variable, never pasted.
+with the token from an environment variable as a header on stdin (`-H @-`, as in the next
+sections), never pasted and never a curl argument.
 
 ## API tokens (least privilege)
 
@@ -60,11 +64,15 @@ should not hold. So the owner creates tokens; the agent writes the recipe:
 The owner copies the value once and stores it without it passing through chat:
 `! pbpaste | gh secret set CF_ANALYTICS_TOKEN` (macOS clipboard; gh reads stdin and echoes nothing),
 then clears the clipboard. Check: `gh secret list` shows the name and date. Verify the token works
-without printing it: `curl -s -H "Authorization: Bearer $CF_TOKEN" https://api.cloudflare.com/client/v4/user/tokens/verify | jq .result.status`
+without printing it or putting it in curl's arguments (`printf` is a shell builtin):
+`printf 'Authorization: Bearer %s\n' "$CF_TOKEN" | curl -sS -H @- https://api.cloudflare.com/client/v4/user/tokens/verify | jq .result.status`
 (account-owned tokens use `/accounts/<id>/tokens/verify`).
 
 ## Workers secrets and KV
 
+- `wrangler secret put`, `secret delete` and `secret bulk` create a new version **and deploy it
+  immediately**; like `wrangler deploy` they are owner-authorized (SKILL.md section 5). `wrangler
+  versions secret put` makes a version without deploying it.
 - `pnpm exec wrangler secret put NAME` reads the value from stdin: pipe it from the maker
   (`<maker> | pnpm exec wrangler secret put NAME`), never type it as an argument. Add `--env` when
   the project uses environments. `wrangler secret list` shows names only.
@@ -75,9 +83,9 @@ without printing it: `curl -s -H "Authorization: Bearer $CF_TOKEN" https://api.c
 ## Zone analytics (GraphQL)
 
 ```bash
-curl -s https://api.cloudflare.com/client/v4/graphql \
-  -H "Authorization: Bearer $CF_ANALYTICS_TOKEN" -H "Content-Type: application/json" \
-  --data @query.json > analytics.json
+printf 'Authorization: Bearer %s\n' "$CF_ANALYTICS_TOKEN" \
+  | curl -sS -H @- -H "Content-Type: application/json" --data @query.json \
+      https://api.cloudflare.com/client/v4/graphql > analytics.json
 ```
 
 `query.json` holds `{"query": "...", "variables": {"zoneTag": "<zone-id>", ...}}`, for example
@@ -87,8 +95,9 @@ on the plan; the schema is introspectable, and the docs list each dataset's limi
 
 ## Pitfalls
 
-- Several accounts under one login: pass `--account`/`CLOUDFLARE_ACCOUNT_ID` explicitly and read it
-  back in the doctor before writing.
+- Several accounts under one login: set `CLOUDFLARE_ACCOUNT_ID` (or pass `--profile <name>` to `cf`;
+  its docs list no `--account` flag, so check `cf schema` first) and read it back in the doctor
+  before writing.
 - Proxied records (orange cloud) change what verification and IndexNow key checks see; TXT records
   are never proxied.
 - A Wrangler login token and a `cf` login are separate; a user-scoped OAuth login can do more than a

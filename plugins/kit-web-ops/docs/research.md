@@ -21,7 +21,7 @@ server (or a claude.ai connector), or a plain REST call - and which steps stay w
 |---|---|---|---|
 | DNS records (list, add TXT/CNAME, delete) | `cf dns records ...` (official CLI, JSON, `--dry-run`) | authorize the change | Cloudflare API MCP (good, OAuth); curl REST with a DNS-Edit token; dashboard (slow, permission blocks seen) |
 | Least-privilege API token | owner creates in dashboard from a written recipe; agent stores it via `pbpaste \| gh secret set` | create + copy | API (`/user/tokens`) needs a token with "API Tokens Edit": too much power for an agent |
-| Workers secrets / KV | project's `wrangler secret put` from stdin, `secret bulk`, `deploy --secrets-file` | none after login | `cf` (covers the API too, but Wrangler reads the project config); Developer Platform connector (Workers/KV only) |
+| Workers secrets / KV | project's `wrangler secret put` from stdin, `secret bulk`, `deploy --secrets-file` | authorize (secret put/bulk deploy immediately) | `cf` (covers the API too, but Wrangler reads the project config); Developer Platform connector (Workers/KV only) |
 | Zone analytics | curl to `/client/v4/graphql` with a read-only token | create the token | MCP execute (works, but a fixed query is cheaper as a file) |
 | GSC property + verification | Site Verification API (`getToken` DNS_TXT, then `webResource.insert`) + TXT via `cf`, then `sites.add` | authorize DNS, or click "Verify" in the UI | UI with Cloudflare's automatic record |
 | GSC sitemaps | `PUT sites/{site}/sitemaps/{feed}` with curl | none | community MCPs (rejected) |
@@ -30,11 +30,11 @@ server (or a claude.ai connector), or a plain REST call - and which steps stay w
 | Service account as GSC user | UI "Add user" from a deep link; or the SA verifies itself through Site Verification + DNS TXT | one click (UI) or DNS authorization | none: the Search Console API has no users method |
 | Keyless local access as the SA | IAM Credentials `generateAccessToken` with the webmasters scope, called with the owner's gcloud token (needs Token Creator on the SA) | grant the role once | SA key file locally (avoid); user ADC with own OAuth client |
 | SA key for CI | `gcloud iam service-accounts keys create` to a private temp file, `gh secret set NAME < file`, delete | authorize | Workload Identity Federation (better, when the consumer supports it) |
-| CrUX / PageSpeed keys | `gcloud services api-keys create --api-target=service=...`, `get-key-string \| gh secret set` | authorize | Console UI |
+| CrUX / PageSpeed keys | `gcloud services api-keys create --api-target=service=...`, both streams to a private temp folder (create prints the key on stderr), then `gh secret set NAME < file` | authorize | Console UI |
 | Bing: add site | UI "Import from Google Search Console" (no DNS), or API `AddSite` + `VerifySite` | sign in, import | community MCPs (rejected) |
 | Bing: API key | UI only (Settings -> API Access) | generate + copy | OAuth client (more setup, no gain for one site) |
 | Bing: sitemaps, stats, URL submission | JSON API with curl (`SubmitFeed`, `GetQueryStats`, `SubmitUrlBatch`) | none | |
-| IndexNow | key file on the site + POST `api.indexnow.org/indexnow` from the deploy | none | Bing `SubmitUrlBatch` (Bing only, quota) |
+| IndexNow | key file on the site + POST `api.indexnow.org/indexnow` from the deploy | authorize the deploy | Bing `SubmitUrlBatch` (Bing only, quota) |
 | Google Indexing API | not applicable: JobPosting and BroadcastEvent pages only | | |
 
 ## What only a human does, and how to make it one click
@@ -95,13 +95,15 @@ maintainers, OAuth or SA key held by the server process) and Bing Webmaster (isi
 API key held by the process). Rejected: no official backing, a second place holding a credential,
 and no capability beyond curl.
 
-## Sources (read 2026-11-17)
+## Sources (read 2026-11-17; rechecked 2026-11-24 where noted)
 
 - Cloudflare MCP servers: https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/ (updated 2026-10-27)
 - Cloudflare `cf` CLI: https://developers.cloudflare.com/cf/ (updated 2026-11-17); https://github.com/cloudflare/cf; npm `cf` 1.0.0-rc.1
+- `cf` DNS and account selection (2026-11-24; rc.4): https://developers.cloudflare.com/cf/get-started/resources/ and https://developers.cloudflare.com/cf/get-started/
 - cloudflare/skills: https://github.com/cloudflare/skills (main 5108325, pushed 2026-11-17)
 - Cloudflare API tokens: https://developers.cloudflare.com/fundamentals/api/get-started/create-token/
 - Cloudflare GraphQL Analytics: https://developers.cloudflare.com/analytics/graphql-api/
+- Wrangler `secret` deploys immediately (2026-11-24): https://developers.cloudflare.com/workers/wrangler/commands/workers/
 - Wrangler commands: https://developers.cloudflare.com/workers/wrangler/commands/
 - Google Cloud MCP supported products: https://docs.cloud.google.com/mcp/supported-products
 - Search Console API reference: https://developers.google.com/webmaster-tools/v1/api_reference_index
@@ -110,8 +112,11 @@ and no capability beyond curl.
 - ADC troubleshooting (scopes and own client id): https://docs.cloud.google.com/docs/authentication/troubleshoot-adc
 - IAM Credentials generateAccessToken: https://cloud.google.com/iam/docs/reference/credentials/rest/v1/projects.serviceAccounts/generateAccessToken
 - API keys with gcloud: https://cloud.google.com/sdk/gcloud/reference/services/api-keys/create (also `--help`, SDK 594.0.0)
+- API key as `x-goog-api-key` header (2026-11-24): https://docs.cloud.google.com/docs/authentication/api-keys-use
+- `api-keys create` prints its response on stderr: installed SDK source, `services_util.PrintOperationWithResponse` (2026-11-24)
 - CrUX API: https://developer.chrome.com/docs/crux/api
 - Indexing API scope: https://developers.google.com/search/apis/indexing-api/v3/quickstart
 - Bing Webmaster API access: https://learn.microsoft.com/en-us/bingwebmaster/getting-access
+- Bing host with an API key (2026-11-24): https://learn.microsoft.com/en-us/dotnet/api/microsoft.bing.webmaster.api.interfaces.iwebmasterapi.submiturlbatch
 - Bing Webmaster API methods: https://learn.microsoft.com/en-us/dotnet/api/microsoft.bing.webmaster.api.interfaces.iwebmasterapi
 - IndexNow: https://www.indexnow.org/documentation

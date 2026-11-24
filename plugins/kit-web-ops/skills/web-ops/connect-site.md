@@ -39,16 +39,16 @@ Make sure `robots.txt` names the sitemap too: crawlers other than Google find it
    `https://search.google.com/search-console/users?resource_id=sc-domain%3Aexample.com`, Add user,
    the SA e-mail, Restricted for reading or Full when it submits sitemaps; or the SA verifies itself
    (google.md).
-4. Into the repo's secrets, without the key passing through chat: `gcloud iam
-   service-accounts keys create <private-tmp>/sa.json ...`, `gh secret set GSC_SERVICE_ACCOUNT_JSON <
-   <private-tmp>/sa.json`, `rm` the file. Then `gh variable set GSC_SITE_URL --body
+4. Into the repo's secrets, without the key passing through chat: the block in google.md
+   ("Service account, key and secret"), which removes the key file even on failure. Then `gh variable set GSC_SITE_URL --body
    sc-domain:example.com`.
 5. Check: an SA token lists the property in `GET sites` with the expected permission level.
 
 ## 4. CrUX and PageSpeed keys (owner-authorized, agent runs it)
 
-Enable `chromeuxreport.googleapis.com` (and `pagespeedonline.googleapis.com` if used), create one
-key per API restricted with `--api-target`, pipe `get-key-string` into `gh secret set CRUX_API_KEY`.
+Run the block in google.md ("CrUX and PageSpeed API keys") as it is, once per API
+(`chromeuxreport.googleapis.com`, and `pagespeedonline.googleapis.com` if used): `api-keys create`
+prints the key on stderr, so do not shorten it to a bare command or a stdout-only redirect.
 Check with one `records:queryRecord` call (404 = too little traffic yet, which is fine).
 
 ## 5. Bing (owner, then agent)
@@ -58,11 +58,15 @@ Check with one `records:queryRecord` call (404 = too little traffic yet, which i
 2. Owner: Settings -> API Access -> Generate API Key, then `! pbpaste | gh secret set BING_API_KEY`.
 3. Agent: `GetUserSites` shows the site verified; `GetFeeds` shows the sitemap (else `SubmitFeed`).
 
-## 6. IndexNow (agent)
+## 6. IndexNow (agent prepares; the deploy is owner-authorized)
 
-Generate a key (`python3 -c "import secrets; print(secrets.token_hex(16))"`; it is public, not a
-secret), serve `/<key>.txt` from the site, deploy, fetch it back, then submit the changed URLs from
-the deploy step. Check the response code (200/202).
+1. Agent: generate a key (`python3 -c "import secrets; print(secrets.token_hex(16))"`; it is
+   public, not a secret) and prepare the change that serves `/<key>.txt` and submits the changed
+   URLs from the deploy step.
+2. Owner authorizes the production deploy (SKILL.md section 5), or runs it; without that, stop with
+   the change ready.
+3. Agent, after the deploy: fetch `/<key>.txt` back and check the submission's response code
+   (200/202).
 
 ## 7. Cloudflare analytics for dashboards (owner, then agent)
 

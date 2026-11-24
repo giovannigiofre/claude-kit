@@ -62,14 +62,17 @@ link and one click, then wait:
 ## 5. Guard rules
 
 - **Authorized changes only.** DNS records, tokens, keys, service accounts, IAM bindings, enabled
-  APIs and GitHub secrets change what the site trusts. Do each only when the owner asked for that
+  APIs, GitHub secrets, Workers secrets (`wrangler secret put` deploys immediately) and production
+  deploys change what the site trusts or serves. Do each only when the owner asked for that
   change in this conversation or a brief states it; otherwise write the exact commands down as a
   plan and stop. A `--dry-run` or a GET is always fine.
 - **No secret in chat, logs or files in the repo.** A secret moves from the command that makes it
   straight into its store: `<maker> | gh secret set NAME` (gh reads stdin, nothing is echoed), or
   a file in a private temp folder that is passed with `<` and deleted right after. Never
   `echo $TOKEN`, `cat key.json`, `set -x`, or a secret as a command-line argument (it lands in the
-  shell history and `ps`). When a command prints a secret by design, redirect it.
+  shell history and `ps`); curl takes it on stdin (`-H @-`, `--config -`). When a command prints a
+  secret by design, capture stdout **and stderr** (`> file 2>&1`) in a private (`umask 077`) temp
+  folder removed on every exit, failures included.
 - **Least privilege.** One token per job, scoped to one zone or account and to read when reading
   is the job; API keys restricted to the one API they serve; a service account with only the
   Search Console role it needs. Write the scope next to the secret's name in the project's docs.

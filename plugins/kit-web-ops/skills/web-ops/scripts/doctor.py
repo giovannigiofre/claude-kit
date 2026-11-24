@@ -28,6 +28,7 @@ MCP_HINTS = ("cloudflare", "search console", "search-console", "searchconsole", 
              "pagespeed", "crux", "google cloud", "gcloud")
 # (pattern, keep group 1): a prefix such as "Bearer " stays, the value goes
 SECRET_PATTERNS = (
+    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{8,}"), False),  # GitHub fine-grained tokens
     (re.compile(r"\bgh[opusr]_[A-Za-z0-9]{8,}"), False),  # GitHub tokens
     (re.compile(r"\bya29\.[A-Za-z0-9._-]{8,}"), False),  # Google OAuth access tokens
     (re.compile(r"\bAIza[A-Za-z0-9_-]{20,}"), False),  # Google API keys
@@ -98,8 +99,8 @@ def tool_checks(runner, which):
         fix = "npm install --global cf"
         if node_v and not node_ok_for_cf(node_v):
             fix = "upgrade Node to >=22.23, >=24.22 or >=26.12 (cf's engines), then " + fix
-        results.append(check("installed: cf", False, "not found (official Cloudflare CLI, optional; curl works without it)", fix))
-    if node_v:
+        results.append(check("installed: cf", True, f"not found (optional: curl works without it; to install: {fix})"))
+    if cf and node_v:
         upgrade = "nvm install 24 then nvm alias default 24" if "/.nvm/" in (node or "") else "brew upgrade node"
         results.append(check("node satisfies cf engines", node_ok_for_cf(node_v), ".".join(map(str, node_v)),
                              "" if node_ok_for_cf(node_v) else upgrade))
@@ -215,6 +216,9 @@ def collect(args, runner=run, which=shutil.which):
     results += gcloud_checks(runner, which, args.expect_google)
     results += cf_checks(runner, which, args.expect_cloudflare)
     results += wrangler_checks(runner, which, args.project_dir, args.expect_cloudflare)
+    if args.expect_cloudflare and not any(r["name"] in ("cf account is the project's", "wrangler account is the project's") for r in results):
+        results.append(check("cloudflare account is the project's", False, f"not verified (no signed-in cf or wrangler); expected={args.expect_cloudflare}",
+                             "npm install --global cf, then ! cf auth login"))
     results += gh_checks(runner, which, args.project_dir)
     results += env_checks()
     if not args.no_mcp:
