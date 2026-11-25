@@ -8,7 +8,7 @@ D="$HOME/.local/share/claude-kit"; S="$HOME/Documents/studio"; KIT="${KIT_REPO:-
 [ "$1" = --dry-run ] && { echo "agents -> ~/.claude/agents; studio -> $S/.claude/skills, $S/CLAUDE.md; state -> $D"; exit 0; }
 mkdir -p "$HOME/.claude/agents" "$D/bin" "$D/lessons" "$S/.claude/skills"
 cp "$HERE"/agents/*.md "$HOME/.claude/agents/"
-cp "$HERE"/scripts/weekly_precheck.sh "$D/bin/" && chmod +x "$D/bin/weekly_precheck.sh"
+cp "$HERE"/scripts/*.sh "$D/bin/" && chmod +x "$D"/bin/*.sh
 cp -R "$HERE"/studio/skills/. "$S/.claude/skills/"; cp "$HERE/studio/CLAUDE.md" "$S/CLAUDE.md"
 [ -e "$D/main/.git" ] || git -C "$KIT" worktree add -q --detach "$D/main" origin/main
 # First install only: state from Omnigent. Never overwrites what is already here.
