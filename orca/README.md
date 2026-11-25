@@ -29,3 +29,7 @@ orca automations create --name "seo-growth <site>" --provider claude --repo path
 
 Phone: Orca Mobile on the tailnet; `orca pair --mobile --address <this Mac's Tailscale IP>` prints
 the QR. No Relay, nothing public. The Mac must be awake.
+
+Also: a weekly scout per project (`routines/scout.md`, one project a day, `scripts/scout_precheck.sh`
+skips it when five cards wait or nothing was committed that week) and a lesson review on the 1st and
+15th (`routines/learn.md`, ledger only).
