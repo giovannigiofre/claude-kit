@@ -17,15 +17,23 @@ Install or update: `sh orca/install.sh` (`--dry-run` shows what it writes).
 Add a project: `orca repo add --path <path>`. Routines (the prompts are in `routines/`):
 
 ```sh
-# weekly check, Monday 08:00, in the main workspace, skipped without tokens when nothing can need you
+# weekly check, Monday 08:00, in the main workspace: reports what needs you and takes one class A
+# scout card to a PR; skipped without tokens when nothing can need you and no class A card waits
 orca automations create --name "Controllo settimanale <repo>" --provider claude --workspace path:<path> \
   --trigger "0 8 * * 1" --timezone Europe/Rome --prompt "$(cat orca/routines/weekly-check.md)" \
   --precheck "$HOME/.local/share/claude-kit/bin/weekly_precheck.sh <path>"
 # seo-growth, a new worktree per run from origin/main (@SITE@ replaced)
 orca automations create --name "seo-growth <site>" --provider claude --repo path:<path> \
   --base-branch origin/main --setup skip --trigger "17 6 */2 * *" --timezone Europe/Rome \
-  --prompt "$(sed 's/@SITE@/<site>/g' orca/routines/seo-growth.md)"
+  --prompt "$(sed 's/@SITE@/<site>/g' orca/routines/seo-growth.md)" \
+  --precheck "$HOME/.local/share/claude-kit/bin/seo_growth_tidy.sh <path>"
+# (the precheck removes earlier runs' worktrees that opened no PR, then always lets the run go)
 ```
+
+Studio's look-around may only run plain read-only commands; `install.sh` writes
+`~/Documents/studio/repos.md` (each project's GitHub slug) so it can call `gh -R` without guessing.
+Its `SOUL.md` lives in `~/.orca/bots/studio/`: copy the paragraph from `studio/SOUL.md` there.
+Turn on Orca's Claude usage tracking (Settings) so each automation run records its tokens and cost.
 
 Phone: Orca Mobile on the tailnet; `orca pair --mobile --address <this Mac's Tailscale IP>` prints
 the QR. No Relay, nothing public. The Mac must be awake.
