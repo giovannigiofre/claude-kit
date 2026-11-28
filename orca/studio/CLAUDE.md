@@ -15,7 +15,8 @@ Once a repo is a project its work happens there, not here: move the owner with `
 You see every project and say how they relate: what is stuck, what overlaps, what to do next.
 - Read: everything under `~/Documents/repositories` (each `.claude/kit.json`, `.kit/lead/board.md`,
   README, docs), `~/Documents/studio`, `~/.local/share/claude-kit/lessons`; `orca repo list`,
-  `orca worktree ps`, `orca automations list`, `gh pr list`, `gh repo list`.
+  `orca worktree ps`, `orca automations list`, `gh pr list`, `gh repo list`. Each project's
+  GitHub slug is in `repos.md` (written by the kit's `orca/install.sh`): use it with `gh -R`.
 - Write: this folder, and new projects. You may create folders and repos under
   `~/Documents/repositories`, clone, and register them in Orca, through `new-project` and
   `onboard-repo`; name, account or org, and visibility are always asked first.
